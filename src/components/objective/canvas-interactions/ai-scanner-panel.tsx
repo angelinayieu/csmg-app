@@ -27,6 +27,7 @@ import {
   Check,
   Wand2,
   ArrowRight,
+  Thermometer,
 } from "lucide-react";
 import {
   heuristicScan,
@@ -47,6 +48,12 @@ const ICONS: Record<string, typeof Split> = {
 };
 
 const PANEL_W = 300;
+// The strategist's temperature persists across selections (the panel re-keys
+// per shape). 0 = precise/repeatable, 1 = exploratory. These ops run on the
+// best Claude model (see canvas-operations.ts → augment / idea-op routes).
+const TEMP_STORAGE_KEY = "oc:analysis-temperature";
+const DEFAULT_TEMPERATURE = 0.4;
+const MODEL_LABEL = "Claude Opus 4.1";
 
 export function AiScannerPanel({
   target,
@@ -59,7 +66,7 @@ export function AiScannerPanel({
   target: OperationTarget;
   x: number;
   y: number;
-  onRun: (opId: string) => void;
+  onRun: (opId: string, temperature: number) => void;
   /** Run the full SpecForge causal-spec chain on this idea (the hero CTA). */
   onForge?: () => void;
   /** True while the chain is running — disables the hero button. */
@@ -81,6 +88,26 @@ export function AiScannerPanel({
   const [ranId, setRanId] = useState<string | null>(null);
   // Entrance — grow + fade from the anchored corner on mount.
   const [shown, setShown] = useState(reduceMotion);
+
+  // Sampling temperature for the analyses, persisted so it carries across
+  // selections. Lazily hydrated from localStorage (SSR-safe).
+  const [temperature, setTemperature] = useState<number>(() => {
+    if (typeof window === "undefined") return DEFAULT_TEMPERATURE;
+    const saved = Number(window.localStorage.getItem(TEMP_STORAGE_KEY));
+    return Number.isFinite(saved) && saved >= 0 && saved <= 1
+      ? saved
+      : DEFAULT_TEMPERATURE;
+  });
+
+  function updateTemperature(next: number) {
+    const clamped = Math.min(1, Math.max(0, next));
+    setTemperature(clamped);
+    try {
+      window.localStorage.setItem(TEMP_STORAGE_KEY, String(clamped));
+    } catch {
+      /* private mode / storage disabled — in-memory value still applies */
+    }
+  }
 
   useEffect(() => {
     if (reduceMotion) return;
@@ -116,7 +143,7 @@ export function AiScannerPanel({
 
   function run(opId: string) {
     setRanId(opId);
-    onRun(opId);
+    onRun(opId, temperature);
     window.setTimeout(() => setRanId((c) => (c === opId ? null : c)), 1200);
   }
 
@@ -419,6 +446,119 @@ export function AiScannerPanel({
             </Fragment>
           );
         })}
+      </div>
+
+      {/* Analysis controls — a temperature dial for the AI passes, plus the
+          model they run on. Lower = precise/repeatable, higher = exploratory. */}
+      <div
+        style={{
+          marginTop: 9,
+          paddingTop: 10,
+          borderTop: "1px solid var(--glass-border)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            marginBottom: 7,
+          }}
+        >
+          <Thermometer
+            style={{ width: 12, height: 12, color: appleVibe.text.tertiary }}
+            strokeWidth={2}
+          />
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: "0.01em",
+              color: appleVibe.text.secondary,
+            }}
+          >
+            Temperature
+          </span>
+          <span
+            style={{
+              marginLeft: "auto",
+              display: "inline-flex",
+              alignItems: "center",
+              height: 17,
+              padding: "0 7px",
+              borderRadius: appleVibe.radius.pill,
+              background: appleVibe.surface.chip,
+              fontSize: 11,
+              fontWeight: 650,
+              fontVariantNumeric: "tabular-nums",
+              color: appleVibe.text.primary,
+              boxShadow: "inset 0 1px 0 rgba(255,255,255,0.6)",
+            }}
+          >
+            {temperature.toFixed(2)}
+          </span>
+        </div>
+
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={temperature}
+          aria-label="Analysis temperature"
+          onPointerDown={(e) => e.stopPropagation()}
+          onChange={(e) => updateTemperature(Number(e.target.value))}
+          style={{
+            width: "100%",
+            height: 4,
+            cursor: "pointer",
+            accentColor: appleVibe.accent.primary,
+          }}
+        />
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            marginTop: 4,
+            fontSize: 9.5,
+            fontWeight: 600,
+            letterSpacing: "0.02em",
+            color: appleVibe.text.faint,
+          }}
+        >
+          <span>Precise</span>
+          <span>Creative</span>
+        </div>
+
+        {/* The model these analyses run on — the best available Claude. */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            marginTop: 8,
+          }}
+        >
+          <span
+            style={{
+              width: 5,
+              height: 5,
+              flexShrink: 0,
+              borderRadius: 999,
+              background: appleVibe.accent.primary,
+            }}
+          />
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 550,
+              color: appleVibe.text.tertiary,
+            }}
+          >
+            Runs on {MODEL_LABEL}
+          </span>
+        </div>
       </div>
     </div>
   );

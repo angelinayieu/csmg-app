@@ -13,7 +13,7 @@
 //   { mode, result }   // result shape depends on mode — see types.ts
 
 import { NextResponse } from "next/server";
-import { llmJSON, detectCreditError } from "@/lib/llm";
+import { llmJSON, detectCreditError, BEST_TUNABLE_CLAUDE_MODEL } from "@/lib/llm";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 import { systemForMode, schemaForMode } from "@/lib/synergy/prompts";
 import type { AugmentMode } from "@/lib/synergy/types";
@@ -38,6 +38,12 @@ interface Body {
   mode?: unknown;
   context?: unknown;
   precision?: unknown;
+  /** 0–1 sampling temperature for the on-canvas "simple analysis" ops.
+   *  Absent → the mode's default (rank stays deterministic). */
+  temperature?: unknown;
+  /** "anthropic" routes this call to the best Claude model — the canvas
+   *  scanner opts in; other Synergy callers stay on the OpenAI default. */
+  provider?: unknown;
 }
 
 export async function POST(request: Request) {
@@ -52,6 +58,11 @@ export async function POST(request: Request) {
   const context = typeof body.context === "string" ? body.context : undefined;
   const precisionRaw = typeof body.precision === "number" ? body.precision : 3;
   const precision = Math.min(5, Math.max(1, Math.round(precisionRaw)));
+  const temperature =
+    typeof body.temperature === "number"
+      ? Math.min(1, Math.max(0, body.temperature))
+      : null;
+  const useClaude = body.provider === "anthropic";
 
   if (!transcript) {
     return NextResponse.json({ error: "transcript is required" }, { status: 400 });
@@ -80,7 +91,11 @@ export async function POST(request: Request) {
       system,
       user: userMsg,
       maxTokens: 2048,
-      temperature: mode === "rank" ? 0.2 : 0.7,
+      // Honor the caller's slider; fall back to the mode default (rank stays
+      // near-deterministic so its ordering is stable).
+      temperature: temperature ?? (mode === "rank" ? 0.2 : 0.7),
+      provider: useClaude ? "anthropic" : undefined,
+      model: useClaude ? BEST_TUNABLE_CLAUDE_MODEL : undefined,
       responseSchema: schema as { name: string; schema: Record<string, unknown> },
     });
     void user; // user identity not required beyond auth check; kept for future audit logging

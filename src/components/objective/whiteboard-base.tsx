@@ -1720,7 +1720,9 @@ function BoardOverlay({
               target={target}
               x={sx}
               y={sy}
-              onRun={(opId) => executeCardOperation(editor, target, opId)}
+              onRun={(opId, temperature) =>
+                executeCardOperation(editor, target, opId, { temperature })
+              }
               onForge={() => handleForge(target)}
               forging={forging?.phase === "running"}
             />

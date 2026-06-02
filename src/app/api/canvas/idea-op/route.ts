@@ -9,7 +9,7 @@
 //   ("make_technical" routes to /api/canvas/idea-mechanism, the full spec.)
 
 import { NextResponse } from "next/server";
-import { llmJSON, detectCreditError } from "@/lib/llm";
+import { llmJSON, detectCreditError, BEST_TUNABLE_CLAUDE_MODEL } from "@/lib/llm";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 
 export const maxDuration = 30;
@@ -20,6 +20,8 @@ const VALID_KINDS: IdeaOpKind[] = ["layers", "data_flow"];
 interface Body {
   text?: unknown;
   kind?: unknown;
+  /** 0–1 sampling temperature from the canvas scanner's slider. */
+  temperature?: unknown;
 }
 
 const SYSTEM: Record<IdeaOpKind, string> = {
@@ -45,6 +47,10 @@ export async function POST(request: Request) {
 
   const text = typeof body.text === "string" ? body.text.trim() : "";
   const kind = body.kind as IdeaOpKind;
+  const temperature =
+    typeof body.temperature === "number"
+      ? Math.min(1, Math.max(0, body.temperature))
+      : 0.5;
 
   if (!text) {
     return NextResponse.json({ error: "text is required" }, { status: 400 });
@@ -61,7 +67,10 @@ export async function POST(request: Request) {
       system: SYSTEM[kind],
       user: text.slice(0, 4000),
       maxTokens: 1024,
-      temperature: 0.5,
+      // Canvas-only endpoint → always the best Claude model, slider-driven temp.
+      temperature,
+      provider: "anthropic",
+      model: BEST_TUNABLE_CLAUDE_MODEL,
       responseSchema: {
         name: "idea_op_items",
         schema: {

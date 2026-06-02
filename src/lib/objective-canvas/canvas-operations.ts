@@ -40,6 +40,12 @@ export interface OperationResultItem {
   subtitle?: string;
 }
 
+/** Per-run knobs the scanner threads into the analysis routes. */
+export interface OperationRunOptions {
+  /** 0–1 sampling temperature (the scanner's slider). Omit → route default. */
+  temperature?: number;
+}
+
 export interface CanvasOperation {
   /** Stable id. The four card-menu actions reuse their CardAction ids
    *  (decompose/variations/questions/make_plan) so there's no mapping. */
@@ -190,6 +196,7 @@ const MAX_RESULT_ITEMS = 8;
 export async function runAugmentOperation(
   op: CanvasOperation,
   target: OperationTarget,
+  opts: OperationRunOptions = {},
 ): Promise<OperationResultItem[]> {
   if (!op.augmentMode || !target.text.trim()) return [];
   try {
@@ -200,6 +207,10 @@ export async function runAugmentOperation(
         transcript: target.text.slice(0, 8000),
         mode: op.augmentMode,
         precision: 3,
+        // Run these on-canvas analyses with the best Claude model, at the
+        // strategist's chosen temperature (undefined → the route default).
+        provider: "anthropic",
+        temperature: opts.temperature,
       }),
     });
     if (!res.ok) return [];
@@ -258,9 +269,10 @@ function normalizeAugment(
 export async function runOperation(
   op: CanvasOperation,
   target: OperationTarget,
+  opts: OperationRunOptions = {},
 ): Promise<OperationResultItem[]> {
-  if (op.augmentMode) return runAugmentOperation(op, target);
-  if (op.wired) return runIdeaOp(op, target);
+  if (op.augmentMode) return runAugmentOperation(op, target, opts);
+  if (op.wired) return runIdeaOp(op, target, opts);
   return [];
 }
 
@@ -269,13 +281,18 @@ export async function runOperation(
 async function runIdeaOp(
   op: CanvasOperation,
   target: OperationTarget,
+  opts: OperationRunOptions = {},
 ): Promise<OperationResultItem[]> {
   if (!target.text.trim()) return [];
   try {
     const res = await fetch(op.endpoint ?? "/api/canvas/idea-op", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: target.text.slice(0, 4000), kind: op.id }),
+      body: JSON.stringify({
+        text: target.text.slice(0, 4000),
+        kind: op.id,
+        temperature: opts.temperature,
+      }),
     });
     if (!res.ok) return [];
     const json = (await res.json()) as {

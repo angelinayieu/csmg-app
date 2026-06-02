@@ -41,6 +41,33 @@ export const MODEL_DEFAULTS = {
   },
 } as const;
 
+// ── Best Claude models (one source of truth; bump here, not globally) ──
+//
+// Kept separate from MODEL_DEFAULTS so updating these never perturbs the ~30
+// other Anthropic call sites.
+//
+// BEST_CLAUDE_MODEL — the current frontier Opus, for surfaces whose whole value
+// is raw answer quality. NOTE: Opus 4.8 has DEPRECATED the `temperature` param
+// (the API 400s if you send it), so it can't be paired with a user-facing
+// temperature knob — modelSupportsTemperature() strips it defensively.
+//
+// BEST_TUNABLE_CLAUDE_MODEL — the best Opus that STILL honors a custom
+// `temperature`. Use this wherever the user controls sampling, e.g. the
+// on-canvas "simple analysis" power-ups whose scanner exposes a temperature
+// slider (decompose / variations / questions / plan / layers / data-flow).
+export const BEST_CLAUDE_MODEL = "claude-opus-4-8";
+export const BEST_TUNABLE_CLAUDE_MODEL = "claude-opus-4-1-20250805";
+
+/** Whether a model accepts the `temperature` parameter. Opus 4.8+ fixed its
+ *  sampling and rejects an explicit temperature; everything else still takes
+ *  one. Denylist (assume supported unless known-deprecated) so newer models
+ *  keep working. Callers needing a guaranteed-tunable model use
+ *  BEST_TUNABLE_CLAUDE_MODEL. */
+export function modelSupportsTemperature(model: string | undefined): boolean {
+  if (!model) return true;
+  return !model.startsWith("claude-opus-4-8");
+}
+
 let openaiClient: OpenAI | null = null;
 
 function getOpenAI(): OpenAI {
@@ -210,10 +237,15 @@ export async function llmGenerate(opts: {
         }
       }
       userContent.push({ type: "text", text: opts.user });
+      const anthropicModel = opts.model ?? MODEL_DEFAULTS.anthropic.reasoning;
       const resp = await anthropic.messages.create({
-        model: opts.model ?? MODEL_DEFAULTS.anthropic.reasoning,
+        model: anthropicModel,
         max_tokens: opts.maxTokens ?? 8192,
-        temperature: opts.temperature ?? 0.5,
+        // Opus 4.8+ deprecates `temperature` (400s if sent); only include it
+        // for models that still honor it.
+        ...(modelSupportsTemperature(anthropicModel)
+          ? { temperature: opts.temperature ?? 0.5 }
+          : {}),
         system: opts.system,
         messages: [{ role: "user", content: userContent }],
       });
@@ -281,10 +313,14 @@ export async function* llmStream(opts: {
     // Claude's SDK exposes a stream helper that yields content deltas.
     // Same retry caveat as below: streaming bypasses withRetry; caller
     // handles reconnection.
+    const streamModel = opts.model ?? MODEL_DEFAULTS.anthropic.reasoning;
     const stream = anthropic.messages.stream({
-      model: opts.model ?? MODEL_DEFAULTS.anthropic.reasoning,
+      model: streamModel,
       max_tokens: opts.maxTokens ?? 16000,
-      temperature: opts.temperature ?? 0.5,
+      // Opus 4.8+ deprecates `temperature` (400s if sent); omit it there.
+      ...(modelSupportsTemperature(streamModel)
+        ? { temperature: opts.temperature ?? 0.5 }
+        : {}),
       system: opts.system,
       messages: [{ role: "user", content: opts.user }],
     });
@@ -321,6 +357,130 @@ export async function* llmStream(opts: {
 
 // ── Structured JSON LLM call ──
 
+/** Parse an LLM's raw text into JSON, tolerating markdown fences + truncation.
+ *  Throws only when even the repair pass can't salvage an object. Used by the
+ *  Anthropic text-fallback path (the OpenAI path keeps its own inline ladder). */
+function parseJsonLoose(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const extracted = fence?.[1] ? fence[1].trim() : null;
+    if (extracted) {
+      try {
+        return JSON.parse(extracted);
+      } catch {
+        const repair = repairTruncatedJson(extracted);
+        if (repair.parsed) return repair.parsed;
+      }
+    }
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    const sliced =
+      start !== -1 && end !== -1 && end > start ? raw.slice(start, end + 1) : raw;
+    try {
+      return JSON.parse(sliced);
+    } catch {
+      const repair = repairTruncatedJson(raw);
+      if (repair.parsed) return repair.parsed;
+      throw new Error(`Failed to parse LLM JSON. Raw: ${raw.slice(0, 300)}`);
+    }
+  }
+}
+
+/** Anthropic structured-output path for llmJSON.
+ *
+ *  Claude has no OpenAI-style `response_format`, so the canonical way to force
+ *  a typed object is a single forced tool call: expose ONE tool whose
+ *  `input_schema` IS the caller's responseSchema, pin `tool_choice` to it, and
+ *  return the tool-call arguments directly — no text parsing, no fence
+ *  stripping. Schema-less callers fall back to generation + lenient parse. */
+async function anthropicStructured(opts: {
+  system: string;
+  user: string;
+  maxTokens?: number;
+  temperature?: number;
+  model?: string;
+  responseSchema?: { name: string; schema: Record<string, unknown> };
+}): Promise<unknown> {
+  const anthropic = getAnthropicClient();
+  const model = opts.model ?? MODEL_DEFAULTS.anthropic.reasoning;
+
+  if (opts.responseSchema) {
+    const toolName = opts.responseSchema.name || "structured_output";
+    const resp = await anthropic.messages.create({
+      model,
+      max_tokens: opts.maxTokens ?? 8192,
+      // Opus 4.8+ deprecates `temperature` (400s if sent); only send it for
+      // models that still honor it.
+      ...(modelSupportsTemperature(model)
+        ? { temperature: opts.temperature ?? 0.3 }
+        : {}),
+      system: opts.system,
+      tools: [
+        {
+          name: toolName,
+          description:
+            "Emit the result for the user's request as arguments that strictly match the schema.",
+          input_schema: opts.responseSchema
+            .schema as Anthropic.Messages.Tool["input_schema"],
+        },
+      ],
+      tool_choice: { type: "tool", name: toolName },
+      messages: [{ role: "user", content: opts.user }],
+    });
+    const toolUse = resp.content.find(
+      (b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use",
+    );
+    if (toolUse) return toolUse.input;
+    // No tool_use block (rare) — salvage any text the model emitted instead.
+    const text = resp.content
+      .filter((b) => b.type === "text")
+      .map((b) => (b as { text: string }).text)
+      .join("");
+    return parseJsonLoose(text);
+  }
+
+  // Schema-less: ask for JSON in the prompt and parse leniently.
+  const text = await llmGenerate({
+    system: opts.system,
+    user: opts.user,
+    maxTokens: opts.maxTokens,
+    temperature: opts.temperature ?? 0.3,
+    model,
+    provider: "anthropic",
+  });
+  return parseJsonLoose(text);
+}
+
+/** Run the caller's validator (with recovery) over a parsed object, or pass it
+ *  through untyped. Shared by both provider paths so validation behaves
+ *  identically regardless of which model produced the JSON. */
+function applyJsonValidator<T>(
+  parsed: unknown,
+  opts: { validator?: (data: unknown) => T; fallback?: T },
+): T {
+  if (opts.validator) {
+    try {
+      return opts.validator(parsed);
+    } catch (validationErr) {
+      if (validationErr instanceof ValidationError) {
+        const recovered = RecoveryStrategy.recover(
+          parsed,
+          opts.validator,
+          opts.fallback || ({} as T),
+        );
+        if (!recovered.recovered && recovered.errors.length > 0) {
+          console.error("[LLM] Validation recovery failed:", recovered.errors.slice(0, 3));
+        }
+        return recovered.data;
+      }
+      throw validationErr;
+    }
+  }
+  return parsed as T;
+}
+
 /**
  * Generate JSON from LLM with optional structured output enforcement.
  *
@@ -338,12 +498,10 @@ export async function llmJSON<T = unknown>(opts: {
   temperature?: number;
   model?: string;
   /**
-   * Provider routing hint. Accepted for API parity with
-   * `llmGenerate` / `llmStream` so call sites can pass the same
-   * options object; currently no-op here because structured-output
-   * routing lives on the OpenAI path only. A full anthropic JSON
-   * path will land when the provider adds reliable structured
-   * output — until then this param is carried but ignored.
+   * Provider routing. Defaults to OpenAI (json_schema / json_object mode).
+   * Pass "anthropic" to route to Claude via a forced tool call whose
+   * arguments are the structured result (see anthropicStructured) — pair it
+   * with an explicit `model` (e.g. BEST_CLAUDE_MODEL) to pick the variant.
    */
   provider?: LlmProvider;
   /** OpenAI JSON schema for structured output. When provided, response is guaranteed to conform. */
@@ -351,11 +509,13 @@ export async function llmJSON<T = unknown>(opts: {
   validator?: (data: unknown) => T;
   fallback?: T;
 }): Promise<T> {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { provider: _providerHint, ...rest } = opts;
-  void _providerHint;
-  void rest;
   return withRetry(async () => {
+    // Anthropic has no `response_format`; route to a forced tool call whose
+    // arguments ARE the structured result, then validate identically.
+    if (opts.provider === "anthropic") {
+      return applyJsonValidator<T>(await anthropicStructured(opts), opts);
+    }
+
     const openai = getOpenAI();
     const model = opts.model ?? MODEL;
 
@@ -468,26 +628,6 @@ export async function llmJSON<T = unknown>(opts: {
       }
     }
 
-    // Validate if schema validator provided
-    if (opts.validator) {
-      try {
-        return opts.validator(parsed);
-      } catch (validationErr) {
-        if (validationErr instanceof ValidationError) {
-          const recovered = RecoveryStrategy.recover(
-            parsed,
-            opts.validator,
-            opts.fallback || ({} as T)
-          );
-          if (!recovered.recovered && recovered.errors.length > 0) {
-            console.error("[LLM] Validation recovery failed:", recovered.errors.slice(0, 3));
-          }
-          return recovered.data;
-        }
-        throw validationErr;
-      }
-    }
-
-    return parsed as T;
+    return applyJsonValidator<T>(parsed, opts);
   });
 }

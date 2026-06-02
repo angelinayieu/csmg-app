@@ -20,6 +20,7 @@ import {
   runOperation,
   type OperationTarget,
   type OperationResultItem,
+  type OperationRunOptions,
 } from "@/lib/objective-canvas/canvas-operations";
 
 const RESULT_W = 216;
@@ -36,6 +37,7 @@ export async function executeCardOperation(
   editor: Editor,
   target: OperationTarget,
   opId: string,
+  opts: OperationRunOptions = {},
 ): Promise<void> {
   const op = operationById(opId);
   if (!op || !op.wired) return;
@@ -77,7 +79,7 @@ export async function executeCardOperation(
 
   let items: OperationResultItem[];
   try {
-    items = await runOperation(op, target);
+    items = await runOperation(op, target, opts);
   } finally {
     try {
       editor.deleteShape(pendingId);
