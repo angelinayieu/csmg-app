@@ -11,7 +11,10 @@ import {
   type TLShapeId,
   type TLShapePartial,
 } from "tldraw";
-import type { PromptSharpeningCardShape } from "../shapes/prompt-sharpening-card-shape";
+import {
+  SHARPEN_COLOR,
+  type PromptSharpeningCardShape,
+} from "../shapes/prompt-sharpening-card-shape";
 import type { InsightCardShape } from "../shapes/insight-card-shape";
 import type { RoomCardShape } from "../shapes/room-card-shape";
 import type { SharpeningCardDetail, AmbiguityForkDetail } from "../board-bus";
@@ -19,16 +22,38 @@ import type { SharpeningCardDetail, AmbiguityForkDetail } from "../board-bus";
 const CARD_W = 348;
 const CARD_H = 204;
 
-/** A solid, headed connector between two shapes (center → center). */
-function connect(editor: Editor, fromId: TLShapeId, toId: TLShapeId): void {
+/** A clean, arrowhead-less node connector (flow-builder style) bound
+ *  edge-to-edge between two shapes:
+ *   • "down" — bottom-center → top-center (cards stacked vertically)
+ *   • "side" — right-center → left-center with a gentle bend (forked
+ *     cards offset to the side)
+ *  Thin, light, no arrowheads, slight curve — not a directional arrow. */
+function connect(
+  editor: Editor,
+  fromId: TLShapeId,
+  toId: TLShapeId,
+  dir: "down" | "side" = "down",
+): void {
+  const side = dir === "side";
   const arrowId = createShapeId();
   const arrow: TLShapePartial<TLArrowShape> = {
     id: arrowId,
     type: "arrow",
-    props: { color: "grey", size: "s", dash: "solid", arrowheadEnd: "arrow" },
+    props: {
+      color: "grey",
+      size: "s",
+      dash: "solid",
+      arrowheadStart: "none",
+      arrowheadEnd: "none",
+      // A soft curve so it reads like a node connector, not a default line.
+      bend: side ? 44 : 16,
+    },
     meta: { sharpeningArrow: true },
   };
   editor.createShapes([arrow]);
+  // Precise edge anchors — connect at the card edges (not center-clipped).
+  const startAnchor = side ? { x: 1, y: 0.5 } : { x: 0.5, y: 1 };
+  const endAnchor = side ? { x: 0, y: 0.5 } : { x: 0.5, y: 0 };
   editor.createBindings([
     {
       fromId: arrowId,
@@ -36,9 +61,9 @@ function connect(editor: Editor, fromId: TLShapeId, toId: TLShapeId): void {
       type: "arrow",
       props: {
         terminal: "start",
-        normalizedAnchor: { x: 0.5, y: 0.5 },
+        normalizedAnchor: startAnchor,
         isExact: false,
-        isPrecise: false,
+        isPrecise: true,
       },
       meta: {},
     },
@@ -48,9 +73,9 @@ function connect(editor: Editor, fromId: TLShapeId, toId: TLShapeId): void {
       type: "arrow",
       props: {
         terminal: "end",
-        normalizedAnchor: { x: 0.5, y: 0.5 },
+        normalizedAnchor: endAnchor,
         isExact: false,
-        isPrecise: false,
+        isPrecise: true,
       },
       meta: {},
     },
@@ -95,7 +120,7 @@ export function deployPromptSharpeningOnBoard(
         chips: d.chips,
         heatmapJson: d.heatmapJson,
         rankedJson: d.rankedJson,
-        color: d.color || "#7C3AED",
+        color: d.color || SHARPEN_COLOR,
       },
     });
     return;
@@ -128,7 +153,7 @@ export function deployPromptSharpeningOnBoard(
     },
   });
 
-  if (objId) connect(editor, objId, cardId);
+  if (objId) connect(editor, objId, cardId, "down");
 
   editor.select(cardId);
   editor.centerOnPoint(
@@ -182,7 +207,7 @@ export function forkAmbiguityOnBoard(
     meta: { ambiguityFork: true },
   });
 
-  connect(editor, sourceId, id);
+  connect(editor, sourceId, id, "side");
   editor.select(id);
   editor.centerOnPoint(
     { x: x + W / 2, y: y + H / 2 },

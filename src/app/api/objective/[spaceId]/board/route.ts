@@ -147,6 +147,14 @@ export async function PUT(
       return NextResponse.json({ error: "Save failed" }, { status: 500 });
     }
     if (Array.isArray(updated) && updated.length > 0) {
+      // Mark the space modified so its home-library card brief regenerates
+      // with the latest board state (what the user saved/decided). Fire-and-
+      // forget; spaces has no updated_at trigger, so the brief's own write
+      // won't re-bump this → no regen loop.
+      void db
+        .from("spaces")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", spaceId);
       return NextResponse.json({ ok: true, updated_at: updated[0].updated_at });
     }
 
@@ -169,6 +177,10 @@ export async function PUT(
       console.error("[objective/board/PUT:insert]", insErr);
       return NextResponse.json({ error: "Save failed" }, { status: 500 });
     }
+    void db
+      .from("spaces")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", spaceId);
     return NextResponse.json({ ok: true, updated_at: inserted.updated_at });
   } catch (err) {
     return NextResponse.json(

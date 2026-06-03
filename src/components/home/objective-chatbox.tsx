@@ -51,6 +51,11 @@ interface Props {
    *  on that board (carrying the typed text) — the whiteboard-native intake.
    *  Absent → legacy behavior (morph + submit here). */
   draftSpaceId?: string;
+  /** Instant intake. When provided, the board is ALREADY mounted underneath
+   *  the home, so the first keystroke hands the typed text to it + reveals it
+   *  with NO route navigation (no loading page). Takes precedence over the
+   *  draftSpaceId router.push fallback. */
+  onIntakeStart?: (text: string) => void;
 }
 
 type AttachmentStatus =
@@ -85,6 +90,7 @@ export function ObjectiveChatbox({
   driveConnected,
   onActiveChange,
   draftSpaceId,
+  onIntakeStart,
 }: Props) {
   const router = useRouter();
   const [objective, setObjective] = useState("");
@@ -105,7 +111,16 @@ export function ObjectiveChatbox({
   useEffect(() => {
     const active = objective.trim().length > 0;
     onActiveChange?.(active);
-    if (active && draftSpaceId && !navigatedRef.current) {
+    if (!active || navigatedRef.current) return;
+    // Instant path — the board is mounted under the home; hand off the text +
+    // reveal it. No navigation, no loading page.
+    if (onIntakeStart) {
+      navigatedRef.current = true;
+      onIntakeStart(objective);
+      return;
+    }
+    // Fallback — navigate to the draft board, carrying the text.
+    if (draftSpaceId) {
       navigatedRef.current = true;
       try {
         window.sessionStorage.setItem(`intake:seed:${draftSpaceId}`, objective);
@@ -114,7 +129,7 @@ export function ObjectiveChatbox({
       }
       router.push(`/app/objective/${draftSpaceId}`);
     }
-  }, [objective, onActiveChange, draftSpaceId, router]);
+  }, [objective, onActiveChange, onIntakeStart, draftSpaceId, router]);
 
   // ── Attachment helpers ────────────────────────────────────────────
   const patch = useCallback(

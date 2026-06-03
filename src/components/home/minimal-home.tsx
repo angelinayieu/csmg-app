@@ -32,6 +32,11 @@ interface Props {
   driveConnected: boolean;
   /** Hidden draft objective space — typing lands the user on this board. */
   draftSpaceId?: string;
+  /** Instant intake. When provided, a real whiteboard is mounted UNDERNEATH
+   *  this home; the first keystroke hands the text to it + the host fades this
+   *  home away (no navigation). The fake dot-grid morph is suppressed since
+   *  the real board shows through on reveal. */
+  onIntakeStart?: (text: string) => void;
 }
 
 export function MinimalHome({
@@ -42,6 +47,7 @@ export function MinimalHome({
   syncedTabs,
   driveConnected,
   draftSpaceId,
+  onIntakeStart,
 }: Props) {
   const router = useRouter();
   // Default to the screenshot's "Good morning"; refine to local time after
@@ -70,9 +76,11 @@ export function MinimalHome({
 
   return (
     <>
-      {/* Whiteboard surface — fades in behind the chatbox once composing. */}
+      {/* Whiteboard surface — fades in behind the chatbox once composing.
+          Suppressed when a REAL board is mounted underneath (onIntakeStart):
+          the host reveals that instead of this faux dot-grid. */}
       <AnimatePresence>
-        {composing && (
+        {composing && !onIntakeStart && (
           <motion.div
             key="whiteboard-backdrop"
             initial={{ opacity: 0 }}
@@ -182,6 +190,7 @@ export function MinimalHome({
               driveConnected={driveConnected}
               onActiveChange={setComposing}
               draftSpaceId={draftSpaceId}
+              onIntakeStart={onIntakeStart}
             />
           </motion.div>
         </section>

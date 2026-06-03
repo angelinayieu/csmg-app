@@ -1,6 +1,16 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // ── Dev-tools indicator placement ─────────────────────────────────────
+  // Next's dev indicator defaults to the bottom-LEFT, where it lands right
+  // on top of the tldraw whiteboard's zoom / navigation control (the
+  // objective canvas lives there). That overlap reads as two mystery pills
+  // stacked in the corner. Move the indicator to the bottom-right, which is
+  // clear on the board. Dev-only — it never ships to production.
+  devIndicators: {
+    position: "bottom-right",
+  },
+
   // ── TypeScript build check (temporarily lenient) ──────────────────────
   // The bundle compiles cleanly in webpack (`next build` runs the type
   // check as a SEPARATE phase after compilation succeeds). A handful of

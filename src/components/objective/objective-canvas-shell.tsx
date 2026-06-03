@@ -76,6 +76,7 @@ export function ObjectiveCanvasShell({
   spaceId,
   rightInset = 20,
   minimal = false,
+  seedOnLoad = true,
   children,
 }: {
   spaceId: string;
@@ -87,6 +88,12 @@ export function ObjectiveCanvasShell({
    *  canvas window. Set by the layout for the objective root unless
    *  ?full=1. */
   minimal?: boolean;
+  /** Whether the shell auto-seeds the chatbox/objective card from the
+   *  board-subs response on mount. The objective route leaves this true.
+   *  The home pre-mounts this board UNDERNEATH itself (instant intake) with
+   *  seedOnLoad={false} so no empty chatbox card appears before the user
+   *  types — the home seeds it (with the typed text) on the first keystroke. */
+  seedOnLoad?: boolean;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -117,8 +124,9 @@ export function ObjectiveCanvasShell({
 
         // Whiteboard-native intake — seed the chatbox card (draft) or the
         // objective card (promoted). Idempotent in WhiteboardBase. Only on
-        // the minimal objective surface.
-        if (minimal) {
+        // the minimal objective surface, and only when seedOnLoad (the home's
+        // pre-mounted board passes false → it seeds on the first keystroke).
+        if (minimal && seedOnLoad) {
           if (d.isDraft) {
             let seedText = "";
             try {

@@ -21,7 +21,6 @@
 // is no parallel landing-only floating-cards component. Adding a card
 // position or polishing a hover state is a one-file change.
 
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   SlidersHorizontal,
@@ -37,8 +36,9 @@ import {
 } from "lucide-react";
 import { ImmersiveHome } from "@/components/home/immersive-home";
 import { LandingMarketingNav } from "@/components/landing/landing-marketing-nav";
+import { LandingV2, type LandingCard } from "@/components/landing/landing-v2";
 import { AuthModal } from "@/components/auth/auth-modal";
-import { TEMPLATE_LIST } from "@/lib/use-cases/library";
+import { TEMPLATE_LIST, getTemplate } from "@/lib/use-cases/library";
 import { getAuthUser } from "@/lib/supabase/server";
 
 const features = [
@@ -77,7 +77,43 @@ const ecosystemNodes = [
   { icon: Cloud, label: "Cloud Backup", x: 50, y: 88 },
 ];
 
-export default async function LandingPage() {
+// Curated carousel for the V2 landing preview — pulls live data straight
+// from the template library so the cards never drift from the real
+// templates. `team_retro` shows as the shorter "Retrospective" label.
+const V2_CAROUSEL_IDS = [
+  "journal_self_discovery",
+  "reading_synthesis",
+  "research_project",
+  "team_retro",
+  "career_pivot",
+] as const;
+const V2_LABEL_OVERRIDES: Record<string, string> = { team_retro: "Retrospective" };
+
+export default async function LandingPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ v2?: string }>;
+}) {
+  // ── New landing preview (/?v2=1) ──
+  // Gated variant for A/B'ing the new design without touching the current
+  // landing. Rendered BEFORE the logged-in redirect so it stays previewable
+  // while signed in. Flip the default here once it wins.
+  const params = await searchParams;
+  if (params?.v2 === "1") {
+    const cards = V2_CAROUSEL_IDS.map((id): LandingCard | null => {
+      const t = getTemplate(id);
+      if (!t) return null;
+      return {
+        id: t.id,
+        name: V2_LABEL_OVERRIDES[t.id] ?? t.name,
+        tagline: t.tagline,
+        category: t.category,
+        accent: t.accent_color,
+      };
+    }).filter((c): c is LandingCard => c !== null);
+    return <LandingV2 cards={cards} />;
+  }
+
   // If the visitor already has a valid Supabase session cookie, skip the
   // marketing surface and drop them straight on /app. Supabase SSR
   // persists the session in cookies, so this "remembers" them across

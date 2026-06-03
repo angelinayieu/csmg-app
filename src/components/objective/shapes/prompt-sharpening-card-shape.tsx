@@ -22,6 +22,7 @@ import {
   resizeBox,
 } from "tldraw";
 import { ChevronDown } from "lucide-react";
+import { motion } from "framer-motion";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { forkAmbiguity, dispatchCardAction } from "@/components/objective/board-bus";
@@ -29,6 +30,11 @@ import { forkAmbiguity, dispatchCardAction } from "@/components/objective/board-
 const COLLAPSED_H = 204;
 const EXPANDED_H = 452;
 const CARD_W = 348;
+
+// The card's accent — blue (the Features-stage color), not violet. This is a
+// calm, product-forward refinement object; it shouldn't shout in purple.
+// Single source of truth so the board materializer + status mount agree.
+export const SHARPEN_COLOR = "#2563EB";
 
 const SEV_COLOR: Record<string, string> = {
   high: "#DC2626",
@@ -116,7 +122,7 @@ export class PromptSharpeningCardShapeUtil extends BaseBoxShapeUtil<PromptSharpe
       chips: [],
       heatmapJson: "{}",
       rankedJson: "[]",
-      color: "#7C3AED",
+      color: SHARPEN_COLOR,
     };
   }
 
@@ -157,6 +163,9 @@ function PromptSharpeningRenderer({
   const { expanded, title, sharpenedPrompt, chips, color } = shape.props;
   const ranked = parseRanked(shape.props.rankedJson);
   const heatmap = parseHeatmap(shape.props.heatmapJson);
+  // No real heatmap yet → the artifact is still generating (the optimistic
+  // "Sharpening…" placeholder). Show a progress bar instead of the toggle.
+  const loading = Object.keys(heatmap).length === 0;
 
   function toggle(e: React.MouseEvent) {
     e.stopPropagation();
@@ -194,7 +203,7 @@ function PromptSharpeningRenderer({
           height: "100%",
           borderRadius: 20,
           background:
-            "linear-gradient(160deg, rgba(255,255,255,0.99) 0%, rgba(250,248,255,0.97) 100%)",
+            "linear-gradient(160deg, rgba(255,255,255,0.99) 0%, rgba(246,250,255,0.97) 100%)",
           border: `1px solid ${color}33`,
           boxShadow: `0 1px 2px rgba(11,18,40,0.05), 0 18px 46px -18px ${color}4D, 0 8px 22px -12px rgba(11,18,40,0.14)`,
           padding: "13px 15px 12px",
@@ -204,43 +213,50 @@ function PromptSharpeningRenderer({
           fontFamily: appleVibe.font.stack,
         }}
       >
-        {/* Eyebrow */}
+        {/* Eyebrow — just the AI sparkle mark, no "Prompt Sharpened" label.
+            It pulses while the artifact is still generating and settles once
+            the sharpened result lands, so we never claim "Sharpened" mid-flight
+            (the title + progress bar carry the in-progress state). */}
         <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-          <Sparkle style={{ width: 12, height: 12, color }} strokeWidth={2.4} />
-          <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: "0.02em", color }}>
-            Prompt Sharpened
-          </span>
-          <button
-            type="button"
-            onPointerDown={stopEventPropagation}
-            onClick={toggle}
-            aria-label={expanded ? "Collapse" : "Expand heatmap"}
-            style={{
-              marginLeft: "auto",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 3,
-              padding: "2px 7px",
-              borderRadius: 999,
-              border: "none",
-              cursor: "pointer",
-              background: "rgba(15,23,42,0.04)",
-              color: appleVibe.text.tertiary,
-              fontSize: 10,
-              fontWeight: 600,
-            }}
+          <span
+            className={loading ? "animate-pulse" : undefined}
+            style={{ display: "inline-flex" }}
           >
-            {expanded ? "Less" : "Heatmap"}
-            <ChevronDown
+            <Sparkle style={{ width: 13, height: 13, color }} strokeWidth={2.4} />
+          </span>
+          {!loading && (
+            <button
+              type="button"
+              onPointerDown={stopEventPropagation}
+              onClick={toggle}
+              aria-label={expanded ? "Collapse" : "Expand heatmap"}
               style={{
-                width: 12,
-                height: 12,
-                transform: expanded ? "rotate(180deg)" : "none",
-                transition: "transform 0.18s ease",
+                marginLeft: "auto",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 3,
+                padding: "2px 7px",
+                borderRadius: 999,
+                border: "none",
+                cursor: "pointer",
+                background: "rgba(15,23,42,0.04)",
+                color: appleVibe.text.tertiary,
+                fontSize: 10,
+                fontWeight: 600,
               }}
-              strokeWidth={2.4}
-            />
-          </button>
+            >
+              {expanded ? "Less" : "Heatmap"}
+              <ChevronDown
+                style={{
+                  width: 12,
+                  height: 12,
+                  transform: expanded ? "rotate(180deg)" : "none",
+                  transition: "transform 0.18s ease",
+                }}
+                strokeWidth={2.4}
+              />
+            </button>
+          )}
         </div>
 
         {/* Distilled title */}
@@ -276,6 +292,8 @@ function PromptSharpeningRenderer({
         >
           {sharpenedPrompt}
         </div>
+
+        {loading && <ProgressBar color={color} />}
 
         {/* Ambiguity chips (top ranked) */}
         {chips.length > 0 && (
@@ -438,6 +456,37 @@ function PromptSharpeningRenderer({
         )}
       </div>
     </HTMLContainer>
+  );
+}
+
+/** Indeterminate progress bar — shown while the artifact is still
+ *  generating (the optimistic "Sharpening…" placeholder). */
+function ProgressBar({ color }: { color: string }) {
+  return (
+    <div
+      style={{
+        position: "relative",
+        height: 4,
+        borderRadius: 999,
+        background: `${color}1A`,
+        overflow: "hidden",
+        marginTop: 14,
+      }}
+    >
+      <motion.div
+        style={{
+          position: "absolute",
+          top: 0,
+          bottom: 0,
+          width: "42%",
+          borderRadius: 999,
+          background: color,
+        }}
+        initial={{ left: "-42%" }}
+        animate={{ left: ["-42%", "100%"] }}
+        transition={{ duration: 1.15, repeat: Infinity, ease: "easeInOut" }}
+      />
+    </div>
   );
 }
 

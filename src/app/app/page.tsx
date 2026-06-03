@@ -15,7 +15,7 @@ import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { HomeShell } from "@/components/home/home-shell";
 import { SynergyDashboard } from "@/components/synergy/synergy-dashboard";
 import { HomeTabNav } from "@/components/app/home-tab-nav";
-import { MinimalHome } from "@/components/home/minimal-home";
+import { IntakeHome } from "@/components/home/intake-home";
 import type { LibrarySpace } from "@/components/home/library-grid";
 import type { SyncedTab } from "@/components/home/objective-chatbox";
 import { TEMPLATE_LIST } from "@/lib/use-cases/library";
@@ -80,11 +80,14 @@ export default async function StudioPage({
       // not stale (its source updated_at is at/after the space's). Stale or
       // missing → null, so the grid regenerates it progressively.
       const cb = s.card_brief as
-        | { name?: unknown; points?: unknown; from_updated_at?: unknown }
+        | { kind?: unknown; name?: unknown; points?: unknown; from_updated_at?: unknown }
         | null;
       const fresh =
         !!cb &&
         typeof cb.name === "string" &&
+        // Require the newer `kind` field so older generic briefs (pre-upgrade)
+        // are treated as stale and regenerate with the board-grounded summary.
+        typeof cb.kind === "string" &&
         Array.isArray(cb.points) &&
         (!s.updated_at ||
           typeof cb.from_updated_at !== "string" ||
@@ -166,7 +169,7 @@ export default async function StudioPage({
     }
 
     return (
-      <MinimalHome
+      <IntakeHome
         displayName={displayName}
         email={user?.email ?? ""}
         creditBalance={creditBalance}

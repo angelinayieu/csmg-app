@@ -91,7 +91,6 @@ import {
 } from "./canvas-interactions/shape-node-adapter";
 import { FocusModePanel } from "./canvas-interactions/focus-mode-panel";
 import { executeCardOperation } from "./canvas-interactions/operation-executor";
-import { DirectionEngineToggle } from "./canvas-interactions/direction-engine-toggle";
 import {
   DECOMPOSE_INTO_CARDS_EVENT,
   DECOMPOSE_DONE_EVENT,
@@ -245,10 +244,11 @@ export type AiLinkFn = (
 // text/geo out of the box, which is the rest of the interactive surface.
 /** Collapse tldraw's always-open style palette into a glass icon — declutters
  *  the top-right and stops it colliding with the Notebook pill. */
-// Folder-tab page navigator — surfaces the board's pages as titled tabs at
-// the top so it's clear which page is which (and lets the user branch/switch
-// across them, e.g. a feature spun off into its own page). Reactive via
-// tldraw's useValue; hidden when there's only one page so it never clutters.
+// Page navigator — surfaces the board's pages as one clean glass segmented
+// control at the top (active page = filled accent), so it's clear which page
+// is which and the user can switch across them (e.g. a feature spun off into
+// its own page). Reactive via tldraw's useValue; hidden when there's only one
+// page so it never clutters.
 function PageTabs() {
   const editor = useEditor();
   const pages = useValue("pages", () => editor.getPages(), [editor]);
@@ -280,9 +280,9 @@ function PageTabs() {
       style={{
         pointerEvents: "all",
         display: "flex",
-        alignItems: "flex-end",
-        gap: 6,
-        padding: "0 8px",
+        alignItems: "center",
+        gap: 8,
+        marginTop: 10,
         fontFamily: appleVibe.font.stack,
       }}
     >
@@ -303,56 +303,75 @@ function PageTabs() {
             whiteSpace: "nowrap",
             padding: "6px 13px",
             fontSize: 12,
-            fontWeight: 500,
-            color: "rgba(15,23,42,0.6)",
-            background: "rgba(255,255,255,0.6)",
-            border: "1px solid rgba(15,23,42,0.08)",
+            fontWeight: 550,
+            color: appleVibe.text.secondary,
+            background: "var(--glass-float-bg)",
+            border: "1px solid var(--glass-border)",
             borderRadius: 999,
-            backdropFilter: "blur(20px) saturate(160%)",
-            WebkitBackdropFilter: "blur(20px) saturate(160%)",
+            boxShadow:
+              "inset 0 1px 0 var(--glass-highlight), 0 8px 24px -14px rgba(11,18,40,0.28)",
+            backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+            WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
             cursor: "pointer",
           }}
         >
           ‹ {e.title}
         </button>
       ))}
-      {pages.length > 1 &&
-        pages.map((p) => {
-        const active = p.id === currentPageId;
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => editor.setCurrentPage(p.id)}
-            title={p.name}
-            style={{
-              maxWidth: 180,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              padding: "6px 14px",
-              fontSize: 12,
-              fontWeight: active ? 600 : 500,
-              color: active ? "rgba(15,23,42,0.92)" : "rgba(15,23,42,0.5)",
-              background: active
-                ? "rgba(255,255,255,0.94)"
-                : "rgba(255,255,255,0.55)",
-              border: "1px solid rgba(15,23,42,0.08)",
-              borderRadius: "12px 12px 0 0",
-              backdropFilter: "blur(20px) saturate(160%)",
-              WebkitBackdropFilter: "blur(20px) saturate(160%)",
-              boxShadow: active
-                ? "0 -2px 12px -4px rgba(15,23,42,0.18)"
-                : "none",
-              cursor: "pointer",
-              transition: "all 120ms ease-out",
-            }}
-          >
-            {p.name}
-          </button>
-        );
-      })}
+      {/* Page segmented control — one glass pill; active page = filled accent. */}
+      {pages.length > 1 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 2,
+            padding: 4,
+            borderRadius: appleVibe.radius.pill,
+            background: "var(--glass-float-bg)",
+            border: "1px solid var(--glass-border)",
+            boxShadow:
+              "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
+            backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+            WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+          }}
+        >
+          {pages.map((p) => {
+            const active = p.id === currentPageId;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => editor.setCurrentPage(p.id)}
+                title={p.name}
+                style={{
+                  maxWidth: 170,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  padding: "5px 13px",
+                  fontSize: 12,
+                  fontWeight: active ? 650 : 550,
+                  letterSpacing: "-0.01em",
+                  color: active
+                    ? appleVibe.text.onAccent
+                    : appleVibe.text.secondary,
+                  background: active ? appleVibe.accent.primary : "transparent",
+                  border: "1px solid transparent",
+                  borderRadius: appleVibe.radius.pill,
+                  boxShadow: active
+                    ? "inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 12px -6px rgba(11,18,40,0.4)"
+                    : "none",
+                  cursor: "pointer",
+                  transition: "background 140ms ease, color 140ms ease",
+                }}
+              >
+                {p.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1934,9 +1953,11 @@ function BoardOverlay({
 
   return (
     <>
-      {/* Top switch: what the ‹ diverge / converge › buttons actually run
-          (the new pipeline vs. regrouping the existing ops) — for A/B'ing. */}
-      <DirectionEngineToggle />
+      {/* The ‹ diverge / converge › buttons run the default "pipeline" engine
+          (questions → answers → distilled nodes). The dev A/B toggle for
+          pipeline-vs-regroup is intentionally not surfaced on the board — it
+          read as a mystery control next to the page tabs. Flip the engine in
+          code via setDirectionEngine if A/B testing is needed again. */}
       <DecomposeCardsButton />
       {showHint && <BoardHint onDismiss={dismissHint} />}
       {view.screen &&

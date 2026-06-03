@@ -22,11 +22,13 @@ export function CollapsibleStylePanel(props: TLUiStylePanelProps) {
         alignItems: "flex-end",
         gap: 6,
         pointerEvents: "all",
-        // Stack BELOW the Notebook pill (top:16, ~36px tall → bottom ≈ 52px).
-        // This margin pushes the palette icon into the gap underneath so the
-        // two top-right controls read as a clean vertical stack, never
-        // overlapping in the collapsed state.
-        marginTop: 52,
+        // Hug the top-right corner. The objective layout overrides
+        // `--oc-style-panel-top` to ~60px in FULL mode so the palette stacks
+        // cleanly below the Notebook pill; in minimal mode (and anywhere the
+        // var is unset) it falls back to a clean corner inset instead of the
+        // old dead 52px gap that made the palette look like it was floating.
+        marginTop: "var(--oc-style-panel-top, 14px)",
+        marginRight: 12,
       }}
     >
       <button

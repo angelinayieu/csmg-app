@@ -31,7 +31,12 @@ export function PromptSharpeningMount({ spaceId }: { spaceId: string }) {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let tries = 0;
-    const MAX_TRIES = 16; // ~35s of polling at 2.2s
+    // Poll until the artifact lands. The mount starts when the board loads —
+    // BEFORE the user submits — and an Opus generation can take 30–60s, so a
+    // short window would give up before it finishes, leaving the card stuck
+    // on "Sharpening…". ~4 min covers typing + a slow generation; it stops
+    // early the moment the artifact is ready.
+    const MAX_TRIES = 120;
 
     async function tick() {
       if (cancelled || dispatched.current) return;
@@ -60,7 +65,8 @@ export function PromptSharpeningMount({ spaceId }: { spaceId: string }) {
               chips: ranked.slice(0, 3).map(chipLabel),
               heatmapJson: JSON.stringify(a.ambiguity_heatmap ?? {}),
               rankedJson: JSON.stringify(ranked),
-              color: "#7C3AED",
+              // Color omitted → the board materializer applies SHARPEN_COLOR
+              // (single source of truth in prompt-sharpening-card-shape).
             });
             return;
           }
@@ -69,7 +75,7 @@ export function PromptSharpeningMount({ spaceId }: { spaceId: string }) {
         /* transient — keep polling */
       }
       if (!cancelled && tries < MAX_TRIES) {
-        timer = setTimeout(tick, 1500);
+        timer = setTimeout(tick, 2000);
       }
     }
 

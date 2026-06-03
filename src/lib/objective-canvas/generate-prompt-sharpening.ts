@@ -9,7 +9,7 @@
 // lives in that one JSONB blob; the board card reads the visible part and
 // downstream Explore / Distill agents read the hidden part.
 
-import { llmJSON, BEST_CLAUDE_MODEL } from "../llm";
+import { llmJSON } from "../llm";
 import {
   SHARPENING_AGENT_SYSTEM,
   SHARPENING_AGENT_USER,
@@ -18,6 +18,11 @@ import {
   type PromptSharpeningArtifact,
 } from "./prompt-sharpening-prompt";
 import { patchObjectiveCanvasState } from "./clarifying-state";
+
+// The Prompt Sharpening agent runs on Opus 4.6 (product decision — NOT 4.8).
+// Scoped here so only this intake generator changes; the global
+// BEST_CLAUDE_MODEL default is left untouched for everything else.
+const PROMPT_SHARPENING_MODEL = "claude-opus-4-6";
 
 export async function generatePromptSharpeningForSpace(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -45,14 +50,13 @@ export async function generatePromptSharpeningForSpace(
     }
 
     // ── Agent: generate the sharpening artifact ──
-    // Opus 4.8 (frontier, no temperature param) — output quality IS the
-    // product here. The validator normalizes + guarantees all 10 heatmap
-    // zones are present.
+    // Opus 4.6 (no temperature param) — output quality IS the product here.
+    // The validator normalizes + guarantees all 10 heatmap zones are present.
     let artifact = await llmJSON<PromptSharpeningArtifact>({
       system: SHARPENING_AGENT_SYSTEM,
       user: SHARPENING_AGENT_USER(raw),
       provider: "anthropic",
-      model: BEST_CLAUDE_MODEL,
+      model: PROMPT_SHARPENING_MODEL,
       maxTokens: 4096,
       responseSchema: SHARPENING_RESPONSE_SCHEMA,
       validator: (d) => normalizeSharpening(d, raw),

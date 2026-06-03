@@ -151,12 +151,12 @@ export function LibraryGrid({ spaces }: { spaces: LibrarySpace[] }) {
               minHeight: 168,
             }}
           >
-            {/* zone 1 — category / type */}
+            {/* zone 1 — what this is (AI "kind", else the space-kind label) */}
             <span
               className="text-[11px] font-medium"
               style={{ color: appleVibe.text.faint }}
             >
-              {kindLabel(space.space_kind)}
+              {brief?.kind?.trim() || kindLabel(space.space_kind)}
             </span>
             {/* zone 2 — AI-summarized name */}
             <span

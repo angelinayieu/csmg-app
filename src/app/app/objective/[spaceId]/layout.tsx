@@ -113,6 +113,16 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   // collapses to the minimal board surface.
   const minimal = mode === "space" && !isBrief && !fullMode;
 
+  // Where the whiteboard's collapsible style palette anchors (top-right).
+  // Full mode can show the Notebook pill in that same corner, so push the
+  // palette below it; minimal mode has no pill, so let it hug the corner.
+  // Read as `--oc-style-panel-top` by CollapsibleStylePanel.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--oc-style-panel-top", minimal ? "14px" : "60px");
+    return () => root.style.removeProperty("--oc-style-panel-top");
+  }, [minimal]);
+
   useEffect(() => {
     const stored = window.localStorage.getItem(`notebook:open:${spaceId}`);
     // First visit (stored === null) → default to open per M1.
