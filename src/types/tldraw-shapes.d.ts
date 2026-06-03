@@ -1033,6 +1033,20 @@ declare module "@tldraw/tlschema" {
       rankedJson: string;
       color: string;
     };
+    // Objective board — downstream decomposition card (Feature / Variable).
+    // The face shows only the AI-refined name + description/definition; the
+    // metadata library + knowledge graph live behind a double-click
+    // (objective-board:open-card-detail). `objectId` is the backing
+    // library_objects row; `metaCount` drives the footer.
+    "oc-card": {
+      w: number;
+      h: number;
+      kind: "feature" | "variable";
+      name: string;
+      body: string;
+      objectId: string;
+      metaCount: number;
+    };
   }
 }
 

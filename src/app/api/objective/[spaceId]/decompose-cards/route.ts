@@ -119,6 +119,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
+  const userId = user.id; // captured — narrowing doesn't reach the closure below
 
   // Objective text: explicit override, else the space's own text.
   let objective = "";
@@ -184,7 +185,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     const slug = slugify(typeof raw.slug === "string" && raw.slug ? raw.slug : name);
     const objectId = await upsertLibraryObject(db, {
       spaceId,
-      userId: user.id,
+      userId,
       objectType: kind,
       title: name,
       summary: body,
