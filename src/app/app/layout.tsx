@@ -4,6 +4,7 @@ import { AppStoreProvider } from "@/stores/store-provider";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { GlobalToolbox } from "@/components/layout/global-toolbox";
 import { AmbientBackdrop } from "@/components/layout/ambient-backdrop";
+import { HideOnHome } from "@/components/layout/hide-on-home";
 import { PulseStrip } from "@/components/pulse";
 import { PendingIntakeMount } from "@/components/landing/pending-intake-mount";
 import type { Space } from "@/types";
@@ -64,12 +65,17 @@ export default async function AppLayout({
                 every authenticated page. The bar itself renders an
                 "empty/Quiet" state when not inside a space route, so
                 it's safe to mount at the layout level. */}
-            <PulseStrip />
+            <HideOnHome>
+              <PulseStrip />
+            </HideOnHome>
             <div className="min-h-full px-6 py-6">{children}</div>
           </main>
         </div>
-        {/* Global floating toolbox — present on every page */}
-        <GlobalToolbox />
+        {/* Global floating toolbox — present on every page except the
+            minimal home, which renders its own clean chrome. */}
+        <HideOnHome>
+          <GlobalToolbox />
+        </HideOnHome>
         {/* Picks up any prompt/template the user stashed on the public
             landing page before signing up. Mounted at the layout level
             (rather than in /app/page) so the email-confirm callback

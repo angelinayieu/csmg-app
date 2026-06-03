@@ -38,6 +38,7 @@ import {
   onRightPanelChange,
 } from "@/lib/objective-canvas/right-panel-signal";
 import { ObjectiveCanvasShell } from "@/components/objective/objective-canvas-shell";
+import { PromptSharpeningMount } from "@/components/objective/prompt-sharpening-mount";
 import { AnnotationsVisibilityToggle } from "@/components/objective/annotations-visibility-toggle";
 import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -96,6 +97,21 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   // module so a panel opened before this subscribes is still reflected.
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
 
+  // Minimal mode — the default objective surface is just the whiteboard +
+  // the objective card. `?full=1` opts into the rich canvas (window + tab
+  // nav + notebook rail). Read from the URL after mount (avoids the
+  // useSearchParams Suspense requirement); defaults to minimal on first
+  // paint, so the common case never flashes the heavy chrome.
+  const [fullMode, setFullMode] = useState(false);
+  useEffect(() => {
+    setFullMode(
+      new URLSearchParams(window.location.search).get("full") === "1",
+    );
+  }, [pathname]);
+  // Only the objective ROOT (mode "space", not a /sub/ room or the brief)
+  // collapses to the minimal board surface.
+  const minimal = mode === "space" && !isBrief && !fullMode;
+
   useEffect(() => {
     const stored = window.localStorage.getItem(`notebook:open:${spaceId}`);
     // First visit (stored === null) → default to open per M1.
@@ -150,9 +166,9 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   if (!isWide) {
     return (
       <>
-        <HomeTabNav />
+        {!minimal && <HomeTabNav />}
         {children}
-        <AnnotationsVisibilityToggle />
+        {!minimal && <AnnotationsVisibilityToggle />}
       </>
     );
   }
@@ -183,7 +199,7 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
           scroll/overflow/stacking context. Rendered once here; child
           pages must NOT render their own (would double-stack). Hides
           itself on ?embed=1. */}
-      <HomeTabNav />
+      {!minimal && <HomeTabNav />}
 
       {/* The whiteboard floor + room-window live HERE, at the layout
           level — so EVERY route under the objective (main canvas,
@@ -196,11 +212,17 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
       ) : (
         <ObjectiveCanvasShell
           spaceId={spaceId}
-          rightInset={railWidth + RAIL_MARGIN}
+          minimal={minimal}
+          rightInset={minimal ? RAIL_MARGIN : railWidth + RAIL_MARGIN}
         >
           {children}
         </ObjectiveCanvasShell>
       )}
+
+      {/* First intake intelligence object — polls for the sharpening
+          artifact + materializes the Prompt Sharpening Card on the board.
+          Minimal mode only (the full canvas has its own analysis surfaces). */}
+      {minimal && !isBrief && <PromptSharpeningMount spaceId={spaceId} />}
 
       {/* Collapsed pill — visible whenever the notebook is closed.
           Render WITHOUT the hydration gate so it's visible on first
@@ -211,7 +233,7 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
           didn't render at all before hydration completed — on slow
           connections users saw nothing on the right side. Also hidden
           while a right-edge detail drawer owns the top-right corner. */}
-      {!open && !rightPanelOpen && (
+      {!minimal && !open && !rightPanelOpen && (
         <button
           type="button"
           onClick={() => persistOpen(true)}
@@ -245,7 +267,7 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
           no backdrop). Renders over the placeholder column so the
           content + notebook are visible side-by-side. */}
       <LabNotebookPanel
-        open={hydrated && open}
+        open={!minimal && hydrated && open}
         onClose={() => persistOpen(false)}
         chrome="rail-card"
         mode={mode}
@@ -276,8 +298,10 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
 
       {/* Floating, persistent annotation-marks on/off switch. Mounted at
           the layout level so it survives navigation across the main
-          canvas, rooms + lab. Bottom-left, clear of the right-edge rail. */}
-      <AnnotationsVisibilityToggle />
+          canvas, rooms + lab. Bottom-left, clear of the right-edge rail.
+          Hidden in minimal mode — its target (the annotated card) lives in
+          the full canvas window, which minimal mode doesn't show. */}
+      {!minimal && <AnnotationsVisibilityToggle />}
     </>
   );
 }

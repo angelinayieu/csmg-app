@@ -85,6 +85,8 @@ export function openUnfurl(anchor: UnfurlAnchor) {
 // registry + executor — dropping result cards just below the source shape.
 
 export type CardAction =
+  | "diverge"
+  | "converge"
   | "decompose"
   | "variations"
   | "questions"
@@ -156,4 +158,52 @@ export const SEND_DATAFLOW_EVENT = "objective-board:dataflow";
  *  connected shapes the user can brainstorm around. WhiteboardBase listens. */
 export function sendDataFlowToBoard(graph: DataFlowGraph) {
   window.dispatchEvent(new CustomEvent(SEND_DATAFLOW_EVENT, { detail: graph }));
+}
+
+// ── Prompt Sharpening Card → board ─────────────────────────────────
+// The first intake intelligence object. PromptSharpeningMount polls the
+// status route and fires this once the artifact is ready; WhiteboardBase
+// materializes the card below the objective room-card with an arrow.
+
+export interface SharpeningCardDetail {
+  spaceId: string;
+  /** distilled_title */
+  title: string;
+  /** sharpened_prompt */
+  sharpenedPrompt: string;
+  /** short chip labels for the top ranked ambiguities */
+  chips: string[];
+  /** ambiguity_heatmap, JSON-encoded (10 zones) */
+  heatmapJson: string;
+  /** ranked_ambiguities, JSON-encoded (for fork bodies) */
+  rankedJson: string;
+  color?: string;
+}
+
+export const DEPLOY_SHARPENING_EVENT = "objective-board:deploy-sharpening";
+
+/** Materialize the Prompt Sharpening Card on a board mounted on this page. */
+export function deploySharpeningCard(detail: SharpeningCardDetail) {
+  window.dispatchEvent(
+    new CustomEvent(DEPLOY_SHARPENING_EVENT, { detail }),
+  );
+}
+
+// ── Fork an ambiguity off the sharpening card ──────────────────────
+// Clicking an ambiguity chip / heatmap zone forks it out as its own card
+// (a seeds_question node) connected to the sharpening card.
+
+export interface AmbiguityForkDetail {
+  /** tldraw id of the sharpening card the ambiguity forks from. */
+  sourceId: string;
+  headline: string;
+  body: string;
+  color: string;
+}
+
+export const FORK_AMBIGUITY_EVENT = "objective-board:fork-ambiguity";
+
+/** Fire from a sharpening-card ambiguity chip/zone. WhiteboardBase listens. */
+export function forkAmbiguity(detail: AmbiguityForkDetail) {
+  window.dispatchEvent(new CustomEvent(FORK_AMBIGUITY_EVENT, { detail }));
 }

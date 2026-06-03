@@ -20,6 +20,8 @@ import {
   BookmarkCheck,
   Layers,
   Rocket,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import type { CardAction } from "../board-bus";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -28,9 +30,14 @@ const ACTIONS: {
   key: CardAction;
   label: string;
   Icon: typeof Split;
+  /** Render the icon only (name shows on hover via the tooltip). The two
+   *  compressed verbs lead with the ‹ › glyph; the legacy ops keep their text. */
+  iconOnly?: boolean;
 }[] = [
   { key: "open_room", label: "Open as room", Icon: Layers },
   { key: "promote_objective", label: "New objective", Icon: Rocket },
+  { key: "diverge", label: "Diverge — open up & generate", Icon: ChevronLeft, iconOnly: true },
+  { key: "converge", label: "Converge — narrow & commit", Icon: ChevronRight, iconOnly: true },
   { key: "decompose", label: "Decompose", Icon: Split },
   { key: "variations", label: "Variations", Icon: Shuffle },
   { key: "questions", label: "Questions", Icon: HelpCircle },
@@ -73,7 +80,7 @@ export function CardHoverActions({
         WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
       }}
     >
-      {shown.map(({ key, label, Icon }) => {
+      {shown.map(({ key, label, Icon, iconOnly }) => {
         const isSaved = saved && key === "save";
         const TileIcon = isSaved ? BookmarkCheck : Icon;
         const restColor = isSaved ? accent : appleVibe.text.secondary;
@@ -110,8 +117,11 @@ export function CardHoverActions({
               e.currentTarget.style.color = restColor;
             }}
           >
-            <TileIcon style={{ width: 12, height: 12 }} strokeWidth={2.2} />
-            {isSaved ? "Saved" : label}
+            <TileIcon
+              style={{ width: iconOnly ? 15 : 12, height: iconOnly ? 15 : 12 }}
+              strokeWidth={2.2}
+            />
+            {iconOnly ? null : isSaved ? "Saved" : label}
           </button>
         );
       })}

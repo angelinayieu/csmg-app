@@ -68,6 +68,10 @@ export interface CanvasOperation {
   /** Override endpoint for non-augment text ops (default /api/canvas/idea-op).
    *  e.g. make_technical → the full mechanism-spec generator. */
   endpoint?: string;
+  /** Hidden from the scanner's recommendation list + the menu helper, but
+   *  still runnable by id (executeCardOperation). The diverge/converge verbs
+   *  use this — they're surfaced as the dedicated ‹ › buttons, not as rows. */
+  hidden?: boolean;
 }
 
 /** THE CATALOG. Grounded in src/lib/objective-canvas/* + the routes that invoke
@@ -138,6 +142,30 @@ export const CANVAS_OPERATIONS: CanvasOperation[] = [
     resultLayout: "column",
   },
 
+  // ── The two compressed verbs — fired by the ‹ › buttons, not the row list
+  //    (hidden). "pipeline" engine runs them; "regroup" re-aims to the ops
+  //    above instead (see lib/objective-canvas/converge-diverge.ts). ──
+  {
+    id: "diverge",
+    label: "Diverge",
+    intent: "Open the space: meta questions → answers → distilled factor nodes",
+    contract: "text",
+    requiresLlm: true,
+    wired: true,
+    endpoint: "/api/canvas/converge-diverge",
+    hidden: true,
+  },
+  {
+    id: "converge",
+    label: "Converge",
+    intent: "Close the space: constraint questions → answers → distilled decisions",
+    contract: "text",
+    requiresLlm: true,
+    wired: true,
+    endpoint: "/api/canvas/converge-diverge",
+    hidden: true,
+  },
+
   // ── Cataloged; entity ops pending the Phase-3 scratch-entity scaffold ──
   {
     id: "sub_objectives",
@@ -183,9 +211,12 @@ export function operationById(id: string): CanvasOperation | undefined {
   return BY_ID.get(id);
 }
 
-/** The operations the per-card / per-sticky hover menu offers (wired text ops). */
+/** The operations the per-card / per-sticky hover menu offers (wired text ops).
+ *  Excludes hidden verbs (diverge/converge) — those ride the ‹ › buttons. */
 export function menuOperations(): CanvasOperation[] {
-  return CANVAS_OPERATIONS.filter((o) => o.wired && o.contract === "text");
+  return CANVAS_OPERATIONS.filter(
+    (o) => o.wired && o.contract === "text" && !o.hidden,
+  );
 }
 
 /** Cap so one click can't flood the board. */

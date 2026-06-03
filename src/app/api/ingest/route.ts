@@ -1,9 +1,10 @@
 import { NextResponse, after } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
-import { validateFile, validateUrl, isImageMime, inferMimeFromName } from "@/lib/ingest/validate";
+import { validateFile, validateUrl, isImageMime, isSpreadsheetMime, inferMimeFromName } from "@/lib/ingest/validate";
 import {
   extractText,
   extractUrl,
+  extractSpreadsheet,
   type ExtractResult,
 } from "@/lib/ingest/extractors";
 import { normalizeText } from "@/lib/ingest/normalizer";
@@ -177,6 +178,11 @@ export async function POST(request: Request) {
         filename,
         mime === "text/markdown" ? "markdown" : "text",
       );
+    } else if (isSpreadsheetMime(mime)) {
+      // CSV / XLSX / XLS → SheetJS, rendered as per-sheet markdown CSV.
+      // Synchronous: no LLM, just an in-memory parse.
+      extractionMethod = "spreadsheet";
+      extraction = await extractSpreadsheet(buf, filename);
     } else if (isImageMime(mime)) {
       // Two-phase image ingest (2026-05-01): phase 1 returns
       // immediately with an empty result so the file-card lands on

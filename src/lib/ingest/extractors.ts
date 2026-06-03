@@ -14,7 +14,7 @@ export interface ExtractResult {
   /** Human-readable source label — filename, article title, URL host. */
   source_name: string;
   metadata: {
-    source_type: "pdf" | "url" | "text" | "docx" | "image";
+    source_type: "pdf" | "url" | "text" | "docx" | "image" | "spreadsheet";
     original_bytes?: number;
     num_pages?: number;
     url?: string;
@@ -173,6 +173,77 @@ export async function extractDocx(
       error: {
         code: "extraction_failed",
         message: `Could not parse DOCX: ${err instanceof Error ? err.message : "unknown error"}`,
+      },
+    };
+  }
+}
+
+// ── Spreadsheet (XLSX / XLS / CSV) ───────────────────────────────────
+
+/**
+ * Extract text from a spreadsheet using SheetJS (xlsx).
+ *
+ * Each sheet becomes a markdown section — a "## <sheet name>" heading
+ * followed by its rows as CSV — so multi-sheet workbooks keep their
+ * boundaries for downstream agents. Plain CSV files parse through the
+ * same path (single unnamed sheet). Google Sheets imported via the Drive
+ * picker arrive here as .xlsx, so this is the single spreadsheet path.
+ */
+export async function extractSpreadsheet(
+  buffer: Buffer,
+  filename: string,
+): Promise<{ ok: true; result: ExtractResult } | { ok: false; error: IngestError }> {
+  try {
+    // Dynamic import keeps SheetJS off cold-start paths that never see spreadsheets.
+    const XLSX = await import("xlsx");
+    const workbook = XLSX.read(buffer, { type: "buffer" });
+
+    const sheetNames = workbook.SheetNames ?? [];
+    if (sheetNames.length === 0) {
+      return { ok: false, error: { code: "empty_content", message: "Spreadsheet has no sheets." } };
+    }
+
+    const sections: string[] = [];
+    for (const name of sheetNames) {
+      const sheet = workbook.Sheets[name];
+      if (!sheet) continue;
+      // sheet_to_csv preserves row/column structure; blankrows:false trims empty rows.
+      const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false }).trim();
+      if (!csv) continue;
+      sections.push(`## ${name}\n\n${csv}`);
+    }
+
+    const text = sections.join("\n\n").trim();
+    if (!text) {
+      return { ok: false, error: { code: "empty_content", message: "Spreadsheet has no readable cells." } };
+    }
+    if (text.length > MAX_EXTRACTED_CHARS) {
+      return {
+        ok: false,
+        error: {
+          code: "content_too_large",
+          message: `Extracted text is ${text.length.toLocaleString()} chars (max ${MAX_EXTRACTED_CHARS.toLocaleString()}).`,
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      result: {
+        text,
+        source_name: filename,
+        metadata: {
+          source_type: "spreadsheet",
+          original_bytes: buffer.byteLength,
+        },
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        code: "extraction_failed",
+        message: `Could not parse spreadsheet: ${err instanceof Error ? err.message : "unknown error"}`,
       },
     };
   }

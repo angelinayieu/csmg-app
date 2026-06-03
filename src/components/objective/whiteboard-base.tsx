@@ -45,6 +45,7 @@ import {
   ArtifactCardShapeUtil,
   type ArtifactCardShape,
 } from "./shapes/artifact-card-shape";
+import { OcCardShapeUtil } from "./shapes/oc-card-shape";
 import {
   SubsystemKgShapeUtil,
   type SubsystemKgShape,
@@ -67,6 +68,7 @@ import {
   type PrototypeCardShape,
   type PrototypeRefineDetail,
 } from "./shapes/prototype-card-shape";
+import { PromptSharpeningCardShapeUtil } from "./shapes/prompt-sharpening-card-shape";
 import { TechSpecPanel } from "./tech-spec-panel";
 import { CausalModelPanel } from "./causal-model-panel";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
@@ -86,6 +88,20 @@ import {
 } from "./canvas-interactions/shape-node-adapter";
 import { FocusModePanel } from "./canvas-interactions/focus-mode-panel";
 import { executeCardOperation } from "./canvas-interactions/operation-executor";
+import { DirectionEngineToggle } from "./canvas-interactions/direction-engine-toggle";
+import {
+  DECOMPOSE_INTO_CARDS_EVENT,
+  DECOMPOSE_DONE_EVENT,
+  deployOcCards,
+  requestDecomposeIntoCards,
+  type DeployCard,
+  type DeployLink,
+} from "./canvas-interactions/deploy-oc-cards";
+import {
+  opIdForDirection,
+  getDirectionEngine,
+  getAnalysisTemperature,
+} from "@/lib/objective-canvas/converge-diverge";
 import {
   forkSynthesisMap,
   type SynthesisBranch,
@@ -111,7 +127,15 @@ import {
   dispatchCardSaved,
   drainPendingArtifacts,
   type ArtifactCardDetail,
+  DEPLOY_SHARPENING_EVENT,
+  FORK_AMBIGUITY_EVENT,
+  type SharpeningCardDetail,
+  type AmbiguityForkDetail,
 } from "./board-bus";
+import {
+  deployPromptSharpeningOnBoard,
+  forkAmbiguityOnBoard,
+} from "./canvas-interactions/prompt-sharpening-board";
 import { syncDataFlowUnfurl } from "./unfurl/render-dataflow-unfurl";
 import type { DataFlowGraph } from "@/lib/objective-canvas/build-data-flow-graph";
 import {
@@ -323,11 +347,13 @@ const CUSTOM_SHAPE_UTILS = [
   RoomCardShapeUtil,
   InsightCardShapeUtil,
   ArtifactCardShapeUtil,
+  OcCardShapeUtil,
   SubsystemKgShapeUtil,
   LayerBandShapeUtil,
   SpecForgeCardShapeUtil,
   TechSpecCardShapeUtil,
   PrototypeCardShapeUtil,
+  PromptSharpeningCardShapeUtil,
 ];
 
 export function WhiteboardBase({
@@ -335,6 +361,7 @@ export function WhiteboardBase({
   showUi = true,
   onAiLink,
   onEditorReady,
+  seedCard = null,
 }: {
   spaceId: string;
   /** When false, tldraw's chrome (toolbar / menus / style panel) is
@@ -346,11 +373,19 @@ export function WhiteboardBase({
   onAiLink?: AiLinkFn;
   /** Called once with the tldraw editor on mount (parent escape hatch). */
   onEditorReady?: (editor: Editor) => void;
+  /** Minimal mode — when set, this room-card is auto-deployed onto the
+   *  board once persistence has restored. Idempotent: skipped if a card
+   *  for the same roomId already exists. Used to land the objective as a
+   *  card on an otherwise-empty board (the default objective surface). */
+  seedCard?: DeployCardDetail | null;
 }) {
   const editorRef = useRef<Editor | null>(null);
   // Editor also held in state so the selection overlay (which needs
   // reactive `useValue`) can mount once the editor exists.
   const [editor, setEditor] = useState<Editor | null>(null);
+  // True once server persistence has restored. Gates the minimal-mode
+  // seed so a late restore can't wipe the seeded objective card.
+  const [restoreSettled, setRestoreSettled] = useState(false);
   // Ref so handleMount stays stable while still seeing the latest callback.
   const onEditorReadyRef = useRef(onEditorReady);
   onEditorReadyRef.current = onEditorReady;
@@ -389,12 +424,30 @@ export function WhiteboardBase({
   useObjectiveBoardPersistence(editor, spaceId, () => {
     // Restore settled — now safe to drop in any cross-page queued
     // artifacts (e.g. sent from the lab) without a late restore wiping them.
+    setRestoreSettled(true);
     const ed = editorRef.current;
     if (!ed) return;
     for (const d of drainPendingArtifacts(spaceId)) createArtifactCard(ed, d);
     for (const d of drainPendingSubsystemKgs(spaceId))
       createSubsystemKgCard(ed, d);
   });
+
+  // Minimal mode — seed the objective as a card on the board once restore
+  // has settled. Idempotent (skips if a card for this roomId already
+  // exists), so a re-render or a returning visit never stacks duplicates.
+  useEffect(() => {
+    if (!restoreSettled || !seedCard) return;
+    const ed = editorRef.current;
+    if (!ed) return;
+    const exists = ed
+      .getCurrentPageShapes()
+      .some(
+        (s) =>
+          s.type === "room-card" &&
+          (s as RoomCardShape).props.roomId === seedCard.roomId,
+      );
+    if (!exists) deployRoomCard(seedCard);
+  }, [restoreSettled, seedCard]);
 
   // ── Unfurl mode ──
   // "Open on whiteboard" fires OPEN_UNFURL_EVENT; we fetch the chain graph
@@ -642,6 +695,47 @@ export function WhiteboardBase({
     return () => window.removeEventListener(SEND_DATAFLOW_EVENT, onSendDataFlow);
   }, []);
 
+  // ── Decompose the objective into Feature/Variable cards ──
+  // A trigger (the Decompose button / command) fires
+  // DECOMPOSE_INTO_CARDS_EVENT; we POST the objective to /decompose-cards and
+  // lay the returned cards + their connections out on the board. Isolated
+  // from the heavy rooms pipeline. Single-flight via the ref.
+  const decomposingRef = useRef(false);
+  useEffect(() => {
+    async function onDecompose() {
+      const ed = editorRef.current;
+      if (!ed || decomposingRef.current) return;
+      decomposingRef.current = true;
+      try {
+        const res = await fetch(`/api/objective/${spaceId}/decompose-cards`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        if (res.ok) {
+          const json = (await res.json()) as {
+            cards?: DeployCard[];
+            links?: DeployLink[];
+          };
+          if (Array.isArray(json.cards) && json.cards.length > 0) {
+            deployOcCards(ed, json.cards, json.links ?? []);
+          }
+        }
+      } catch {
+        /* soft-fail — the board stays as-is */
+      } finally {
+        decomposingRef.current = false;
+        try {
+          window.dispatchEvent(new CustomEvent(DECOMPOSE_DONE_EVENT));
+        } catch {
+          /* SSR / no-window */
+        }
+      }
+    }
+    window.addEventListener(DECOMPOSE_INTO_CARDS_EVENT, onDecompose);
+    return () => window.removeEventListener(DECOMPOSE_INTO_CARDS_EVENT, onDecompose);
+  }, [spaceId]);
+
   function exitUnfurl() {
     const ed = editorRef.current;
     if (ed) clearUnfurl(ed);
@@ -808,6 +902,25 @@ export function WhiteboardBase({
         })();
         return;
       }
+      // The compressed verbs ( ‹ diverge / converge › ) resolve to an op id
+      // through the active engine toggle — pipeline = the new questions→answers→
+      // distill loop, regroup = an existing op — at the scanner's temperature.
+      if (d.action === "diverge" || d.action === "converge") {
+        const editor = editorRef.current;
+        if (!editor) return;
+        void executeCardOperation(
+          editor,
+          {
+            text: d.title,
+            shapeId: d.shapeId,
+            entityId: d.entityId,
+            roomId: d.roomId ?? undefined,
+          },
+          opIdForDirection(d.action, getDirectionEngine()),
+          { temperature: getAnalysisTemperature() },
+        );
+        return;
+      }
       // AI actions (decompose/variations/questions/make_plan) → run via the
       // canvas operation registry + executor; results land as cards just
       // below the source shape.
@@ -825,17 +938,39 @@ export function WhiteboardBase({
       );
     }
 
+    function onDeploySharpening(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      deployPromptSharpeningOnBoard(
+        editor,
+        (e as CustomEvent<SharpeningCardDetail>).detail,
+      );
+    }
+
+    function onForkAmbiguity(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      forkAmbiguityOnBoard(
+        editor,
+        (e as CustomEvent<AmbiguityForkDetail>).detail,
+      );
+    }
+
     window.addEventListener(DEPLOY_CARD_EVENT, onDeploy);
     window.addEventListener(REMOVE_CARD_EVENT, onRemove);
     window.addEventListener(DEPLOY_ARTIFACT_EVENT, onArtifact);
     window.addEventListener(DEPLOY_SUBSYSTEM_KG_EVENT, onSubsystemKg);
     window.addEventListener(CARD_ACTION_EVENT, onCardAction);
+    window.addEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpening);
+    window.addEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguity);
     return () => {
       window.removeEventListener(DEPLOY_CARD_EVENT, onDeploy);
       window.removeEventListener(REMOVE_CARD_EVENT, onRemove);
       window.removeEventListener(DEPLOY_ARTIFACT_EVENT, onArtifact);
       window.removeEventListener(DEPLOY_SUBSYSTEM_KG_EVENT, onSubsystemKg);
       window.removeEventListener(CARD_ACTION_EVENT, onCardAction);
+      window.removeEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpening);
+      window.removeEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguity);
     };
   }, []);
 
@@ -1400,6 +1535,51 @@ function PrototypeEventBridge({
   return null;
 }
 
+// Quiet, zen trigger for the default decomposition. Dispatches the request
+// (the board's listener does the fetch + deploy); clears its busy state when
+// the run settles. Fixed bottom-left so it never collides with the toolbar.
+function DecomposeCardsButton() {
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const done = () => setBusy(false);
+    window.addEventListener(DECOMPOSE_DONE_EVENT, done);
+    return () => window.removeEventListener(DECOMPOSE_DONE_EVENT, done);
+  }, []);
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => {
+        if (busy) return;
+        setBusy(true);
+        requestDecomposeIntoCards();
+      }}
+      title="Break the objective into Feature & Variable cards"
+      style={{
+        position: "fixed",
+        left: 16,
+        bottom: 16,
+        zIndex: 60,
+        padding: "8px 15px",
+        borderRadius: appleVibe.radius.pill,
+        background: appleVibe.surface.card,
+        border: `1px solid ${appleVibe.stroke.soft}`,
+        boxShadow: appleVibe.shadow.chip,
+        color: busy ? appleVibe.text.tertiary : appleVibe.text.primary,
+        fontFamily: appleVibe.font.stack,
+        fontSize: 12.5,
+        fontWeight: 600,
+        letterSpacing: "-0.01em",
+        cursor: busy ? "default" : "pointer",
+        pointerEvents: "all",
+        transition: "color 160ms ease-out",
+      }}
+    >
+      {busy ? "Decomposing…" : "Decompose"}
+    </button>
+  );
+}
+
 function BoardOverlay({
   editor,
   runAiLink,
@@ -1681,6 +1861,10 @@ function BoardOverlay({
 
   return (
     <>
+      {/* Top switch: what the ‹ diverge / converge › buttons actually run
+          (the new pipeline vs. regrouping the existing ops) — for A/B'ing. */}
+      <DirectionEngineToggle />
+      <DecomposeCardsButton />
       {showHint && <BoardHint onDismiss={dismissHint} />}
       {view.screen &&
         (count >= 2 ||

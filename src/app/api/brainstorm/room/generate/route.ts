@@ -15,6 +15,7 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
+import { isRoomGenerationEnabled } from "@/lib/feature-flags/room-generation";
 import {
   runLayeredGeneration,
   runDefineStage,
@@ -139,12 +140,24 @@ export async function POST(req: NextRequest) {
   const { data: space } = await db
     .from("spaces")
     .select(
-      "id, user_id, description, input_text, synthesis_data, surface_research, deep_research",
+      "id, user_id, pipeline_mode, description, input_text, synthesis_data, surface_research, deep_research",
     )
     .eq("id", spaceId)
     .maybeSingle();
   if (!space || space.user_id !== auth.user.id) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+
+  // ── Rooms are opt-in, isolated from the default Feature/Variable cards ──
+  // The heavy rooms pipeline only runs when the space's pipeline_mode is
+  // explicitly "on" (the in-space toggle). By default the board uses the
+  // lightweight oc-card decomposition, so this no-op keeps the two systems
+  // cleanly separated.
+  if (!isRoomGenerationEnabled(space.pipeline_mode)) {
+    return NextResponse.json(
+      { skipped: true, reason: "room_generation_disabled" },
+      { status: 409 },
+    );
   }
 
   const { data: sub } = await db

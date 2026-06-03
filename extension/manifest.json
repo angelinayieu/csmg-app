@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "InterAxis Tab Sync",
+  "version": "1.0.0",
+  "description": "Sync your open browser tabs to InterAxis as research context for an objective.",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": ["http://localhost:3000/*", "https://*/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "InterAxis Tab Sync"
+  }
+}

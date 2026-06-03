@@ -19,6 +19,9 @@ export const SUPPORTED_MIME_TYPES = [
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
   "text/plain",
   "text/markdown",
+  "text/csv", // .csv
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
+  "application/vnd.ms-excel", // .xls
   "image/png",
   "image/jpeg",
   "image/webp",
@@ -32,8 +35,20 @@ export const IMAGE_MIME_TYPES = [
   "image/gif",
 ] as const;
 
+// Spreadsheet formats (Excel + CSV). Routed through the SheetJS extractor,
+// which also exports Google Sheets imported via the Drive picker.
+export const SPREADSHEET_MIME_TYPES = [
+  "text/csv",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel",
+] as const;
+
 export function isImageMime(mime: string): boolean {
   return (IMAGE_MIME_TYPES as readonly string[]).includes(mime);
+}
+
+export function isSpreadsheetMime(mime: string): boolean {
+  return (SPREADSHEET_MIME_TYPES as readonly string[]).includes(mime);
 }
 
 export type IngestError = {
@@ -74,7 +89,7 @@ export function validateFile(file: { size: number; type: string; name?: string }
       ok: false,
       error: {
         code: "unsupported_type",
-        message: `Unsupported file type: ${type || "unknown"}. Supported: PDF, DOCX, TXT, Markdown, PNG, JPG, WEBP, GIF.`,
+        message: `Unsupported file type: ${type || "unknown"}. Supported: PDF, DOCX, TXT, Markdown, CSV, XLSX, XLS, PNG, JPG, WEBP, GIF.`,
       },
     };
   }
@@ -90,6 +105,9 @@ export function inferMimeFromName(name?: string): string {
     case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     case "txt": return "text/plain";
     case "md": return "text/markdown";
+    case "csv": return "text/csv";
+    case "xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    case "xls": return "application/vnd.ms-excel";
     case "png": return "image/png";
     case "jpg":
     case "jpeg": return "image/jpeg";

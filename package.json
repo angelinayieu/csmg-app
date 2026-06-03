@@ -26,6 +26,7 @@
     "cytoscape-fcose": "^2.2.0",
     "d3": "^7.9.0",
     "framer-motion": "^12.38.0",
+    "googleapis": "^173.0.0",
     "inngest": "^4.2.4",
     "jsdom": "^29.0.2",
     "lucide-react": "^1.7.0",
@@ -44,6 +45,7 @@
     "three": "^0.184.0",
     "tldraw": "^4.5.9",
     "unpdf": "^1.6.2",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zustand": "^5.0.12"
   },
   "devDependencies": {

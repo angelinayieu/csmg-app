@@ -195,7 +195,8 @@ export async function GET(_request: Request, ctx: Ctx) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
-  const [spaceRes, evidenceRes, externalEntitiesRes] = await Promise.all([
+  const [spaceRes, evidenceRes, externalEntitiesRes, integrationsRes] =
+    await Promise.all([
     db
       .from("spaces")
       .select("id, name, user_id")
@@ -216,6 +217,10 @@ export async function GET(_request: Request, ctx: Ctx) {
       .eq("knowledge_layer", "external")
       .order("created_at", { ascending: false })
       .limit(30),
+    db
+      .from("user_integrations")
+      .select("provider, status")
+      .eq("user_id", user.id),
   ]);
 
   if (!spaceRes?.data) {
@@ -302,6 +307,18 @@ export async function GET(_request: Request, ctx: Ctx) {
       (countsByProvider.get(item.provider) ?? 0) + 1,
     );
   }
+  // Connected integrations flip their tile from "coming_soon" → "connected".
+  // Maps user_integrations provider names onto catalog provider names.
+  const connectedProviders = new Set<IntegrationProvider>();
+  for (const row of (integrationsRes?.data ?? []) as Array<{
+    provider: string;
+    status: string;
+  }>) {
+    if (row.status === "connected" && row.provider === "google_drive") {
+      connectedProviders.add("drive");
+    }
+  }
+
   const integrationEntries: SourceCatalogEntry[] = INTEGRATIONS.map(
     (def) => ({
       id: `integration:${def.provider}`,
@@ -312,7 +329,9 @@ export async function GET(_request: Request, ctx: Ctx) {
       url: null,
       domain: null,
       provider: def.provider,
-      status: "coming_soon",
+      status: connectedProviders.has(def.provider)
+        ? "connected"
+        : "coming_soon",
       reliability: null,
       created_at: null,
       item_count: countsByProvider.get(def.provider) ?? 0,

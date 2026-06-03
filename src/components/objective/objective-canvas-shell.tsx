@@ -68,12 +68,18 @@ function initialsOf(title: string): string {
 export function ObjectiveCanvasShell({
   spaceId,
   rightInset = 20,
+  minimal = false,
   children,
 }: {
   spaceId: string;
   /** Right padding for the room-window so it never slides under the
    *  layout's Lab Notebook rail. The layout passes the live rail width. */
   rightInset?: number;
+  /** Minimal mode — land on the board with the objective collapsed to a
+   *  card (the default objective surface) instead of opening the full
+   *  canvas window. Set by the layout for the objective root unless
+   *  ?full=1. */
+  minimal?: boolean;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -86,12 +92,17 @@ export function ObjectiveCanvasShell({
   // The distilled goal — the crisp one-liner the Overview goal card shows.
   // Drives the collapsed objective card's title so both surfaces read the same.
   const [distilledObjective, setDistilledObjective] = useState("");
+  // True once the board-subs fetch resolves (success OR failure) so the
+  // minimal-mode seed waits for the real objective title before landing.
+  const [boardSubsLoaded, setBoardSubsLoaded] = useState(false);
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/objective/${spaceId}/board-subs`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d: BoardSubsResponse | null) => {
-        if (cancelled || !d) return;
+        if (cancelled) return;
+        setBoardSubsLoaded(true);
+        if (!d) return;
         const nextSubs = Array.isArray(d.subs) ? d.subs : [];
         setSubs(nextSubs);
         setObjectiveTitle(d.objectiveTitle ?? "");
@@ -112,6 +123,7 @@ export function ObjectiveCanvasShell({
       })
       .catch(() => {
         /* soft-fail — sidebar just shows the objective */
+        if (!cancelled) setBoardSubsLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -130,12 +142,13 @@ export function ObjectiveCanvasShell({
     : 0;
 
   // collapsed = the window is hidden and the current room lives as a
-  // draggable card on the board. Reset whenever the route changes so a new
-  // room always opens as a window.
-  const [collapsed, setCollapsed] = useState(false);
+  // draggable card on the board. Minimal mode starts collapsed (board is
+  // the surface, objective rides on it as a card); full mode opens the
+  // window. Reset on route change so each room re-derives its state.
+  const [collapsed, setCollapsed] = useState(minimal);
   useEffect(() => {
-    setCollapsed(false);
-  }, [pathname]);
+    setCollapsed(minimal);
+  }, [pathname, minimal]);
 
   function roomIdFor(index: number): string {
     return index === 0 ? "__obj" : rooms[index].id;
@@ -230,7 +243,11 @@ export function ObjectiveCanvasShell({
       {/* Persistent whiteboard floor. showUi only when collapsed — while a
           room window is open the board chrome would peek around the margins
           and compete with the room. */}
-      <WhiteboardBase spaceId={spaceId} showUi={collapsed} />
+      <WhiteboardBase
+        spaceId={spaceId}
+        showUi={collapsed}
+        seedCard={minimal && boardSubsLoaded ? cardDetailFor(0) : null}
+      />
 
       {/* Circular room sidebar — reflects the URL, navigates by route. */}
       <div className="fixed left-4 top-1/2 z-[55] -translate-y-1/2">

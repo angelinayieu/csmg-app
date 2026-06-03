@@ -1017,6 +1017,22 @@ declare module "@tldraw/tlschema" {
       version: number;
       specJson: string;
     };
+    // Objective board — Prompt Sharpening Card (the first intake
+    // intelligence object). Collapsed: distilled title + sharpened prompt +
+    // top ambiguity chips. Expanded: the 10-zone ambiguity heatmap +
+    // Explore/Distill. Forking an ambiguity spawns an insight-card.
+    "prompt-sharpening": {
+      w: number;
+      h: number;
+      expanded: boolean;
+      spaceId: string;
+      title: string;
+      sharpenedPrompt: string;
+      chips: string[];
+      heatmapJson: string;
+      rankedJson: string;
+      color: string;
+    };
   }
 }
 

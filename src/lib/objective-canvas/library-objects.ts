@@ -26,6 +26,7 @@ export type LibraryObjectType =
   | "ui_idea"
   | "recommendation"
   | "variation"
+  | "variable"
   | "brainstorm_cluster";
 
 export type SelectionStatus = "candidate" | "selected" | "rejected";
@@ -51,6 +52,11 @@ export interface UpsertObjectInput {
   sourceRef?: string | null;
   contentSnapshot?: unknown;
   blueprintLayerOrdinal?: number | null;
+  /** AI-refined board-card face { name, body, from_updated_at }. Set only
+   *  when provided so a metadata-driven refresh doesn't clobber other cols. */
+  cardFace?: unknown;
+  /** Object-type-specific eval blob. For converge cards: the compression tree. */
+  evaluation?: unknown;
 }
 
 export interface LibraryObjectRow {
@@ -75,6 +81,10 @@ export interface LibraryObjectRow {
    *  LibraryPanel's hover preview. Always optional + unknown so existing
    *  consumers that don't read it stay unaffected. */
   content_snapshot?: unknown;
+  /** AI-refined board-card face { name, body, from_updated_at }. */
+  card_face?: unknown;
+  /** Object-type-specific eval blob; for converge cards, the compression tree. */
+  evaluation?: unknown;
 }
 
 /** A deferred sub-objective proposal, surfaced read-only in the
@@ -90,7 +100,7 @@ export interface DeferredProposalLite {
 }
 
 const SELECT_COLS =
-  "id, space_id, object_type, title, summary, source_entity_id, source_sub_objective_id, source_ref, blueprint_layer_ordinal, rank_score, selection_status, included_in_spec, in_strategy_brief, on_whiteboard, board_shape_id, content_snapshot";
+  "id, space_id, object_type, title, summary, source_entity_id, source_sub_objective_id, source_ref, blueprint_layer_ordinal, rank_score, selection_status, included_in_spec, in_strategy_brief, on_whiteboard, board_shape_id, content_snapshot, card_face, evaluation";
 
 /**
  * Lazy, idempotent upsert by the natural key. Re-"saving" the same blob item
@@ -116,7 +126,7 @@ export async function upsertLibraryObject(
       : q.is("source_ref", null);
     const { data: existing } = await q.maybeSingle();
 
-    const patch = {
+    const patch: Record<string, unknown> = {
       title: input.title,
       summary: input.summary ?? null,
       source_sub_objective_id: input.sourceSubObjectiveId ?? null,
@@ -124,6 +134,10 @@ export async function upsertLibraryObject(
       blueprint_layer_ordinal: input.blueprintLayerOrdinal ?? null,
       updated_at: new Date().toISOString(),
     };
+    // Only set the card fields when explicitly provided, so a later
+    // name/summary refresh never clobbers an existing face or converge tree.
+    if (input.cardFace !== undefined) patch.card_face = input.cardFace;
+    if (input.evaluation !== undefined) patch.evaluation = input.evaluation;
 
     if (existing?.id) {
       await db.from("library_objects").update(patch).eq("id", existing.id);
@@ -268,5 +282,69 @@ export async function linkObjects(
     );
   } catch (err) {
     console.warn("[library-objects] linkObjects failed (soft):", err);
+  }
+}
+
+/** Fetch a single object by id (the card-detail / refine read path). */
+export async function getLibraryObject(
+  db: AnyDb,
+  objectId: string,
+): Promise<LibraryObjectRow | null> {
+  try {
+    const { data } = await db
+      .from("library_objects")
+      .select(SELECT_COLS)
+      .eq("id", objectId)
+      .maybeSingle();
+    return (data as LibraryObjectRow | null) ?? null;
+  } catch (err) {
+    console.warn("[library-objects] getLibraryObject failed (soft):", err);
+    return null;
+  }
+}
+
+/** Write the AI-refined card face ({ name, body, from_updated_at }). */
+export async function setCardFace(
+  db: AnyDb,
+  objectId: string,
+  face: { name: string; body: string; from_updated_at: string },
+): Promise<void> {
+  try {
+    await db
+      .from("library_objects")
+      .update({ card_face: face, updated_at: new Date().toISOString() })
+      .eq("id", objectId);
+  } catch (err) {
+    console.warn("[library-objects] setCardFace failed (soft):", err);
+  }
+}
+
+/** Shallow-MERGE a patch into the object's `content_snapshot` (never
+ *  overwrite the whole blob — the metadata gallery + converge tree
+ *  accrete over time). */
+export async function mergeObjectContentSnapshot(
+  db: AnyDb,
+  objectId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const { data } = await db
+      .from("library_objects")
+      .select("content_snapshot")
+      .eq("id", objectId)
+      .maybeSingle();
+    const current =
+      data?.content_snapshot && typeof data.content_snapshot === "object"
+        ? (data.content_snapshot as Record<string, unknown>)
+        : {};
+    await db
+      .from("library_objects")
+      .update({
+        content_snapshot: { ...current, ...patch },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", objectId);
+  } catch (err) {
+    console.warn("[library-objects] mergeObjectContentSnapshot failed (soft):", err);
   }
 }

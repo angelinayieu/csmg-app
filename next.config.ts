@@ -45,6 +45,19 @@ const nextConfig: NextConfig = {
   // that dependency entirely; do not re-add pdf-parse/pdfjs-dist.
   serverExternalPackages: ["mammoth"],
 
+  // ── Webpack: avoid the bundled WASM hasher ───────────────────────────
+  // On Node 22+/24, webpack's default WASM-backed hash (md4/xxhash) can
+  // crash production builds inside `WasmHash._updateWithBuffer`
+  // ("Cannot read properties of undefined (reading 'length')") — the
+  // failure is in webpack internals, independent of app code. Forcing a
+  // JS/native hash (sha256) sidesteps the WASM path so `next build
+  // --webpack` works across Node versions. (Turbopack dev ignores this.)
+  webpack: (config) => {
+    config.output = config.output || {};
+    config.output.hashFunction = "sha256";
+    return config;
+  },
+
   // ── Route consolidation redirects ─────────────────────────────────────
   // Preserve existing bookmarks and any stale internal links pointing at
   // routes that have been deleted or renamed. Each entry is a permanent

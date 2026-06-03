@@ -28,6 +28,8 @@ import {
   Wand2,
   ArrowRight,
   Thermometer,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import {
   heuristicScan,
@@ -35,6 +37,11 @@ import {
   type ScoredOperation,
 } from "@/lib/objective-canvas/scan-recommendations";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
+import {
+  opIdForDirection,
+  getDirectionEngine,
+  type Direction,
+} from "@/lib/objective-canvas/converge-diverge";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 const ICONS: Record<string, typeof Split> = {
@@ -145,6 +152,15 @@ export function AiScannerPanel({
     setRanId(opId);
     onRun(opId, temperature);
     window.setTimeout(() => setRanId((c) => (c === opId ? null : c)), 1200);
+  }
+
+  // The two compressed verbs. WHICH engine they run (the new pipeline vs.
+  // regrouping the existing ops) is set by the top toggle, read at click time.
+  const [ranDir, setRanDir] = useState<Direction | null>(null);
+  function runDirection(dir: Direction) {
+    setRanDir(dir);
+    onRun(opIdForDirection(dir, getDirectionEngine()), temperature);
+    window.setTimeout(() => setRanDir((c) => (c === dir ? null : c)), 1200);
   }
 
   // Flip to the left of the source if the panel would overflow the right edge.
@@ -322,6 +338,76 @@ export function AiScannerPanel({
           )}
         </button>
       )}
+
+      {/* The two compressed verbs — the same move as a card's ‹ › hover glyphs.
+          What they run is set by the top engine toggle (pipeline vs. regroup). */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        {(
+          [
+            {
+              dir: "diverge",
+              Icon: ChevronLeft,
+              label: "Diverge",
+              hint: "Open up — meta questions → distilled factors",
+            },
+            {
+              dir: "converge",
+              Icon: ChevronRight,
+              label: "Converge",
+              hint: "Narrow — constraint questions → distilled decisions",
+            },
+          ] as const
+        ).map(({ dir, Icon, label, hint }) => {
+          const active = ranDir === dir;
+          return (
+            <button
+              key={dir}
+              type="button"
+              title={hint}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                runDirection(dir);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                flex: 1,
+                padding: "9px 10px",
+                borderRadius: appleVibe.radius.md,
+                border: "1px solid var(--glass-border)",
+                cursor: "pointer",
+                fontSize: 12.5,
+                fontWeight: 650,
+                letterSpacing: "-0.01em",
+                fontFamily: appleVibe.font.stack,
+                color: appleVibe.text.primary,
+                background: appleVibe.surface.chip,
+                boxShadow: "inset 0 1px 0 rgba(255,255,255,0.55)",
+                transition: rowTransition,
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = appleVibe.surface.chipHover;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = appleVibe.surface.chip;
+              }}
+            >
+              {active ? (
+                <Loader2
+                  className={reduceMotion ? undefined : "animate-spin"}
+                  style={{ width: 14, height: 14 }}
+                />
+              ) : (
+                <Icon style={{ width: 15, height: 15 }} strokeWidth={2.4} />
+              )}
+              {label}
+            </button>
+          );
+        })}
+      </div>
 
       {/* Operation rows — recommended first, the top one softly highlighted. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>

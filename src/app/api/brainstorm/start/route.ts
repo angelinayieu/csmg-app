@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { surfacePassToDb } from "@/lib/research/persist-bundle";
 import { generateInitialAnnotationsForSpace } from "@/lib/objective-canvas/generate-initial-annotations";
+import { generatePromptSharpeningForSpace } from "@/lib/objective-canvas/generate-prompt-sharpening";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +39,17 @@ interface StartBody {
    *  set, persisted on synthesis_data.define for the record + future use. */
   preciseFraming?: string;
   preciseFields?: Record<string, unknown>;
+  /** Chatbox attachments (dropped files, Drive picks, synced tab URLs).
+   *  Each is an `ingested_files` id created with a null space_id before
+   *  this space existed. We claim them onto the new space and fold their
+   *  parsed text into the research seed. */
+  attachedFileIds?: string[];
+  /** Minimal-mode intake (the default product surface): only the Prompt
+   *  Sharpening Card runs; the old pipeline (broad research + concept
+   *  annotations, which feed clarifying/decompose/rooms) is skipped so
+   *  intake stays fast. Omitted by the legacy entry card / ?full=1 flow.
+   *  See MINIMAL_INTAKE_MODE.md. */
+  sharpenOnly?: boolean;
 }
 
 // Mirror of the objective_brainstorm template's layer list. Used as
@@ -115,6 +127,18 @@ export async function POST(req: NextRequest) {
 
   const pipelineMode: "autopilot" | "review_each" =
     body.mode === "human" ? "review_each" : "autopilot";
+
+  // Chatbox attachments — ingested_files ids uploaded with a null
+  // space_id before this space existed. Capped + string-filtered here;
+  // claimed + folded into the seed once the space row is created.
+  const attachedFileIds = Array.isArray(body.attachedFileIds)
+    ? body.attachedFileIds
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+        .slice(0, 25)
+    : [];
+
+  // Minimal-mode intake — skip the old pipeline kickoffs (see below).
+  const sharpenOnly = body.sharpenOnly === true;
 
   // Define-before-generate framing (CROSS_AUDIT P1). The client serializes
   // the structured fields; we cap + append to the RESEARCH seed only, so
@@ -208,6 +232,50 @@ export async function POST(req: NextRequest) {
 
   const spaceId = insert.data.id as string;
 
+  // ── 1b. Claim chatbox attachments + fold into the research seed ──
+  // Files dropped into the chatbox were ingested with a null space_id
+  // (no space existed yet). Now that it does, bind them to the space
+  // (so they appear in its library) and append whatever text has parsed
+  // to the research seed. Background-parsed PDFs/DOCX that aren't ready
+  // yet still get bound — they just miss this first seed; the parse
+  // worker fills normalized_text shortly after.
+  const MAX_ATTACH_CHARS = 16_000;
+  let attachmentsContext = "";
+  if (attachedFileIds.length > 0) {
+    const claim = await db
+      .from("ingested_files")
+      .update({ space_id: spaceId })
+      .in("id", attachedFileIds)
+      .eq("user_id", user.id) // only the owner's rows
+      .is("space_id", null) // don't steal a file already bound elsewhere
+      .select("source_name, normalized_text");
+    if (claim.error) {
+      console.warn(
+        "[brainstorm/start] attachment back-link failed (non-fatal):",
+        claim.error.message,
+      );
+    } else {
+      const blocks = (
+        (claim.data ?? []) as Array<{
+          source_name: string | null;
+          normalized_text: string | null;
+        }>
+      )
+        .filter((r) => r.normalized_text && r.normalized_text.trim().length > 0)
+        .map(
+          (r) =>
+            `### ${r.source_name ?? "Attachment"}\n${r.normalized_text!.trim()}`,
+        );
+      if (blocks.length > 0) {
+        let joined = blocks.join("\n\n");
+        if (joined.length > MAX_ATTACH_CHARS) {
+          joined = joined.slice(0, MAX_ATTACH_CHARS) + "…";
+        }
+        attachmentsContext = `\n\n## Attached context\n${joined}`;
+      }
+    }
+  }
+
   // ── 2. Backstop: layer ontology seed ───────────────────────────
   // If the trigger fired, layer_ontology already has 4 rows for this
   // space. If not (migration unapplied), seed them here so the rest
@@ -270,22 +338,30 @@ export async function POST(req: NextRequest) {
     goalId = goalInsert.data.id as string;
   }
 
-  // ── 4. Kick off surface research (fire-and-forget) ─────────────
-  // Runs the broad domain-context search in the background while
-  // the user is redirected into the clarifying card. The clarifying
-  // UI polls /api/brainstorm/research/status to know when it lands.
-  // `void` makes the no-await explicit; we never block the user's
-  // entry on research completion.
-  void surfacePassToDb(db, spaceId, researchSeed);
+  // ── 4 + 5. Old-pipeline kickoffs — surface research + concept
+  // annotations. These feed the FULL analysis canvas (clarifying
+  // questions, decompose → rooms, the annotated objective card).
+  // Minimal-mode intake (sharpenOnly) SKIPS them so intake stays fast and
+  // no rooms generate — only the Prompt Sharpening Card runs. The legacy
+  // entry card / ?full=1 flow omits sharpenOnly, so they still run there.
+  // To restore them as the default, drop `sharpenOnly` from the chatbox
+  // submit (see MINIMAL_INTAKE_MODE.md).
+  if (!sharpenOnly) {
+    // Broad domain-context search — grounds clarifying + decompose.
+    void surfacePassToDb(db, spaceId, researchSeed + attachmentsContext);
+    // Concept-annotation lens for the working objective (underlines +
+    // the "extracted N concepts" trace). Idempotent; clarify/complete
+    // re-fires as a backstop.
+    void generateInitialAnnotationsForSpace(db, spaceId, user.id, "intake");
+  }
 
-  // ── 5. Kick off concept-annotation analysis (fire-and-forget) ──────
-  // Extract the annotation lens for the working objective AT INTAKE, so
-  // the underlines + the "extracted N concepts" notebook trace appear as
-  // the user lands on the objective (the live analysis record) — and the
-  // concepts are available to ground the clarifying questions. Idempotent;
-  // clarify/complete re-fires as a backstop. No-op if the goal insert
-  // above soft-failed (nothing to annotate).
-  void generateInitialAnnotationsForSpace(db, spaceId, user.id, "intake");
+  // ── 6. Kick off prompt sharpening (fire-and-forget) ────────────────
+  // The first intake intelligence object: a mini diverge→converge pass
+  // that lands a Prompt Sharpening Card on the board (distilled title,
+  // sharpened prompt, ranked ambiguities, ambiguity heatmap) plus hidden
+  // metadata for downstream Explore/Distill. Persists to synthesis_data;
+  // the board's PromptSharpeningMount polls + materializes the card.
+  void generatePromptSharpeningForSpace(db, spaceId, user.id, objective);
 
   return NextResponse.json({ spaceId, goalId, pipelineMode });
 }
