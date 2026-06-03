@@ -20,6 +20,7 @@ export type SpecForgeStage =
   | "problem" // problem cause tree (coral / rose)
   | "result" // desired result stack (violet)
   | "depth" // depth selection controller (blue-cyan)
+  | "analysis" // cross-analysis: user×problem×result fit + blockages (teal)
   | "convergence" // root constraint · first-principles need · thesis (graphite)
   | "alternatives" // what exists today (amber)
   | "differentiation" // differentiation thesis (indigo)
@@ -42,6 +43,7 @@ export const STAGE_META: Record<SpecForgeStage, StageMeta> = {
   problem: { label: "Causal model", color: "#EE6B6E" },
   result: { label: "Desired result", color: "#8E7BEA" },
   depth: { label: "Depth selection", color: "#0E9BD8" },
+  analysis: { label: "Cross-analysis", color: "#2BAA98" },
   convergence: { label: "Convergence", color: "#566273" },
   alternatives: { label: "Alternatives today", color: "#D7993A" },
   differentiation: { label: "Differentiation", color: "#6366D6" },
@@ -57,6 +59,7 @@ export type SpecForgeEngineId =
   | "target_user"
   | "problem_tree"
   | "desired_result"
+  | "cross_analysis"
   | "convergence"
   | "differentiation"
   | "solution_families"
@@ -65,12 +68,15 @@ export type SpecForgeEngineId =
 
 /** The chain the runner executes, in causal order (converge → diverge →
  *  converge). Each engine receives the accumulated context of the ones before
- *  it. Ordering is faithful to the spec's Minimal Vertical Slice (§7). */
+ *  it. Ordering is faithful to the spec's Minimal Vertical Slice (§7). The
+ *  Cross-Analysis Engine sits between layered modeling and convergence: it
+ *  interweaves user×problem×result before a single thesis is chosen. */
 export const SPECFORGE_CHAIN: SpecForgeEngineId[] = [
   "power_up",
   "target_user",
   "problem_tree",
   "desired_result",
+  "cross_analysis",
   "convergence",
   "differentiation",
   "solution_families",
@@ -84,6 +90,7 @@ export const ENGINE_LABEL: Record<SpecForgeEngineId, string> = {
   target_user: "Modeling the target user",
   problem_tree: "Modeling the causal system",
   desired_result: "Layering the desired result",
+  cross_analysis: "Interweaving user, problem, result",
   convergence: "Converging on the product thesis",
   differentiation: "Comparing the alternatives",
   solution_families: "Generating solution families",
@@ -294,6 +301,35 @@ export interface ConvergenceResult {
   what_this_implies_for_solution_design: string[];
 }
 
+/** Cross-Analysis Engine: interweaves user × problem × result models BEFORE
+ *  convergence picks a thesis. Outputs fit assessments + cause→result blockages
+ *  + cross-model contradictions + weak links + a leverage candidate for
+ *  convergence to consider. Intentionally complementary to problem_tree
+ *  (intra-model) and convergence (final pick). */
+export interface CrossAnalysisFit {
+  score: number; // 0..100
+  reason: string;
+  blockers: string[];
+}
+
+export interface CauseResultBlockage {
+  cause: string;
+  blocks_result: string;
+  mechanism: string;
+}
+
+export interface CrossAnalysisResult {
+  user_problem_fit: CrossAnalysisFit;
+  user_result_fit: CrossAnalysisFit;
+  problem_result_fit: CrossAnalysisFit;
+  cause_result_blockages: CauseResultBlockage[];
+  cross_model_contradictions: string[];
+  weak_links: string[];
+  highest_leverage_intervention_candidate: string;
+  convergence_inputs: string[];
+  confidence: number; // 0..100
+}
+
 export interface AlternativeItem {
   name: string;
   solves: string;
@@ -353,6 +389,7 @@ export interface EngineResultMap {
   target_user: TargetUserResult;
   problem_tree: ProblemTreeResult;
   desired_result: DesiredResultResult;
+  cross_analysis: CrossAnalysisResult;
   convergence: ConvergenceResult;
   differentiation: DifferentiationResult;
   solution_families: SolutionFamiliesResult;

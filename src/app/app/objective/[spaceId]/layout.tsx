@@ -120,7 +120,9 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   useEffect(() => {
     const root = document.documentElement;
     root.style.setProperty("--oc-style-panel-top", minimal ? "14px" : "60px");
-    return () => root.style.removeProperty("--oc-style-panel-top");
+    return () => {
+      root.style.removeProperty("--oc-style-panel-top");
+    };
   }, [minimal]);
 
   useEffect(() => {

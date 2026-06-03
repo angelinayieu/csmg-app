@@ -11,6 +11,8 @@ import type {
   TargetUserResult,
   ProblemTreeResult,
   DesiredResultResult,
+  CrossAnalysisResult,
+  CrossAnalysisFit,
   ConvergenceResult,
   DifferentiationResult,
   SolutionFamiliesResult,
@@ -161,6 +163,50 @@ export function resultToCards(
           body: bullets([
             r.measurable_success && `Success: ${clean(r.measurable_success)}`,
             ...(r.success_metrics ?? []).slice(0, 2).map((m) => `Metric: ${clean(m)}`),
+          ]),
+          layout: "spine",
+        },
+      ];
+    }
+
+    case "cross_analysis": {
+      const r = result as CrossAnalysisResult;
+      const fits = [
+        { label: "User×Problem", fit: r.user_problem_fit },
+        { label: "User×Result", fit: r.user_result_fit },
+        { label: "Problem×Result", fit: r.problem_result_fit },
+      ].filter((row) => row.fit && Number.isFinite(Number(row.fit.score)));
+      const topBlockage = (r.cause_result_blockages ?? []).find(
+        (b) => clean(b.cause) && clean(b.blocks_result),
+      );
+      const candidate = clean(r.highest_leverage_intervention_candidate);
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      if (!fits.length && !topBlockage && !candidate) return [];
+      const title = topBlockage
+        ? `${clean(topBlockage.cause)} blocks ${clean(topBlockage.blocks_result)}`
+        : candidate || "Cross-analysis";
+      return [
+        {
+          stage: "analysis",
+          eyebrow: "Cross-analysis",
+          title,
+          subtitle: candidate ? `Convergence input — ${candidate}` : undefined,
+          body: bullets([
+            ...fits
+              .slice(0, 3)
+              .map(
+                (row) =>
+                  `${row.label}: ${Math.round(Number(row.fit.score) || 0)} — ${clean(row.fit.reason)}`,
+              ),
+            firstClean(r.cross_model_contradictions)
+              ? `Tension: ${firstClean(r.cross_model_contradictions)}`
+              : "",
+            firstClean(r.weak_links)
+              ? `Weak link: ${firstClean(r.weak_links)}`
+              : "",
+            conf !== null ? `Confidence: ${conf}/100` : "",
           ]),
           layout: "spine",
         },
@@ -369,6 +415,40 @@ export function summarizeForContext(
         `Measurable success: ${clean(r.measurable_success)}`,
       ]
         .filter((l) => l.split(": ")[1])
+        .join("\n");
+    }
+    case "cross_analysis": {
+      const r = result as CrossAnalysisResult;
+      const fitLine = (label: string, fit?: CrossAnalysisFit | null) =>
+        fit && Number.isFinite(Number(fit.score))
+          ? `${label} fit: ${Math.round(Number(fit.score) || 0)} — ${clean(fit.reason)}`
+          : "";
+      const blockages = (r.cause_result_blockages ?? [])
+        .slice(0, 3)
+        .map((b) => `${clean(b.cause)} → blocks → ${clean(b.blocks_result)}`)
+        .filter((line) => line.includes(" → blocks → ") && !line.startsWith(" → "))
+        .join(" | ");
+      const tensions = (r.cross_model_contradictions ?? [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join("; ");
+      const inputs = (r.convergence_inputs ?? [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 4)
+        .join("; ");
+      return [
+        fitLine("User-Problem", r.user_problem_fit),
+        fitLine("User-Result", r.user_result_fit),
+        fitLine("Problem-Result", r.problem_result_fit),
+        blockages && `Cause→result blockages: ${blockages}`,
+        tensions && `Cross-model tensions: ${tensions}`,
+        clean(r.highest_leverage_intervention_candidate) &&
+          `Leverage candidate: ${clean(r.highest_leverage_intervention_candidate)}`,
+        inputs && `Convergence inputs: ${inputs}`,
+      ]
+        .filter(Boolean)
         .join("\n");
     }
     case "convergence": {

@@ -53,11 +53,6 @@ export function DirectionEngineToggle() {
     <div
       onPointerDown={(e) => e.stopPropagation()}
       style={{
-        position: "absolute",
-        top: 12,
-        left: "50%",
-        transform: "translateX(-50%)",
-        zIndex: 65,
         display: "flex",
         alignItems: "center",
         gap: 8,

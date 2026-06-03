@@ -19,9 +19,22 @@
 // bare "/", the current landing moves behind ?legacy=1) — the same
 // one-line move that made MinimalHome the default /app surface.
 
+import { useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { stashPendingIntake } from "@/components/landing/pending-intake";
 import { AuthModal } from "@/components/auth/auth-modal";
+import { StarburstSVG } from "@/components/landing/starburst-svg";
+import { CardGlyph } from "@/components/landing/card-glyph";
+import { InterAxisLogo } from "@/components/brand/interaxis-logo";
+
+// 3D hero node — code-split off the initial bundle (three.js is heavy) and
+// client-only. The flat SVG is the instant loading state + the graceful
+// fallback for no-WebGL / reduced-motion.
+const Starburst3D = dynamic(() => import("@/components/landing/starburst-3d"), {
+  ssr: false,
+  loading: () => <StarburstSVG />,
+});
 
 export interface LandingCard {
   id: string;
@@ -36,15 +49,31 @@ const NAV = ["Plans", "About", "Blog"];
 
 const INK = "#0B0B0C";
 
-// Per-position fan layout for the 5-card carousel. Index 2 is the
-// elevated "featured" card; the outer two sit lower + recede.
-const FAN = [
-  { ty: 18, scale: 0.92, z: 10, op: 0.9 },
-  { ty: 2, scale: 0.98, z: 20, op: 1 },
-  { ty: -26, scale: 1.07, z: 30, op: 1 },
-  { ty: 2, scale: 0.98, z: 20, op: 1 },
-  { ty: 18, scale: 0.92, z: 10, op: 0.9 },
-];
+// Small monochrome "verified by Intersice" seal — drawn with the same pen
+// as the hero starburst + card glyphs (round-cap ink), so it reads as the
+// same hand, NOT a borrowed blue social-network check.
+function VerifiedSeal() {
+  return (
+    <svg
+      width={11}
+      height={11}
+      viewBox="0 0 12 12"
+      aria-label="Verified by Intersice"
+      role="img"
+      style={{ display: "block" }}
+    >
+      <circle cx={6} cy={6} r={6} fill={INK} />
+      <path
+        d="M3.5 6.2 L5.1 7.8 L8.5 4.2"
+        fill="none"
+        stroke="#fff"
+        strokeWidth={1.4}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 /** Open the hash-driven AuthModal (mounted below) on signup. */
 function openSignup() {
@@ -57,6 +86,40 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
     stashPendingIntake({ kind: "template", templateId: id });
     openSignup();
   }
+
+  // ── Gallery rail ── native scroll-snap strip. Cards lift on hover (pure
+  // CSS); here we only center the middle card on open + drive the progress
+  // bar. The hover-lift is unclipped because the grey tray is a separate
+  // background layer the cards rise out of (see the section markup).
+  const railRef = useRef<HTMLDivElement>(null);
+  const progressRef = useRef<HTMLDivElement>(null);
+  const cardEls = useRef<Array<HTMLButtonElement | null>>([]);
+  const midIndex = Math.floor(cards.length / 2);
+
+  function updateProgress() {
+    const rail = railRef.current;
+    const bar = progressRef.current;
+    if (!rail || !bar) return;
+    const max = rail.scrollWidth - rail.clientWidth;
+    const ratio = max > 0 ? rail.scrollLeft / max : 0;
+    bar.style.width = `${20 + ratio * 80}%`;
+  }
+
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+    // Open with the featured (middle) card centered — instant, no smooth.
+    const midEl = cardEls.current[midIndex];
+    if (midEl) {
+      const prev = rail.style.scrollBehavior;
+      rail.style.scrollBehavior = "auto";
+      rail.scrollLeft =
+        midEl.offsetLeft + midEl.offsetWidth / 2 - rail.clientWidth / 2;
+      rail.style.scrollBehavior = prev;
+    }
+    updateProgress();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cards.length]);
 
   return (
     <div
@@ -98,7 +161,7 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
       {/* ── Hero ── */}
       <main className="flex flex-1 flex-col items-center justify-center px-6 pb-2">
         <h1
-          className="text-center text-[clamp(38px,5.4vw,54px)] font-semibold leading-[1.04]"
+          className="text-center text-[clamp(32px,4.6vw,46px)] font-semibold leading-[1.04]"
           style={{
             color: INK,
             fontFamily: appleVibe.font.display,
@@ -108,10 +171,12 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
           from <span className="font-extrabold">idea</span>
         </h1>
 
-        <Starburst />
+        <div className="mx-auto my-0.5 w-full max-w-[400px]">
+          <Starburst3D />
+        </div>
 
         <h1
-          className="text-center text-[clamp(38px,5.4vw,54px)] font-semibold leading-[1.04]"
+          className="text-center text-[clamp(32px,4.6vw,46px)] font-semibold leading-[1.04]"
           style={{
             color: INK,
             fontFamily: appleVibe.font.display,
@@ -127,45 +192,66 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
         <button
           type="button"
           onClick={openSignup}
-          className="mt-9 rounded-full px-12 py-3.5 text-[18px] font-medium text-white shadow-[0_8px_24px_-10px_rgba(11,11,12,0.5)] transition-transform hover:scale-[1.03] active:scale-95"
+          className="mt-6 rounded-full px-11 py-3 text-[17px] font-medium text-white shadow-[0_8px_24px_-10px_rgba(11,11,12,0.5)] transition-transform hover:scale-[1.03] active:scale-95"
           style={{ background: INK }}
         >
           Start
         </button>
 
         <div
-          className="mt-4 text-[14px]"
+          className="mt-3 text-[13.5px]"
           style={{ color: appleVibe.text.tertiary }}
         >
           sync tabs and google drive
         </div>
       </main>
 
-      {/* ── Template carousel ── */}
-      <section className="relative w-full px-6 pb-6">
-        <div
-          className="relative mx-auto max-w-[1180px] overflow-hidden rounded-[32px] px-10 pb-9 pt-14"
-          style={{ background: "#EEF0F3" }}
-        >
-          <div className="flex items-end justify-center">
-            {cards.map((card, i) => {
-              const l = FAN[i] ?? FAN[1];
-              return (
+      {/* ── Template gallery (scroll-snap rail) ── */}
+      <section className="relative w-full px-6 pb-3">
+        <div className="relative mx-auto max-w-[1180px] pb-5">
+          {/* Grey tray — a BACKGROUND layer that starts below the rail's top,
+              so a hovered card lifts up out of it instead of being clipped by
+              the horizontal scroller's overflow. */}
+          <div
+            aria-hidden
+            className="absolute inset-x-0 bottom-0 rounded-[32px]"
+            style={{ top: 40, background: "#EEF0F3" }}
+          />
+
+          {/* Edge-fade mask so cards dissolve into the tray at both ends. */}
+          <div
+            className="relative"
+            style={{
+              WebkitMaskImage:
+                "linear-gradient(to right, transparent, #000 5%, #000 95%, transparent)",
+              maskImage:
+                "linear-gradient(to right, transparent, #000 5%, #000 95%, transparent)",
+            }}
+          >
+            {/* pt-12 gives the hover-lift headroom inside the scroller so the
+                lifted card is never clipped. */}
+            <div
+              ref={railRef}
+              onScroll={updateProgress}
+              className="flex gap-6 overflow-x-auto overscroll-x-contain px-[calc(50%-130px)] pb-7 pt-12 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              style={{ scrollSnapType: "x mandatory" }}
+            >
+              {cards.map((card, i) => (
                 <button
                   key={card.id}
+                  ref={(el) => {
+                    cardEls.current[i] = el;
+                  }}
                   type="button"
                   onClick={() => pickTemplate(card.id)}
-                  className="group relative mx-[-30px] w-[210px] shrink-0 text-left focus:outline-none"
-                  style={{
-                    transform: `translateY(${l.ty}px) scale(${l.scale})`,
-                    zIndex: l.z,
-                    opacity: l.op,
-                  }}
+                  className="group relative z-0 w-[260px] shrink-0 text-left hover:z-20 focus:outline-none"
+                  style={{ scrollSnapAlign: "center" }}
                 >
-                  <div className="overflow-hidden rounded-2xl bg-white shadow-[0_2px_2px_rgba(11,18,40,0.04),0_18px_40px_-18px_rgba(11,18,40,0.28)] ring-1 ring-black/[0.04] transition-shadow duration-300 group-hover:shadow-[0_2px_2px_rgba(11,18,40,0.05),0_26px_50px_-18px_rgba(11,18,40,0.36)]">
-                    {/* Image wash — accent-tinted placeholder. Swap for a
-                        real photo by dropping /public/landing/{id}.jpg and
-                        rendering it here. */}
+                  {/* Inner card does the lifting (CSS hover) — rises up and
+                      grows out of the grey tray, fully visible. */}
+                  <div className="overflow-hidden rounded-2xl bg-white shadow-[0_2px_2px_rgba(11,18,40,0.04),0_16px_36px_-18px_rgba(11,18,40,0.22)] ring-1 ring-black/[0.04] transition-[transform,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:-translate-y-5 group-hover:scale-[1.045] group-hover:shadow-[0_2px_2px_rgba(11,18,40,0.05),0_38px_64px_-20px_rgba(11,18,40,0.45)]">
+                    {/* Wash + glyph — a miniature of the graph this template
+                        builds; self-assembles on scroll-in. */}
                     <div
                       className="relative h-[112px] w-full"
                       style={{
@@ -180,11 +266,18 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
                             "radial-gradient(120% 80% at 80% 0%, rgba(255,255,255,0.7), rgba(255,255,255,0) 60%)",
                         }}
                       />
+                      <div className="absolute inset-0 px-3 py-2">
+                        <CardGlyph
+                          templateId={card.id}
+                          accent={card.accent}
+                          animated
+                        />
+                      </div>
                     </div>
 
-                    <div className="px-3.5 pb-4 pt-3">
+                    <div className="px-4 pb-4 pt-3">
                       <div
-                        className="text-[14px] font-semibold leading-tight"
+                        className="text-[14.5px] font-semibold leading-tight"
                         style={{ color: appleVibe.text.primary }}
                       >
                         {card.name}
@@ -195,77 +288,70 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
                       >
                         {card.tagline}
                       </div>
+
+                      {/* Verified footer — roomier (wider card + bigger gap).
+                          The pill cross-fades to "Use template →" on hover. */}
                       <div
-                        className="mt-3 text-[10px] font-bold tracking-[0.09em]"
-                        style={{ color: card.accent }}
+                        className="mt-4 flex items-center justify-between gap-3 border-t pt-3"
+                        style={{ borderColor: appleVibe.stroke.hairline }}
                       >
-                        {card.category.toUpperCase()}
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <InterAxisLogo
+                            className="h-[18px] w-[18px] shrink-0"
+                            size={36}
+                            style={{ borderRadius: 5 }}
+                          />
+                          <span
+                            className="whitespace-nowrap text-[11px] font-semibold tracking-[-0.01em]"
+                            style={{ color: appleVibe.text.secondary }}
+                          >
+                            Intersice Team
+                          </span>
+                          <VerifiedSeal />
+                        </div>
+
+                        <div className="relative shrink-0">
+                          <span
+                            className="block rounded-full px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] transition-opacity duration-200 group-hover:opacity-0"
+                            style={{
+                              color: card.accent,
+                              background: `${card.accent}1a`,
+                              fontFamily: appleVibe.font.display,
+                            }}
+                          >
+                            {card.category}
+                          </span>
+                          <span
+                            className="absolute right-0 top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-semibold tracking-[0.01em] opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                            style={{ color: card.accent }}
+                          >
+                            Use template →
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </button>
-              );
-            })}
+              ))}
+            </div>
           </div>
 
-          {/* Drag handle */}
+          {/* Live scroll-progress bar (sits on the grey tray). */}
           <div
-            aria-hidden
-            className="absolute bottom-4 left-1/2 h-[4px] w-20 -translate-x-1/2 rounded-full"
-            style={{ background: "#1A1A1C" }}
-          />
+            className="relative mx-auto mt-4 h-[4px] w-20 overflow-hidden rounded-full"
+            style={{ background: "rgba(15,23,42,0.1)" }}
+          >
+            <div
+              ref={progressRef}
+              className="h-full rounded-full"
+              style={{ width: "33%", background: "#1A1A1C" }}
+            />
+          </div>
         </div>
       </section>
 
       {/* Hash-driven signup/login popover — #signup / #signin open it. */}
       <AuthModal />
     </div>
-  );
-}
-
-// ── Starburst ──
-// The "idea" node: a single filled hub with rays radiating out, a few
-// terminating in dots. Hand-placed (no randomness) so SSR + client agree.
-function Starburst() {
-  const C = { x: 170, y: 105 };
-  const dotted = [
-    { x: 162, y: 12 }, // top
-    { x: 272, y: 48 }, // upper-right
-    { x: 322, y: 116 }, // far-right
-    { x: 176, y: 196 }, // bottom
-    { x: 24, y: 92 }, // far-left
-  ];
-  const lines = [
-    { x: 96, y: 26 }, // upper-left
-    { x: 74, y: 168 }, // lower-left
-    { x: 256, y: 176 }, // lower-right
-    { x: 210, y: 36 }, // inner upper-right
-  ];
-
-  return (
-    <svg
-      width={340}
-      height={210}
-      viewBox="0 0 340 210"
-      className="my-1"
-      aria-hidden
-    >
-      {[...dotted, ...lines].map((p, i) => (
-        <line
-          key={i}
-          x1={C.x}
-          y1={C.y}
-          x2={p.x}
-          y2={p.y}
-          stroke={INK}
-          strokeWidth={1.6}
-          strokeLinecap="round"
-        />
-      ))}
-      {dotted.map((p, i) => (
-        <circle key={`d${i}`} cx={p.x} cy={p.y} r={5} fill={INK} />
-      ))}
-      <circle cx={C.x} cy={C.y} r={7} fill={INK} />
-    </svg>
   );
 }

@@ -283,13 +283,76 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
     },
   },
 
-  // ── 5 · Convergence Engine (§11) ──
+  // ── 5 · Cross-Analysis Engine (specforge_cross_analysis_engine.md) ──
+  // Sits between layered modeling and convergence. Interweaves user × problem ×
+  // result; does NOT redo intra-model causal contradictions (problem_tree) or
+  // pick a final thesis (convergence). Outputs fit + blockage + cross-model
+  // contradictions + weak links + a leverage candidate for convergence input.
+  cross_analysis: {
+    temperature: 0.35,
+    maxTokens: 2400,
+    system:
+      "You are the SpecForge Cross-Analysis Engine. Do NOT summarize the target " +
+      "user, problem causal model, or desired result separately — you already " +
+      "have them in the prior-stage context. Focus on RELATIONSHIPS. Evaluate " +
+      "three fits (user×problem, user×result, problem×result), build a concrete " +
+      "cause→result blockage map (each entry names ONE cause from the causal " +
+      "model and ONE result/metric it blocks via a stated mechanism), surface " +
+      "cross-model contradictions (tensions that span TWO models, e.g., the " +
+      "user values privacy but the desired result requires social proof), " +
+      "identify weak links (the smartest-looking claim resting on the thinnest " +
+      "evidence), then pick ONE highest-leverage intervention candidate to " +
+      "PROPOSE to the convergence engine (you are not making the final " +
+      "selection — convergence does). Score fits and confidence 0–100 with " +
+      "honest uncertainty. Do not re-derive root constraint candidates or " +
+      "intra-model causal contradictions — those belong to problem_tree." +
+      SHARED_TAIL,
+    schema: {
+      name: "specforge_cross_analysis",
+      schema: obj({
+        user_problem_fit: obj({
+          score: num,
+          reason: str,
+          blockers: strArr,
+        }),
+        user_result_fit: obj({
+          score: num,
+          reason: str,
+          blockers: strArr,
+        }),
+        problem_result_fit: obj({
+          score: num,
+          reason: str,
+          blockers: strArr,
+        }),
+        cause_result_blockages: arr(
+          obj({
+            cause: str,
+            blocks_result: str,
+            mechanism: str,
+          }),
+        ),
+        cross_model_contradictions: strArr,
+        weak_links: strArr,
+        highest_leverage_intervention_candidate: str,
+        convergence_inputs: strArr,
+        confidence: num,
+      }),
+    },
+  },
+
+  // ── 6 · Convergence Engine (§11) ──
   convergence: {
     temperature: 0.4,
     system:
       "You are the SpecForge Convergence Engine. Given the target user model, " +
-      "problem cause tree, and desired result stack, converge on the DEEPEST " +
-      "actionable product thesis. Do not produce multiple equal theses — choose " +
+      "problem cause tree, desired result stack, AND the cross-analysis " +
+      "outputs (user×problem/user×result/problem×result fits, cause→result " +
+      "blockages, cross-model contradictions, weak links, leverage candidate, " +
+      "convergence_inputs) that already precede you, converge on the DEEPEST " +
+      "actionable product thesis. Treat the cross-analysis convergence_inputs " +
+      "as priors: prefer interventions that resolve a high-fit blockage or a " +
+      "named contradiction. Do not produce multiple equal theses — choose " +
       "the strongest, explain why weaker interpretations are less fundamental, " +
       "and ensure the thesis can generate solution families. State what it " +
       "rules out and what it implies for solution design." +

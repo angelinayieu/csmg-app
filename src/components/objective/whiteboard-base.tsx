@@ -102,8 +102,10 @@ import {
 import {
   opIdForDirection,
   getDirectionEngine,
-  getAnalysisTemperature,
 } from "@/lib/objective-canvas/converge-diverge";
+import { getAiSettings } from "@/lib/objective-canvas/ai-settings";
+import { CanvasTopControls } from "./canvas-interactions/canvas-top-controls";
+import { LibraryLauncher } from "./canvas-interactions/library-rail";
 import {
   forkSynthesisMap,
   type SynthesisBranch,
@@ -148,6 +150,7 @@ import {
   deployPromptSharpeningOnBoard,
   forkAmbiguityOnBoard,
 } from "./canvas-interactions/prompt-sharpening-board";
+import { SharpeningConnectorsOverlay } from "./canvas-interactions/sharpening-connectors";
 import {
   deployChatboxOnBoard,
   deployObjectiveOnBoard,
@@ -379,6 +382,10 @@ function PageTabs() {
 const BOARD_COMPONENTS: TLComponents = {
   StylePanel: CollapsibleStylePanel,
   TopPanel: PageTabs,
+  // Custom flow-builder connectors (bezier + handles) for the sharpening
+  // graph — replaces the default tldraw arrows. Derived live from card
+  // positions; see canvas-interactions/sharpening-connectors.tsx.
+  InFrontOfTheCanvas: SharpeningConnectorsOverlay,
 };
 
 const CUSTOM_SHAPE_UTILS = [
@@ -949,6 +956,7 @@ export function WhiteboardBase({
       if (d.action === "diverge" || d.action === "converge") {
         const editor = editorRef.current;
         if (!editor) return;
+        const s = getAiSettings();
         void executeCardOperation(
           editor,
           {
@@ -958,7 +966,12 @@ export function WhiteboardBase({
             roomId: d.roomId ?? undefined,
           },
           opIdForDirection(d.action, getDirectionEngine()),
-          { temperature: getAnalysisTemperature() },
+          {
+            temperature: s.temperature,
+            depth: s.depth,
+            questionCount: s.complexity,
+            webSearch: s.webSearch,
+          },
         );
         return;
       }
@@ -1959,6 +1972,13 @@ function BoardOverlay({
           read as a mystery control next to the page tabs. Flip the engine in
           code via setDirectionEngine if A/B testing is needed again. */}
       <DecomposeCardsButton />
+      {/* Top-center AI thinking-settings cluster (depth · complexity · temp ·
+          web search) — global knobs the ‹ › verbs + scanner ops read. */}
+      <CanvasTopControls />
+      {/* Dedicated Library rail (glossary + knowledge graph), launched from a
+          right-edge pill; expandable to full screen. Reads the space glossary
+          + focuses board cards. */}
+      <LibraryLauncher spaceId={spaceId} editor={editor} />
       {showHint && <BoardHint onDismiss={dismissHint} />}
       {view.screen &&
         (count >= 2 ||
@@ -1998,9 +2018,15 @@ function BoardOverlay({
               target={target}
               x={sx}
               y={sy}
-              onRun={(opId, temperature) =>
-                executeCardOperation(editor, target, opId, { temperature })
-              }
+              onRun={(opId, temperature) => {
+                const s = getAiSettings();
+                void executeCardOperation(editor, target, opId, {
+                  temperature,
+                  depth: s.depth,
+                  questionCount: s.complexity,
+                  webSearch: s.webSearch,
+                });
+              }}
               onForge={() => handleForge(target)}
               forging={forging?.phase === "running"}
             />

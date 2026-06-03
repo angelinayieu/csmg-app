@@ -21,9 +21,17 @@ import {
   detectCreditError,
   BEST_TUNABLE_CLAUDE_MODEL,
 } from "@/lib/llm";
+import { getAnthropicClient } from "@/lib/anthropic";
+import { getResearchTools, parseResearchResponse } from "@/lib/web-search";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
 
-export const maxDuration = 45;
+export const maxDuration = 60;
+
+// Knob bounds — kept in sync with lib/objective-canvas/ai-settings.ts.
+const DEPTH_MIN = 1;
+const DEPTH_MAX = 5;
+const QUESTIONS_MIN = 3;
+const QUESTIONS_MAX = 10;
 
 type Direction = "diverge" | "converge";
 const VALID: Direction[] = ["diverge", "converge"];
@@ -45,36 +53,58 @@ interface Body {
   kind?: unknown;
   temperature?: unknown;
   images?: unknown;
+  /** 1–5 reasoning rigor (the top-bar "thinking depth" knob). */
+  depth?: unknown;
+  /** how many questions the pass generates (the "complexity" knob). */
+  questionCount?: unknown;
+  /** ground the pass with live web search (the "web search" toggle). */
+  webSearch?: unknown;
 }
 
-const SYSTEM: Record<Direction, string> = {
-  diverge:
-    "You are a DIVERGENT thinking engine. The user gives you one idea / node. " +
-    "Your job is to OPEN UP the space around it — widen, don't narrow.\n" +
-    "Run three moves and return all three:\n" +
-    "1. questions: 4-7 OPEN, generative, META questions that stretch the framing — " +
-    "challenge an assumption, surface an adjacent possibility, ask 'what if / what " +
-    "else / why might'. Each must widen the space.\n" +
-    "2. for each question, a short answer (a, one sentence) that PROPOSES a " +
-    "possibility rather than committing.\n" +
-    "3. nodes: distill the answers into 4-8 clean, reusable FACTOR nodes — each a " +
-    "NEW dimension, option, angle, or possibility the user can act on. They must be " +
-    "distinct from one another and go BEYOND restating the idea. " +
-    "title = 2-6 words; subtitle = one crisp sentence.",
-  converge:
-    "You are a CONVERGENT thinking engine. The user gives you one idea / node. " +
-    "Your job is to CLOSE the space around it toward a decision — narrow, commit.\n" +
-    "Run three moves and return all three:\n" +
-    "1. questions: 4-7 CLOSING, constraint-enforcing questions that force a call — " +
-    "'which one, what MUST be true, what is the binding constraint, what do we cut, " +
-    "what is non-negotiable'. Each must narrow the space.\n" +
-    "2. for each question, a short answer (a, one sentence) that makes the call or " +
-    "enforces the constraint decisively.\n" +
-    "3. nodes: distill the answers into 4-8 clean DECISION / CONSTRAINT nodes — each " +
-    "a commitment, a constraint, a narrowed choice, or a must-hold criterion. " +
-    "Concrete and decision-bearing, not exploratory. " +
-    "title = 2-6 words; subtitle = one crisp sentence.",
-};
+/** Reasoning-rigor line driven by the depth knob (1–5). */
+function depthGuidance(depth: number): string {
+  if (depth <= 2)
+    return "Reasoning depth: SHALLOW — stay surface-level; ask only the obvious, immediately-useful questions.";
+  if (depth >= 4)
+    return "Reasoning depth: DEEP — probe underlying assumptions, ask second-order questions, and trace implications several steps out before distilling.";
+  return "Reasoning depth: BALANCED — mix obvious and non-obvious angles.";
+}
+
+/** System prompt for a verb, scaled by depth + question count. */
+function buildSystem(
+  kind: Direction,
+  depth: number,
+  questionCount: number,
+): string {
+  const nodes = Math.max(4, Math.min(8, questionCount));
+  const base =
+    kind === "diverge"
+      ? "You are a DIVERGENT thinking engine. The user gives you one idea / node. " +
+        "Your job is to OPEN UP the space around it — widen, don't narrow.\n" +
+        "Run three moves and return all three:\n" +
+        `1. questions: exactly ${questionCount} OPEN, generative, META questions that stretch the framing — ` +
+        "challenge an assumption, surface an adjacent possibility, ask 'what if / what " +
+        "else / why might'. Each must widen the space.\n" +
+        "2. for each question, a short answer (a, one sentence) that PROPOSES a " +
+        "possibility rather than committing.\n" +
+        `3. nodes: distill the answers into ${nodes} clean, reusable FACTOR nodes — each a ` +
+        "NEW dimension, option, angle, or possibility the user can act on. They must be " +
+        "distinct from one another and go BEYOND restating the idea. " +
+        "title = 2-6 words; subtitle = one crisp sentence."
+      : "You are a CONVERGENT thinking engine. The user gives you one idea / node. " +
+        "Your job is to CLOSE the space around it toward a decision — narrow, commit.\n" +
+        "Run three moves and return all three:\n" +
+        `1. questions: exactly ${questionCount} CLOSING, constraint-enforcing questions that force a call — ` +
+        "'which one, what MUST be true, what is the binding constraint, what do we cut, " +
+        "what is non-negotiable'. Each must narrow the space.\n" +
+        "2. for each question, a short answer (a, one sentence) that makes the call or " +
+        "enforces the constraint decisively.\n" +
+        `3. nodes: distill the answers into ${nodes} clean DECISION / CONSTRAINT nodes — each ` +
+        "a commitment, a constraint, a narrowed choice, or a must-hold criterion. " +
+        "Concrete and decision-bearing, not exploratory. " +
+        "title = 2-6 words; subtitle = one crisp sentence.";
+  return `${base}\n${depthGuidance(depth)}`;
+}
 
 const RESPONSE_SCHEMA = {
   name: "converge_diverge",
@@ -161,6 +191,32 @@ async function describeImages(
   }
 }
 
+/** Web-grounding pre-pass: a light live search (≤4) on Sonnet (the tool-capable
+ *  model the other web routes use) → short factual findings folded into the idea
+ *  text. Soft-fails to "" — grounding is enrichment, never a blocker. */
+async function webGround(idea: string): Promise<string> {
+  if (!idea.trim()) return "";
+  try {
+    const anthropic = getAnthropicClient();
+    const resp = await anthropic.messages.create({
+      model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6",
+      max_tokens: 900,
+      system:
+        "Search the web for current, factual context relevant to the user's idea, " +
+        "then return 4-8 short factual findings (one per line, no preamble, no " +
+        "numbering) that would help someone reason about it — facts, prior art, " +
+        "constraints, notable data points.",
+      messages: [{ role: "user", content: `Idea: ${idea}` }],
+      tools: getResearchTools("light", 4),
+    });
+    return parseResearchResponse(
+      resp.content as unknown as Parameters<typeof parseResearchResponse>[0],
+    ).jsonOutput.trim();
+  } catch {
+    return "";
+  }
+}
+
 export async function POST(request: Request) {
   const { error: authError } = await safeAuth();
   if (authError) return authError;
@@ -174,6 +230,15 @@ export async function POST(request: Request) {
     typeof body.temperature === "number"
       ? Math.min(1, Math.max(0, body.temperature))
       : 0.5;
+  const depth =
+    typeof body.depth === "number"
+      ? Math.min(DEPTH_MAX, Math.max(DEPTH_MIN, Math.round(body.depth)))
+      : 3;
+  const questionCount =
+    typeof body.questionCount === "number"
+      ? Math.min(QUESTIONS_MAX, Math.max(QUESTIONS_MIN, Math.round(body.questionCount)))
+      : 5;
+  const webSearch = body.webSearch === true;
   const images = parseImages(body.images);
 
   if (!text && images.length === 0) {
@@ -190,14 +255,18 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Fold any image observations into the idea the verb reasons over.
-    const observed = await describeImages(images, text, temperature);
-    const user = observed
-      ? `${text || "(the attached image)"}\n\nVisual context from attached image(s):\n${observed}`
-      : text;
+    // Fold image observations + (optional) web findings into the idea the verb
+    // reasons over. Both pre-passes run in parallel and soft-fail to "".
+    const [observed, grounded] = await Promise.all([
+      describeImages(images, text, temperature),
+      webSearch ? webGround(text) : Promise.resolve(""),
+    ]);
+    let user = text || "(the attached image)";
+    if (observed) user += `\n\nVisual context from attached image(s):\n${observed}`;
+    if (grounded) user += `\n\nWeb-sourced context (verify before relying):\n${grounded}`;
 
     const result = await llmJSON({
-      system: SYSTEM[kind],
+      system: buildSystem(kind, depth, questionCount),
       user: user.slice(0, 4000),
       maxTokens: 1600,
       temperature,

@@ -40,10 +40,18 @@ export interface OperationResultItem {
   subtitle?: string;
 }
 
-/** Per-run knobs the scanner threads into the analysis routes. */
+/** Per-run knobs the scanner / top settings bar thread into the analysis routes.
+ *  temperature applies to every op; depth/questionCount/webSearch are honored by
+ *  the converge-diverge route (other routes ignore the extra fields). */
 export interface OperationRunOptions {
   /** 0–1 sampling temperature (the scanner's slider). Omit → route default. */
   temperature?: number;
+  /** 1–5 reasoning rigor (the top-bar "thinking depth" knob). */
+  depth?: number;
+  /** how many questions a diverge/converge pass generates ("complexity"). */
+  questionCount?: number;
+  /** ground a diverge/converge pass with live web search. */
+  webSearch?: boolean;
 }
 
 export interface CanvasOperation {
@@ -323,6 +331,10 @@ async function runIdeaOp(
         text: target.text.slice(0, 4000),
         kind: op.id,
         temperature: opts.temperature,
+        // Honored by /api/canvas/converge-diverge; ignored by idea-op.
+        depth: opts.depth,
+        questionCount: opts.questionCount,
+        webSearch: opts.webSearch,
       }),
     });
     if (!res.ok) return [];

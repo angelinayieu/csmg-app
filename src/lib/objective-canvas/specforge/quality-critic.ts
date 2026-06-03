@@ -12,6 +12,7 @@ import type {
   TargetUserResult,
   ProblemTreeResult,
   DesiredResultResult,
+  CrossAnalysisResult,
   ConvergenceResult,
   DifferentiationResult,
   SolutionFamiliesResult,
@@ -164,6 +165,22 @@ export function evaluateSpecForgeQuality(
       add(issues, !clean(r.first_principles_result), "medium", "causal depth", "missing first-principles result", "rewrite the result as the underlying state change");
       add(issues, arr(r.success_metrics).length < 2, "medium", "downstream usefulness", "too few success metrics", "add metrics that can rank MVP directions");
       return finalize(engine, issues, repaired, arr(r.success_metrics).map(clean).filter(Boolean).slice(0, 3));
+    }
+
+    case "cross_analysis": {
+      const r = result as CrossAnalysisResult;
+      const validFit = (fit: { score?: unknown; reason?: unknown } | undefined) =>
+        !!fit && Number.isFinite(Number(fit.score)) && !!clean(fit.reason);
+      add(issues, !validFit(r.user_problem_fit), "critical", "user-problem fit", "missing user×problem fit", "score the fit and explain it in one sentence");
+      add(issues, !validFit(r.user_result_fit), "critical", "user-result fit", "missing user×result fit", "score the fit and explain why the user cares about the result");
+      add(issues, !validFit(r.problem_result_fit), "critical", "problem-result fit", "missing problem×result fit", "score the fit and explain which causes block which results");
+      add(issues, arr(r.cause_result_blockages).length < 3, "high", "cause-result blockage map", "fewer than 3 cause→result blockages", "name at least 3 cause→result edges with a stated mechanism");
+      add(issues, arr(r.cross_model_contradictions).length < 2, "high", "cross-model tensions", "fewer than 2 cross-model contradictions", "surface tensions that span TWO of {user, problem, result}, not within one");
+      add(issues, arr(r.weak_links).length < 2, "medium", "uncertainty visibility", "weak links not surfaced", "name where smart-looking claims rest on thin evidence");
+      add(issues, !clean(r.highest_leverage_intervention_candidate), "high", "leverage alignment", "no highest-leverage intervention candidate", "propose ONE leverage candidate for convergence to consider");
+      add(issues, arr(r.convergence_inputs).length < 2, "high", "downstream usefulness", "convergence_inputs too thin", "list inputs convergence should prioritize");
+      add(issues, !Number.isFinite(Number(r.confidence)), "medium", "evidence honesty", "missing confidence", "state confidence 0–100 honestly");
+      return finalize(engine, issues, repaired, arr(r.convergence_inputs).map(clean).filter(Boolean).slice(0, 3));
     }
 
     case "convergence": {

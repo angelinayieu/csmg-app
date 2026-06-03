@@ -4,13 +4,7 @@
 // the objective card, and fork an ambiguity off it as its own node. Reuses
 // the createShape + createBindings arrow recipe from synthesis-map.ts.
 
-import {
-  createShapeId,
-  type Editor,
-  type TLArrowShape,
-  type TLShapeId,
-  type TLShapePartial,
-} from "tldraw";
+import { createShapeId, type Editor, type TLShapeId } from "tldraw";
 import {
   SHARPEN_COLOR,
   type PromptSharpeningCardShape,
@@ -22,64 +16,19 @@ import type { SharpeningCardDetail, AmbiguityForkDetail } from "../board-bus";
 const CARD_W = 348;
 const CARD_H = 204;
 
-/** A clean, arrowhead-less node connector (flow-builder style) bound
- *  edge-to-edge between two shapes:
- *   • "down" — bottom-center → top-center (cards stacked vertically)
- *   • "side" — right-center → left-center with a gentle bend (forked
- *     cards offset to the side)
- *  Thin, light, no arrowheads, slight curve — not a directional arrow. */
-function connect(
-  editor: Editor,
-  fromId: TLShapeId,
-  toId: TLShapeId,
-  dir: "down" | "side" = "down",
-): void {
-  const side = dir === "side";
-  const arrowId = createShapeId();
-  const arrow: TLShapePartial<TLArrowShape> = {
-    id: arrowId,
-    type: "arrow",
-    props: {
-      color: "grey",
-      size: "s",
-      dash: "solid",
-      arrowheadStart: "none",
-      arrowheadEnd: "none",
-      // A soft curve so it reads like a node connector, not a default line.
-      bend: side ? 44 : 16,
-    },
-    meta: { sharpeningArrow: true },
-  };
-  editor.createShapes([arrow]);
-  // Precise edge anchors — connect at the card edges (not center-clipped).
-  const startAnchor = side ? { x: 1, y: 0.5 } : { x: 0.5, y: 1 };
-  const endAnchor = side ? { x: 0, y: 0.5 } : { x: 0.5, y: 0 };
-  editor.createBindings([
-    {
-      fromId: arrowId,
-      toId: fromId,
-      type: "arrow",
-      props: {
-        terminal: "start",
-        normalizedAnchor: startAnchor,
-        isExact: false,
-        isPrecise: true,
-      },
-      meta: {},
-    },
-    {
-      fromId: arrowId,
-      toId: toId,
-      type: "arrow",
-      props: {
-        terminal: "end",
-        normalizedAnchor: endAnchor,
-        isExact: false,
-        isPrecise: true,
-      },
-      meta: {},
-    },
-  ]);
+// Connectors are no longer tldraw arrows — a custom bezier overlay
+// (sharpening-connectors.tsx) draws them, derived live from the card
+// positions. On older boards, delete any legacy arrow shapes we created.
+function clearLegacyArrows(editor: Editor): void {
+  const ids = editor
+    .getCurrentPageShapes()
+    .filter(
+      (s) =>
+        s.type === "arrow" &&
+        (s.meta as { sharpeningArrow?: boolean })?.sharpeningArrow,
+    )
+    .map((s) => s.id);
+  if (ids.length > 0) editor.deleteShapes(ids);
 }
 
 /** Find the objective card on the board (the seeded "__obj" room-card). */
@@ -102,6 +51,8 @@ export function deployPromptSharpeningOnBoard(
   editor: Editor,
   d: SharpeningCardDetail,
 ): void {
+  clearLegacyArrows(editor);
+
   // If a card already exists (the optimistic "Sharpening…" placeholder, or a
   // returning visit), fill it IN PLACE — preserve its position + expanded
   // state. This is what makes the sharpening feel instant: the placeholder
@@ -153,8 +104,7 @@ export function deployPromptSharpeningOnBoard(
     },
   });
 
-  if (objId) connect(editor, objId, cardId, "down");
-
+  // The objective→sharpening connector is drawn by the bezier overlay.
   editor.select(cardId);
   editor.centerOnPoint(
     { x: x + CARD_W / 2, y: y + CARD_H / 2 },
@@ -207,7 +157,7 @@ export function forkAmbiguityOnBoard(
     meta: { ambiguityFork: true },
   });
 
-  connect(editor, sourceId, id, "side");
+  // The sharpening→fork connector is drawn by the bezier overlay.
   editor.select(id);
   editor.centerOnPoint(
     { x: x + W / 2, y: y + H / 2 },
