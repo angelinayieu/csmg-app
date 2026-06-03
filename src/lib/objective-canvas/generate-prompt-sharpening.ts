@@ -9,17 +9,13 @@
 // lives in that one JSONB blob; the board card reads the visible part and
 // downstream Explore / Distill agents read the hidden part.
 
-import { llmJSON, BEST_CLAUDE_MODEL, MODEL_DEFAULTS } from "../llm";
+import { llmJSON, BEST_CLAUDE_MODEL } from "../llm";
 import {
   SHARPENING_AGENT_SYSTEM,
   SHARPENING_AGENT_USER,
   SHARPENING_RESPONSE_SCHEMA,
-  CRITIC_SYSTEM,
-  CRITIC_USER,
-  CRITIC_RESPONSE_SCHEMA,
   normalizeSharpening,
   type PromptSharpeningArtifact,
-  type CriticVerdict,
 } from "./prompt-sharpening-prompt";
 import { patchObjectiveCanvasState } from "./clarifying-state";
 
@@ -62,36 +58,10 @@ export async function generatePromptSharpeningForSpace(
       validator: (d) => normalizeSharpening(d, raw),
     });
 
-    // ── Critic: best-effort repair on a cheaper model ──
-    try {
-      const verdict = await llmJSON<CriticVerdict>({
-        system: CRITIC_SYSTEM,
-        user: CRITIC_USER(JSON.stringify(artifact)),
-        provider: "anthropic",
-        model: MODEL_DEFAULTS.anthropic.fast,
-        maxTokens: 4096,
-        responseSchema: CRITIC_RESPONSE_SCHEMA,
-      });
-      if (
-        verdict &&
-        verdict.pass_or_fail !== "pass" &&
-        verdict.repaired_card &&
-        typeof verdict.repaired_card === "object"
-      ) {
-        artifact = normalizeSharpening(verdict.repaired_card, raw);
-        artifact.quality_status = `repaired:${verdict.pass_or_fail}`;
-        if (typeof verdict.confidence_after_repair === "number") {
-          artifact.confidence = verdict.confidence_after_repair;
-        }
-      } else if (verdict?.pass_or_fail === "pass" && !artifact.quality_status) {
-        artifact.quality_status = "pass";
-      }
-    } catch (critErr) {
-      console.warn(
-        "[prompt-sharpening] critic skipped:",
-        critErr instanceof Error ? critErr.message : String(critErr),
-      );
-    }
+    // Critic pass intentionally SKIPPED in the minimal/intake flow so the
+    // sharpening card fills as fast as possible (the optimistic placeholder
+    // already shows instantly). The agent + validator output is used as-is.
+    if (!artifact.quality_status) artifact.quality_status = "agent";
 
     artifact.generated_at = new Date().toISOString();
 

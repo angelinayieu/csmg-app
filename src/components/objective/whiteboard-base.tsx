@@ -69,6 +69,9 @@ import {
   type PrototypeRefineDetail,
 } from "./shapes/prototype-card-shape";
 import { PromptSharpeningCardShapeUtil } from "./shapes/prompt-sharpening-card-shape";
+import { ObjectiveImageCardShapeUtil } from "./shapes/objective-image-card-shape";
+import { ChatboxCardShapeUtil } from "./shapes/chatbox-card-shape";
+import { ObjectiveCardShapeUtil } from "./shapes/objective-card-shape";
 import { TechSpecPanel } from "./tech-spec-panel";
 import { CausalModelPanel } from "./causal-model-panel";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
@@ -117,6 +120,7 @@ import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 import { useFocusMode } from "@/components/synergy/focus-mode/use-focus-mode";
 import { ListChecks, Sparkles, Wand2, Loader2, Check, Globe } from "lucide-react";
 import { BoardHint } from "./board-hint";
+import { FavoritesSidebar } from "./favorites-sidebar";
 import { useObjectiveBoardPersistence } from "./use-objective-board-persistence";
 import {
   DEPLOY_ARTIFACT_EVENT,
@@ -131,11 +135,26 @@ import {
   FORK_AMBIGUITY_EVENT,
   type SharpeningCardDetail,
   type AmbiguityForkDetail,
+  DEPLOY_IMAGE_CARD_EVENT,
+  type ImageCardDetail,
+  SEED_CHATBOX_EVENT,
+  SEED_OBJECTIVE_EVENT,
+  PROMOTE_TO_OBJECTIVE_EVENT,
+  deploySharpeningCard,
+  type SeedChatboxDetail,
+  type SeedObjectiveDetail,
+  type PromoteToObjectiveDetail,
 } from "./board-bus";
 import {
   deployPromptSharpeningOnBoard,
   forkAmbiguityOnBoard,
 } from "./canvas-interactions/prompt-sharpening-board";
+import {
+  deployChatboxOnBoard,
+  deployObjectiveOnBoard,
+  promoteChatboxToObjective,
+} from "./canvas-interactions/intake-board";
+import { deployImageCardOnBoard } from "./canvas-interactions/objective-image-board";
 import { syncDataFlowUnfurl } from "./unfurl/render-dataflow-unfurl";
 import type { DataFlowGraph } from "@/lib/objective-canvas/build-data-flow-graph";
 import {
@@ -354,6 +373,9 @@ const CUSTOM_SHAPE_UTILS = [
   TechSpecCardShapeUtil,
   PrototypeCardShapeUtil,
   PromptSharpeningCardShapeUtil,
+  ObjectiveImageCardShapeUtil,
+  ChatboxCardShapeUtil,
+  ObjectiveCardShapeUtil,
 ];
 
 export function WhiteboardBase({
@@ -956,6 +978,47 @@ export function WhiteboardBase({
       );
     }
 
+    function onDeployImageCard(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      deployImageCardOnBoard(
+        editor,
+        (e as CustomEvent<ImageCardDetail>).detail,
+      );
+    }
+
+    function onSeedChatbox(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      deployChatboxOnBoard(editor, (e as CustomEvent<SeedChatboxDetail>).detail);
+    }
+
+    function onSeedObjective(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      deployObjectiveOnBoard(
+        editor,
+        (e as CustomEvent<SeedObjectiveDetail>).detail,
+      );
+    }
+
+    function onPromoteToObjective(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const d = (e as CustomEvent<PromoteToObjectiveDetail>).detail;
+      promoteChatboxToObjective(editor, d);
+      // Optimistic "Sharpening…" card forks below immediately; the mount
+      // fills it in place when the artifact lands.
+      deploySharpeningCard({
+        spaceId: d.spaceId,
+        title: "Sharpening…",
+        sharpenedPrompt: "Refining your objective into a sharper prompt…",
+        chips: [],
+        heatmapJson: "{}",
+        rankedJson: "[]",
+      });
+    }
+
     window.addEventListener(DEPLOY_CARD_EVENT, onDeploy);
     window.addEventListener(REMOVE_CARD_EVENT, onRemove);
     window.addEventListener(DEPLOY_ARTIFACT_EVENT, onArtifact);
@@ -963,6 +1026,10 @@ export function WhiteboardBase({
     window.addEventListener(CARD_ACTION_EVENT, onCardAction);
     window.addEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpening);
     window.addEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguity);
+    window.addEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCard);
+    window.addEventListener(SEED_CHATBOX_EVENT, onSeedChatbox);
+    window.addEventListener(SEED_OBJECTIVE_EVENT, onSeedObjective);
+    window.addEventListener(PROMOTE_TO_OBJECTIVE_EVENT, onPromoteToObjective);
     return () => {
       window.removeEventListener(DEPLOY_CARD_EVENT, onDeploy);
       window.removeEventListener(REMOVE_CARD_EVENT, onRemove);
@@ -971,6 +1038,10 @@ export function WhiteboardBase({
       window.removeEventListener(CARD_ACTION_EVENT, onCardAction);
       window.removeEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpening);
       window.removeEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguity);
+      window.removeEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCard);
+      window.removeEventListener(SEED_CHATBOX_EVENT, onSeedChatbox);
+      window.removeEventListener(SEED_OBJECTIVE_EVENT, onSeedObjective);
+      window.removeEventListener(PROMOTE_TO_OBJECTIVE_EVENT, onPromoteToObjective);
     };
   }, []);
 
@@ -1033,6 +1104,8 @@ export function WhiteboardBase({
         <BoardOverlay editor={editor} runAiLink={runAiLink} spaceId={spaceId} />
       )}
       {editor && <PrototypeEventBridge editor={editor} spaceId={spaceId} />}
+      {/* Favorites sidebar — pans to hearted cards; hidden until ≥1 favorite. */}
+      {editor && <FavoritesSidebar editor={editor} />}
 
       {/* Tech Spec page — the full-screen spec document (auto-opens at the
           end of a forge run; reopened from a Tech Spec card). */}

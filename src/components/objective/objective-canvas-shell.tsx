@@ -31,7 +31,11 @@ import {
   type DeployCardDetail,
 } from "@/components/objective/whiteboard-base";
 import { OPEN_ROOM_EVENT } from "@/components/objective/shapes/room-card-shape";
-import { openUnfurl } from "@/components/objective/board-bus";
+import {
+  openUnfurl,
+  seedChatboxCard,
+  seedObjectiveCard,
+} from "@/components/objective/board-bus";
 import { anchorFromPath } from "@/components/objective/unfurl/anchor-from-path";
 import { FloatingCard } from "@/components/ui/floating-card";
 import { useHotkey } from "@/lib/hooks/use-hotkey";
@@ -56,6 +60,9 @@ interface BoardSubsResponse {
   /** The crisp distilled goal — same one-liner the Overview goal card shows. */
   distilledObjective?: string;
   subs?: SubLite[];
+  /** Whiteboard-native intake: draft → seed chatbox card; else objective card. */
+  isDraft?: boolean;
+  objective?: string;
 }
 
 function initialsOf(title: string): string {
@@ -107,6 +114,32 @@ export function ObjectiveCanvasShell({
         setSubs(nextSubs);
         setObjectiveTitle(d.objectiveTitle ?? "");
         setDistilledObjective(d.distilledObjective ?? "");
+
+        // Whiteboard-native intake — seed the chatbox card (draft) or the
+        // objective card (promoted). Idempotent in WhiteboardBase. Only on
+        // the minimal objective surface.
+        if (minimal) {
+          if (d.isDraft) {
+            let seedText = "";
+            try {
+              const k = `intake:seed:${spaceId}`;
+              seedText = window.sessionStorage.getItem(k) ?? "";
+              if (seedText) window.sessionStorage.removeItem(k);
+            } catch {
+              /* sessionStorage unavailable */
+            }
+            seedChatboxCard({ spaceId, seedText });
+          } else {
+            seedObjectiveCard({
+              spaceId,
+              title:
+                (d.distilledObjective ?? "").trim() ||
+                (d.objectiveTitle ?? "").trim() ||
+                "Objective",
+              objective: d.objective ?? "",
+            });
+          }
+        }
         // Warm the RSC cache for every room so clicking a sidebar
         // circle (or the main-canvas Open Room link) feels instant.
         // The room page is force-dynamic + ~6 Supabase queries per
@@ -246,11 +279,16 @@ export function ObjectiveCanvasShell({
       <WhiteboardBase
         spaceId={spaceId}
         showUi={collapsed}
-        seedCard={minimal && boardSubsLoaded ? cardDetailFor(0) : null}
+        seedCard={null}
       />
 
-      {/* Circular room sidebar — reflects the URL, navigates by route. */}
-      <div className="fixed left-4 top-1/2 z-[55] -translate-y-1/2">
+      {/* Circular room sidebar — legacy room-nav (full mode only). In minimal
+          mode the FavoritesSidebar (in WhiteboardBase) replaces it: it lists
+          only hearted cards + pans to them instead of opening rooms. */}
+      <div
+        className="fixed left-4 top-1/2 z-[55] -translate-y-1/2"
+        style={{ display: minimal ? "none" : undefined }}
+      >
         <FloatingCard tier="float" glow className="px-2 py-3">
           <div className="flex max-h-[70vh] flex-col items-center gap-2.5 overflow-y-auto">
             {rooms.map((room, i) => {

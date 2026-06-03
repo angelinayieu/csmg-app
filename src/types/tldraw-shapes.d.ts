@@ -1047,6 +1047,39 @@ declare module "@tldraw/tlschema" {
       objectId: string;
       metaCount: number;
     };
+    // Objective board — analyzed pasted image. Renders the stored image +
+    // a green "analyzed" light, expandable to the AI description + entities.
+    "objective-image-card": {
+      w: number;
+      h: number;
+      expanded: boolean;
+      imageFileId: string;
+      imageName: string;
+      imageUrl: string;
+      description: string;
+      entityCount: number;
+      entitiesJson: string;
+      color: string;
+    };
+    // Whiteboard-native intake — the chatbox AS a card (live textarea). On
+    // submit it transforms in place into an objective-card.
+    "chatbox-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      seedText: string;
+      color: string;
+    };
+    // The objective on the board (its own card type, replaces the reused
+    // room-card "__obj"). Heart favorites it (meta.favorited); press opens it.
+    "objective-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      title: string;
+      objective: string;
+      color: string;
+    };
   }
 }
 

@@ -248,7 +248,7 @@ export async function POST(req: NextRequest) {
       .in("id", attachedFileIds)
       .eq("user_id", user.id) // only the owner's rows
       .is("space_id", null) // don't steal a file already bound elsewhere
-      .select("source_name, normalized_text");
+      .select("source_name, normalized_text, image_description");
     if (claim.error) {
       console.warn(
         "[brainstorm/start] attachment back-link failed (non-fatal):",
@@ -259,13 +259,23 @@ export async function POST(req: NextRequest) {
         (claim.data ?? []) as Array<{
           source_name: string | null;
           normalized_text: string | null;
+          image_description: string | null;
         }>
       )
-        .filter((r) => r.normalized_text && r.normalized_text.trim().length > 0)
-        .map(
-          (r) =>
-            `### ${r.source_name ?? "Attachment"}\n${r.normalized_text!.trim()}`,
-        );
+        .map((r) => {
+          // Pasted images contribute their AI vision description; everything
+          // else (and image OCR) rides on normalized_text.
+          const parts: string[] = [];
+          if (r.image_description && r.image_description.trim()) {
+            parts.push(`Image: ${r.image_description.trim()}`);
+          }
+          if (r.normalized_text && r.normalized_text.trim()) {
+            parts.push(r.normalized_text.trim());
+          }
+          if (parts.length === 0) return null;
+          return `### ${r.source_name ?? "Attachment"}\n${parts.join("\n\n")}`;
+        })
+        .filter((b): b is string => b !== null);
       if (blocks.length > 0) {
         let joined = blocks.join("\n\n");
         if (joined.length > MAX_ATTACH_CHARS) {

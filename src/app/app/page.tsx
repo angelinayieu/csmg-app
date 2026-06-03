@@ -125,14 +125,55 @@ export default async function StudioPage({
     const syncedTabs: SyncedTab[] = (tabsRes?.data ?? []) as SyncedTab[];
     const driveConnected = driveRes?.data?.status === "connected";
 
+    // Whiteboard-native intake: find-or-create the user's hidden DRAFT
+    // objective space so typing on the chatbox lands the user on a real board
+    // (no navigation/persistence-swap on submit). One per user.
+    let draftSpaceId: string | undefined;
+    if (user) {
+      const { data: draft } = await db
+        .from("spaces")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("space_kind", "objective_canvas")
+        .eq("synthesis_data->objective_canvas->>draft", "true")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (draft?.id) {
+        draftSpaceId = draft.id as string;
+      } else {
+        const { data: created } = await db
+          .from("spaces")
+          .insert({
+            user_id: user.id,
+            name: "Draft",
+            description: "",
+            space_prefix: "OB",
+            input_text: "",
+            entity_count: 0,
+            edge_count: 0,
+            orphan_count: 0,
+            cycle_count: 0,
+            maturity: "actionable_now",
+            space_kind: "objective_canvas",
+            pipeline_mode: "review_each",
+            synthesis_data: { objective_canvas: { draft: true, stage: "main" } },
+          })
+          .select("id")
+          .single();
+        if (created?.id) draftSpaceId = created.id as string;
+      }
+    }
+
     return (
       <MinimalHome
         displayName={displayName}
         email={user?.email ?? ""}
         creditBalance={creditBalance}
-        spaces={spaces}
+        spaces={spaces.filter((s) => s.id !== draftSpaceId)}
         syncedTabs={syncedTabs}
         driveConnected={driveConnected}
+        draftSpaceId={draftSpaceId}
       />
     );
   }

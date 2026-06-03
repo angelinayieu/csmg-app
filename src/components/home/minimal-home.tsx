@@ -30,6 +30,8 @@ interface Props {
   spaces: LibrarySpace[];
   syncedTabs: SyncedTab[];
   driveConnected: boolean;
+  /** Hidden draft objective space — typing lands the user on this board. */
+  draftSpaceId?: string;
 }
 
 export function MinimalHome({
@@ -39,6 +41,7 @@ export function MinimalHome({
   spaces,
   syncedTabs,
   driveConnected,
+  draftSpaceId,
 }: Props) {
   const router = useRouter();
   // Default to the screenshot's "Good morning"; refine to local time after
@@ -178,6 +181,7 @@ export function MinimalHome({
               syncedTabs={syncedTabs}
               driveConnected={driveConnected}
               onActiveChange={setComposing}
+              draftSpaceId={draftSpaceId}
             />
           </motion.div>
         </section>

@@ -207,3 +207,76 @@ export const FORK_AMBIGUITY_EVENT = "objective-board:fork-ambiguity";
 export function forkAmbiguity(detail: AmbiguityForkDetail) {
   window.dispatchEvent(new CustomEvent(FORK_AMBIGUITY_EVENT, { detail }));
 }
+
+// ── Analyzed image → board ─────────────────────────────────────────
+// ObjectiveImageMount fires this once a pasted image's vision analysis has
+// landed; WhiteboardBase materializes it as an image card below the
+// objective card. Idempotent by imageFileId.
+
+export interface ImageCardDetail {
+  /** ingested_files id of the source image (idempotency key). */
+  imageFileId: string;
+  imageName: string;
+  /** public Storage URL of the image binary. */
+  imageUrl: string;
+  description: string;
+  entityCount: number;
+  /** extracted entities, JSON-encoded ([{name,type}]). */
+  entitiesJson: string;
+  color?: string;
+}
+
+export const DEPLOY_IMAGE_CARD_EVENT = "objective-board:deploy-image-card";
+
+/** Materialize an analyzed image as a card on a board mounted on this page. */
+export function deployImageCard(detail: ImageCardDetail) {
+  window.dispatchEvent(new CustomEvent(DEPLOY_IMAGE_CARD_EVENT, { detail }));
+}
+
+// ── Chatbox → objective promotion ──────────────────────────────────
+// The chatbox card fires this on submit (after promoting the draft space):
+// WhiteboardBase deletes the chatbox card, creates the objective card at the
+// SAME position (in-place transform), and forks an optimistic Prompt
+// Sharpening Card below it.
+
+export interface PromoteToObjectiveDetail {
+  /** tldraw id of the chatbox card being replaced. */
+  chatboxId: string;
+  spaceId: string;
+  title: string;
+  objective: string;
+}
+
+export const PROMOTE_TO_OBJECTIVE_EVENT =
+  "objective-board:promote-to-objective";
+
+export function promoteToObjective(detail: PromoteToObjectiveDetail) {
+  window.dispatchEvent(
+    new CustomEvent(PROMOTE_TO_OBJECTIVE_EVENT, { detail }),
+  );
+}
+
+// ── Seed the intake card on the board ──────────────────────────────
+// The shell dispatches one of these once it knows whether the space is a
+// draft (chatbox) or a promoted objective. WhiteboardBase seeds the shape
+// idempotently after restore.
+
+export interface SeedChatboxDetail {
+  spaceId: string;
+  /** carried-over text from the home chatbox (sessionStorage). */
+  seedText: string;
+}
+export const SEED_CHATBOX_EVENT = "objective-board:seed-chatbox";
+export function seedChatboxCard(detail: SeedChatboxDetail) {
+  window.dispatchEvent(new CustomEvent(SEED_CHATBOX_EVENT, { detail }));
+}
+
+export interface SeedObjectiveDetail {
+  spaceId: string;
+  title: string;
+  objective: string;
+}
+export const SEED_OBJECTIVE_EVENT = "objective-board:seed-objective";
+export function seedObjectiveCard(detail: SeedObjectiveDetail) {
+  window.dispatchEvent(new CustomEvent(SEED_OBJECTIVE_EVENT, { detail }));
+}

@@ -25,6 +25,7 @@ import {
   Globe,
   HardDrive,
   Check,
+  Sparkles,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -46,10 +47,19 @@ interface Props {
   /** Fired when composition starts/stops (objective becomes non-empty /
    *  empty) so the host can morph onto the whiteboard surface. */
   onActiveChange?: (active: boolean) => void;
+  /** Draft objective space id. When set, the FIRST keystroke lands the user
+   *  on that board (carrying the typed text) — the whiteboard-native intake.
+   *  Absent → legacy behavior (morph + submit here). */
+  draftSpaceId?: string;
 }
 
-type AttachmentStatus = "uploading" | "parsing" | "ready" | "error";
-type AttachmentKind = "file" | "url" | "drive";
+type AttachmentStatus =
+  | "uploading"
+  | "parsing"
+  | "analyzing" // image vision in flight
+  | "ready"
+  | "error";
+type AttachmentKind = "file" | "url" | "drive" | "image";
 
 interface Attachment {
   localId: string;
@@ -59,6 +69,13 @@ interface Attachment {
   /** ingested_files id once the upload lands. */
   assetId?: string;
   error?: string;
+  /** Image only — client-side object URL for the thumbnail. */
+  thumbUrl?: string;
+  /** Image only — AI vision metadata once analysis completes. */
+  description?: string;
+  entityCount?: number;
+  relationshipCount?: number;
+  entities?: Array<{ name: string; type?: string }>;
 }
 
 const ACCEPT = ".pdf,.docx,.txt,.md,.csv,.xlsx,.xls,image/*";
@@ -67,6 +84,7 @@ export function ObjectiveChatbox({
   syncedTabs,
   driveConnected,
   onActiveChange,
+  draftSpaceId,
 }: Props) {
   const router = useRouter();
   const [objective, setObjective] = useState("");
@@ -77,12 +95,26 @@ export function ObjectiveChatbox({
   const [popover, setPopover] = useState<"tabs" | "drive" | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
+  const navigatedRef = useRef(false);
 
-  // Signal the host when composition starts/stops (objective non-empty)
-  // so the home can morph onto / off the whiteboard surface.
+  // Signal the host when composition starts/stops (objective non-empty).
+  // Whiteboard-native intake: the FIRST keystroke lands the user on the real
+  // board (the draft space), carrying the typed text — the chatbox becomes a
+  // card on the whiteboard there. Falls back to the in-page morph + submit
+  // when no draftSpaceId is provided.
   useEffect(() => {
-    onActiveChange?.(objective.trim().length > 0);
-  }, [objective, onActiveChange]);
+    const active = objective.trim().length > 0;
+    onActiveChange?.(active);
+    if (active && draftSpaceId && !navigatedRef.current) {
+      navigatedRef.current = true;
+      try {
+        window.sessionStorage.setItem(`intake:seed:${draftSpaceId}`, objective);
+      } catch {
+        /* sessionStorage unavailable */
+      }
+      router.push(`/app/objective/${draftSpaceId}`);
+    }
+  }, [objective, onActiveChange, draftSpaceId, router]);
 
   // ── Attachment helpers ────────────────────────────────────────────
   const patch = useCallback(
@@ -95,8 +127,67 @@ export function ObjectiveChatbox({
 
   const removeAttachment = useCallback(
     (localId: string) =>
-      setAttachments((prev) => prev.filter((a) => a.localId !== localId)),
+      setAttachments((prev) => {
+        const target = prev.find((a) => a.localId === localId);
+        if (target?.thumbUrl) URL.revokeObjectURL(target.thumbUrl);
+        return prev.filter((a) => a.localId !== localId);
+      }),
     [],
+  );
+
+  // Revoke image thumbnail object URLs on unmount (e.g. after submit
+  // navigates away) so they don't leak across SPA navigations.
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  useEffect(() => {
+    return () => {
+      attachmentsRef.current.forEach((a) => {
+        if (a.thumbUrl) URL.revokeObjectURL(a.thumbUrl);
+      });
+    };
+  }, []);
+
+  // Image vision analysis (phase 2) — re-upload the binary to the existing
+  // vision-extract route + fold the AI description/entities onto the chip.
+  const analyzeImage = useCallback(
+    async (file: File, assetId: string, localId: string) => {
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("ingested_file_id", assetId);
+        const res = await fetch("/api/ingest/vision-extract", {
+          method: "POST",
+          body: fd,
+        });
+        const json = (await res.json()) as {
+          description?: string;
+          entity_count?: number;
+          relationship_count?: number;
+          entities?: Array<{ name: string; type?: string }>;
+          error?: string;
+        };
+        if (!res.ok) {
+          patch(localId, {
+            status: "error",
+            error: json.error ?? "Analysis failed.",
+          });
+          return;
+        }
+        patch(localId, {
+          status: "ready",
+          description: json.description ?? "",
+          entityCount: json.entity_count ?? 0,
+          relationshipCount: json.relationship_count ?? 0,
+          entities: Array.isArray(json.entities) ? json.entities.slice(0, 12) : [],
+        });
+      } catch (err) {
+        patch(localId, {
+          status: "error",
+          error: err instanceof Error ? err.message : "Analysis failed.",
+        });
+      }
+    },
+    [patch],
   );
 
   // Poll parse-status for background-parsed assets (PDF/DOCX) so the chip
@@ -137,9 +228,17 @@ export function ObjectiveChatbox({
         typeof crypto !== "undefined" && "randomUUID" in crypto
           ? crypto.randomUUID()
           : `f-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const isImage = file.type.startsWith("image/");
+      const thumbUrl = isImage ? URL.createObjectURL(file) : undefined;
       setAttachments((prev) => [
         ...prev,
-        { localId, name: file.name, kind: "file", status: "uploading" },
+        {
+          localId,
+          name: file.name,
+          kind: isImage ? "image" : "file",
+          status: "uploading",
+          thumbUrl,
+        },
       ]);
       const fd = new FormData();
       fd.append("file", file); // no space_id — claimed on submit
@@ -148,6 +247,7 @@ export function ObjectiveChatbox({
         const json = (await res.json()) as {
           ingested_file_id?: string;
           awaiting_parse?: boolean;
+          awaiting_vision?: boolean;
           error?: string;
         };
         if (!res.ok || !json.ingested_file_id) {
@@ -157,11 +257,18 @@ export function ObjectiveChatbox({
           });
           return;
         }
+        const assetId = json.ingested_file_id;
+        // Images: auto-run AI vision analysis immediately (green light when done).
+        if (isImage && json.awaiting_vision) {
+          patch(localId, { assetId, status: "analyzing" });
+          void analyzeImage(file, assetId, localId);
+          return;
+        }
         patch(localId, {
-          assetId: json.ingested_file_id,
+          assetId,
           status: json.awaiting_parse ? "parsing" : "ready",
         });
-        if (json.awaiting_parse) pollParse(json.ingested_file_id, localId);
+        if (json.awaiting_parse) pollParse(assetId, localId);
       } catch (err) {
         patch(localId, {
           status: "error",
@@ -169,7 +276,7 @@ export function ObjectiveChatbox({
         });
       }
     },
-    [patch, pollParse],
+    [patch, pollParse, analyzeImage],
   );
 
   const attachUrl = useCallback(
@@ -366,13 +473,21 @@ export function ObjectiveChatbox({
         {/* Attachment chips */}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-1.5 px-5 pb-1">
-            {attachments.map((a) => (
-              <AttachmentChip
-                key={a.localId}
-                attachment={a}
-                onRemove={() => removeAttachment(a.localId)}
-              />
-            ))}
+            {attachments.map((a) =>
+              a.kind === "image" ? (
+                <ImageAttachmentCard
+                  key={a.localId}
+                  attachment={a}
+                  onRemove={() => removeAttachment(a.localId)}
+                />
+              ) : (
+                <AttachmentChip
+                  key={a.localId}
+                  attachment={a}
+                  onRemove={() => removeAttachment(a.localId)}
+                />
+              ),
+            )}
           </div>
         )}
 
@@ -552,6 +667,233 @@ function AttachmentChip({
         <X className="h-3 w-3" style={{ color: appleVibe.text.faint }} />
       </button>
     </span>
+  );
+}
+
+// ── Image attachment card (auto-analyzed) ────────────────────────────
+//
+// Pasted images get a thumbnail + a status light (amber while analyzing →
+// green when the AI vision pass lands) + a glow, and click to reveal the
+// metadata (description + extracted entities) that feeds synthesis.
+
+function ImageAttachmentCard({
+  attachment,
+  onRemove,
+}: {
+  attachment: Attachment;
+  onRemove: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const analyzing =
+    attachment.status === "uploading" || attachment.status === "analyzing";
+  const ready = attachment.status === "ready";
+  const isError = attachment.status === "error";
+  const GREEN = appleVibe.stage.outcomes;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => ready && setOpen((v) => !v)}
+        className="block overflow-hidden rounded-xl text-left"
+        style={{
+          width: 132,
+          border: `1px solid ${ready ? `${GREEN}59` : appleVibe.stroke.soft}`,
+          boxShadow: ready
+            ? `0 0 0 1px ${GREEN}22, 0 10px 24px -10px ${GREEN}80`
+            : appleVibe.shadow.card,
+          cursor: ready ? "pointer" : "default",
+        }}
+        title={isError ? attachment.error : attachment.name}
+      >
+        <div
+          style={{
+            position: "relative",
+            width: "100%",
+            height: 78,
+            background: "rgba(15,23,42,0.05)",
+          }}
+        >
+          {attachment.thumbUrl && (
+            // Blob object URL — next/image can't optimize it; plain img is correct here.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={attachment.thumbUrl}
+              alt={attachment.name}
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            />
+          )}
+          {analyzing && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "grid",
+                placeItems: "center",
+                background: "rgba(15,23,42,0.34)",
+              }}
+            >
+              <motion.span
+                animate={{ rotate: 360 }}
+                transition={{ duration: 0.9, repeat: Infinity, ease: "linear" }}
+                className="block h-4 w-4 rounded-full border-2 border-white border-r-transparent"
+              />
+            </div>
+          )}
+          {/* Status light — green when analysis is done. */}
+          <span
+            aria-label={ready ? "Analyzed" : analyzing ? "Analyzing" : "Error"}
+            style={{
+              position: "absolute",
+              top: 6,
+              right: 6,
+              width: 9,
+              height: 9,
+              borderRadius: 999,
+              background: isError ? "#DC2626" : ready ? GREEN : "#D97706",
+              boxShadow: ready
+                ? `0 0 0 2px rgba(255,255,255,0.92), 0 0 9px ${GREEN}`
+                : "0 0 0 2px rgba(255,255,255,0.92)",
+            }}
+          />
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            role="button"
+            aria-label="Remove image"
+            style={{
+              position: "absolute",
+              top: 4,
+              left: 4,
+              width: 18,
+              height: 18,
+              borderRadius: 999,
+              background: "rgba(15,23,42,0.55)",
+              display: "grid",
+              placeItems: "center",
+              cursor: "pointer",
+            }}
+          >
+            <X className="h-3 w-3" style={{ color: "white" }} />
+          </span>
+        </div>
+        <div style={{ padding: "5px 7px", background: appleVibe.surface.card }}>
+          <div
+            className="truncate text-[10.5px] font-medium"
+            style={{ color: appleVibe.text.secondary }}
+          >
+            {attachment.name}
+          </div>
+          <div className="mt-0.5 flex items-center gap-1">
+            {ready ? (
+              <>
+                <Sparkles
+                  className="h-2.5 w-2.5"
+                  style={{ color: GREEN }}
+                  strokeWidth={2.4}
+                />
+                <span
+                  className="text-[9.5px] font-semibold"
+                  style={{ color: GREEN }}
+                >
+                  Analyzed
+                  {(attachment.entityCount ?? 0) > 0
+                    ? ` · ${attachment.entityCount}`
+                    : ""}
+                </span>
+              </>
+            ) : isError ? (
+              <span
+                className="text-[9.5px] font-semibold"
+                style={{ color: "#DC2626" }}
+              >
+                Failed
+              </span>
+            ) : (
+              <span
+                className="text-[9.5px] font-medium"
+                style={{ color: appleVibe.text.tertiary }}
+              >
+                Analyzing…
+              </span>
+            )}
+          </div>
+        </div>
+      </button>
+
+      {/* Metadata popover — the AI analysis that connects to synthesis. */}
+      <AnimatePresence>
+        {open && ready && (
+          <>
+            <div
+              className="fixed inset-0 z-20"
+              onClick={() => setOpen(false)}
+              aria-hidden
+            />
+            <motion.div
+              initial={{ opacity: 0, y: 6, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 6, scale: 0.98 }}
+              transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+              className="absolute left-0 z-30 mt-2 w-[260px]"
+              style={{
+                background: appleVibe.surface.card,
+                border: `1px solid ${appleVibe.stroke.soft}`,
+                borderRadius: appleVibe.radius.md,
+                boxShadow: appleVibe.shadow.cardHover,
+                padding: 12,
+              }}
+            >
+              <div className="flex items-center gap-1.5">
+                <Sparkles
+                  className="h-3 w-3"
+                  style={{ color: GREEN }}
+                  strokeWidth={2.4}
+                />
+                <span
+                  className="text-[10px] font-semibold uppercase tracking-[0.08em]"
+                  style={{ color: appleVibe.text.tertiary }}
+                >
+                  AI analysis
+                </span>
+              </div>
+              {attachment.description && (
+                <p
+                  className="mt-1.5 text-[12px] font-light leading-snug"
+                  style={{ color: appleVibe.text.secondary }}
+                >
+                  {attachment.description}
+                </p>
+              )}
+              {(attachment.entities?.length ?? 0) > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {attachment.entities!.slice(0, 10).map((e, i) => (
+                    <span
+                      key={i}
+                      className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                      style={{
+                        background: appleVibe.surface.chip,
+                        color: appleVibe.text.secondary,
+                      }}
+                    >
+                      {e.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p
+                className="mt-2 text-[10px] font-light"
+                style={{ color: appleVibe.text.faint }}
+              >
+                Connected to your objective for synthesis.
+              </p>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 

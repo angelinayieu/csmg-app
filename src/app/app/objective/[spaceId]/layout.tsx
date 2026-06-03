@@ -39,6 +39,7 @@ import {
 } from "@/lib/objective-canvas/right-panel-signal";
 import { ObjectiveCanvasShell } from "@/components/objective/objective-canvas-shell";
 import { PromptSharpeningMount } from "@/components/objective/prompt-sharpening-mount";
+import { ObjectiveImageMount } from "@/components/objective/objective-image-mount";
 import { AnnotationsVisibilityToggle } from "@/components/objective/annotations-visibility-toggle";
 import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -223,6 +224,8 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
           artifact + materializes the Prompt Sharpening Card on the board.
           Minimal mode only (the full canvas has its own analysis surfaces). */}
       {minimal && !isBrief && <PromptSharpeningMount spaceId={spaceId} />}
+      {/* Analyzed pasted images → cards on the board (minimal mode only). */}
+      {minimal && !isBrief && <ObjectiveImageMount spaceId={spaceId} />}
 
       {/* Collapsed pill — visible whenever the notebook is closed.
           Render WITHOUT the hydration gate so it's visible on first

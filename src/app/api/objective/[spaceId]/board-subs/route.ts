@@ -40,6 +40,17 @@ export async function GET(_req: Request, ctx: RouteContext) {
     (typeof space.input_text === "string" && space.input_text.trim()) ||
     "";
 
+  // Whiteboard-native intake: a DRAFT space (flagged in synthesis_data) seeds
+  // the chatbox card; a promoted one seeds the objective card. `objective` is
+  // the raw text the chatbox/objective card render.
+  const isDraft = !!(
+    space.synthesis_data as { objective_canvas?: { draft?: boolean } } | null
+  )?.objective_canvas?.draft;
+  const objective =
+    typeof space.input_text === "string" && space.input_text.trim()
+      ? space.input_text.trim()
+      : objectiveTitle;
+
   // The distilled goal — the same crisp one-liner the Overview "goal card"
   // shows (MacroSummaryCard). It's cached on the macro_problems roll-up as a
   // finding with body.kind === "distilled_objective"; until that roll-up has
@@ -84,7 +95,13 @@ export async function GET(_req: Request, ctx: RouteContext) {
     }));
   }
 
-  return NextResponse.json({ objectiveTitle, distilledObjective, subs });
+  return NextResponse.json({
+    objectiveTitle,
+    distilledObjective,
+    subs,
+    isDraft,
+    objective,
+  });
 }
 
 /** Pull the cached distilled-objective sentence out of the space's

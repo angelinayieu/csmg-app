@@ -69,12 +69,12 @@ export function PromptSharpeningMount({ spaceId }: { spaceId: string }) {
         /* transient — keep polling */
       }
       if (!cancelled && tries < MAX_TRIES) {
-        timer = setTimeout(tick, 2200);
+        timer = setTimeout(tick, 1500);
       }
     }
 
-    // Small initial delay so the board has mounted + restored first.
-    timer = setTimeout(tick, 1400);
+    // Short initial delay so the board has mounted + restored first.
+    timer = setTimeout(tick, 600);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);

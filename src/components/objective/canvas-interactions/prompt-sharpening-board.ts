@@ -61,11 +61,13 @@ function connect(editor: Editor, fromId: TLShapeId, toId: TLShapeId): void {
 function findObjectiveCard(editor: Editor): TLShapeId | null {
   const shapes = editor.getCurrentPageShapes();
   const obj =
+    shapes.find((s) => s.type === "objective-card") ??
     shapes.find(
       (s) =>
         s.type === "room-card" &&
         (s as RoomCardShape).props.roomId === "__obj",
-    ) ?? shapes.find((s) => s.type === "room-card");
+    ) ??
+    shapes.find((s) => s.type === "room-card");
   return obj ? obj.id : null;
 }
 
@@ -75,11 +77,27 @@ export function deployPromptSharpeningOnBoard(
   editor: Editor,
   d: SharpeningCardDetail,
 ): void {
-  // Idempotent — one sharpening card per board. Quietly no-op on revisits
-  // (don't re-select/re-center; the user may be elsewhere on the board).
-  if (
-    editor.getCurrentPageShapes().some((s) => s.type === "prompt-sharpening")
-  ) {
+  // If a card already exists (the optimistic "Sharpening…" placeholder, or a
+  // returning visit), fill it IN PLACE — preserve its position + expanded
+  // state. This is what makes the sharpening feel instant: the placeholder
+  // appears on submit, then its content fills here when the artifact lands.
+  const existing = editor
+    .getCurrentPageShapes()
+    .find((s) => s.type === "prompt-sharpening");
+  if (existing) {
+    editor.updateShape<PromptSharpeningCardShape>({
+      id: existing.id,
+      type: "prompt-sharpening",
+      props: {
+        spaceId: d.spaceId,
+        title: d.title,
+        sharpenedPrompt: d.sharpenedPrompt,
+        chips: d.chips,
+        heatmapJson: d.heatmapJson,
+        rankedJson: d.rankedJson,
+        color: d.color || "#7C3AED",
+      },
+    });
     return;
   }
 

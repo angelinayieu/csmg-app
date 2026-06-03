@@ -10,7 +10,6 @@
 
 import {
   createShapeId,
-  toRichText,
   type Editor,
   type TLShapeId,
 } from "tldraw";
@@ -19,7 +18,6 @@ import {
   operationById,
   runOperation,
   type OperationTarget,
-  type OperationResultItem,
   type OperationRunOptions,
 } from "@/lib/objective-canvas/canvas-operations";
 
@@ -57,36 +55,10 @@ export async function executeCardOperation(
     startY = vp.center.y;
   }
 
-  // Pending placeholder so the LLM wait has immediate feedback (covers the
-  // card-menu path; the scanner panel shows its own per-row "Working…" too).
-  const pendingId = createShapeId();
-  try {
-    editor.createShape({
-      id: pendingId,
-      type: "note",
-      x: anchorMidX - 90,
-      y: startY,
-      props: {
-        color: "grey",
-        size: "s",
-        richText: toRichText(`Generating ${op.label.toLowerCase()}…`),
-      },
-      meta: { opPending: true, op: opId },
-    });
-  } catch {
-    /* placeholder is best-effort */
-  }
-
-  let items: OperationResultItem[];
-  try {
-    items = await runOperation(op, target, opts);
-  } finally {
-    try {
-      editor.deleteShape(pendingId);
-    } catch {
-      /* already removed */
-    }
-  }
+  // No pending placeholder shape — the trigger surfaces show their own
+  // affordance (scanner rows + the ‹ › buttons), and a grey sticky on the
+  // board just reads as clutter. runOperation soft-fails to [] (never throws).
+  const items = await runOperation(op, target, opts);
   if (!items.length) return;
 
   const perRow =

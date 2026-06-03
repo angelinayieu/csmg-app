@@ -170,6 +170,8 @@ export async function POST(request: Request) {
       | { ok: true; result: ExtractResult }
       | { ok: false; error: { code: string; message: string } };
     let extractionMethod: string;
+    // Public URL of the stored image binary (images only; null otherwise).
+    let imageUrl: string | null = null;
 
     if (mime === "text/plain" || mime === "text/markdown") {
       extractionMethod = mime === "text/markdown" ? "markdown" : "text";
@@ -203,6 +205,9 @@ export async function POST(request: Request) {
           },
         },
       };
+      // Store the binary so the analyzed image can re-display as a card on
+      // the whiteboard later (the row otherwise keeps only text/metadata).
+      imageUrl = await uploadImageToBucket(supabase, user.id, buf, mime);
     } else {
       // validateFile should have blocked this; defensive guard.
       return NextResponse.json({ error: `Unsupported MIME: ${mime}` }, { status: 400 });
@@ -219,6 +224,7 @@ export async function POST(request: Request) {
       extractionMethod,
       extraction,
       awaitingVision: extractionMethod === "image-pending-vision",
+      imageUrl,
     });
   }
 
@@ -312,6 +318,7 @@ async function persistAndRespond(opts: {
     | { ok: true; result: ExtractResult }
     | { ok: false; error: { code: string; message: string } };
   awaitingVision: boolean;
+  imageUrl?: string | null;
 }) {
   const {
     db,
@@ -323,6 +330,7 @@ async function persistAndRespond(opts: {
     extractionMethod,
     extraction,
     awaitingVision,
+    imageUrl,
   } = opts;
 
   if (!extraction.ok) {
@@ -361,6 +369,7 @@ async function persistAndRespond(opts: {
         normalized_chars: normalizedText.length,
         extraction_method: extractionMethod,
         asset_class: assetClass,
+        image_url: imageUrl ?? null,
         metadata: {
           ...extraction.result.metadata,
           normalize_chunks: chunks,
@@ -406,3 +415,32 @@ async function persistAndRespond(opts: {
 // `inferMimeFromName` is now exported from validate.ts and used by validateFile.
 // Kept here as a stable import anchor for future extensions.
 void inferMimeFromName;
+
+// ── Image binary → Storage ───────────────────────────────────────────
+// Upload the image to the public `ingested-images` bucket under the user's
+// folder (RLS = owner by path prefix), returning the public URL. Soft-fails
+// to null so a storage hiccup never breaks ingest.
+async function uploadImageToBucket(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  userId: string,
+  buf: Buffer,
+  mime: string,
+): Promise<string | null> {
+  try {
+    const ext = (mime.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "") || "png";
+    const path = `${userId}/${crypto.randomUUID()}.${ext}`;
+    const { error } = await supabase.storage
+      .from("ingested-images")
+      .upload(path, buf, { contentType: mime, upsert: false });
+    if (error) {
+      console.warn("[ingest] image storage upload failed (non-fatal):", error.message);
+      return null;
+    }
+    const { data } = supabase.storage.from("ingested-images").getPublicUrl(path);
+    return (data?.publicUrl as string | undefined) ?? null;
+  } catch (err) {
+    console.warn("[ingest] image storage upload threw (non-fatal):", err);
+    return null;
+  }
+}
