@@ -45,6 +45,18 @@ const nextConfig: NextConfig = {
   // that dependency entirely; do not re-add pdf-parse/pdfjs-dist.
   serverExternalPackages: ["mammoth"],
 
+  // ── Build memory headroom (Vercel) ───────────────────────────────────
+  // This is a very large app (hundreds of routes + heavy client chunks:
+  // tldraw, mermaid, three). `next build --webpack` peaks high on memory;
+  // Vercel's build container has less RAM than a dev machine, so a build
+  // that compiles locally can OOM-fail on Vercel as the route/chunk count
+  // grows. This flag drops webpack's retained in-memory caches during the
+  // build (slightly slower build, materially lower peak RSS). Safe + stable.
+  // https://nextjs.org/docs/app/api-reference/config/next-config-js/webpackMemoryOptimizations
+  experimental: {
+    webpackMemoryOptimizations: true,
+  },
+
   // ── Webpack: avoid the bundled WASM hasher ───────────────────────────
   // On Node 22+/24, webpack's default WASM-backed hash (md4/xxhash) can
   // crash production builds inside `WasmHash._updateWithBuffer`
