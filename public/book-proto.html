@@ -85,10 +85,13 @@
   /* riffling leaves — flip through in sequence during the open hold */
   .jb-leaf {
     position: absolute; inset: 4px 5px 4px 7px; border-radius: 1px 3px 3px 1px;
-    background: linear-gradient(180deg, #fffefb, #f5eede);
+    background:
+      repeating-linear-gradient(180deg, transparent 0 12px, rgba(15,23,42,0.09) 12px 13px),
+      linear-gradient(180deg, #fffefb, #f3ecdd);
     transform-origin: left center; backface-visibility: hidden;
-    box-shadow: 1px 0 4px -1px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.04);
+    box-shadow: 1px 0 5px -1px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.04);
   }
+  .jb-leaf::before { content: ""; position: absolute; left: 17%; top: 7%; bottom: 7%; width: 1.5px; background: rgba(190,30,45,0.4); }
   .jb-pg1 { animation: jb-pg1 var(--dur) ease-in-out infinite; }
   .jb-pg2 { animation: jb-pg2 var(--dur) ease-in-out infinite; }
   .jb-pg3 { animation: jb-pg3 var(--dur) ease-in-out infinite; }

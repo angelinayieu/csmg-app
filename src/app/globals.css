@@ -842,6 +842,38 @@ body[data-canvas-unfurl-active="true"] .chrome-dimmable {
   display: none !important;
 }
 
+/* tldraw's CenteredTopPanelContainer positions the TopPanel (our PageTabs) with
+ * fragile inline-transform math that LEFT-ALIGNS the page-tab pill when the top
+ * zones are uneven — which they always are here (left zone hidden, custom
+ * right-edge rails). Force it to TRUE viewport center: absolute within
+ * .tlui-layout (position:relative, full width), overriding the JS transform.
+ * Scoped to .oc-board so other tldraw instances keep tldraw's own layout. */
+.oc-board .tlui-top-panel__container {
+  position: absolute !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+}
+
+/* Version-history preview: <TldrawImage> renders an <svg> (or <img> for png)
+ * at the snapshot's natural size. Constrain it to fit the preview frame while
+ * keeping aspect ratio, so a historical board reads as a thumbnail. */
+.oc-version-preview {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.oc-version-preview > svg,
+.oc-version-preview > img {
+  max-width: 100% !important;
+  max-height: 100% !important;
+  width: auto !important;
+  height: auto !important;
+  object-fit: contain;
+  display: block;
+}
+
 /* ── Strategy hero card — canvas-side expand ──
  * When the user clicks the strategy hero card to expand it, the
  * CanvasStrategyExpandResponder sets data-canvas-strategy-expanded="true"

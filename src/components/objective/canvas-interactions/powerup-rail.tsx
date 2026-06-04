@@ -76,6 +76,24 @@ const POWERUPS = CANVAS_OPERATIONS.filter(
   (o) => o.contract === "text" && o.wired && !o.hidden,
 );
 
+// Plain-language value words so the sliders read for anyone — "Very focused"
+// instead of "0.00", "Deep" instead of "4". The number is still what drives
+// the model; these just translate it.
+function creativityWord(t: number): string {
+  if (t <= 0.2) return "Very focused";
+  if (t <= 0.45) return "Focused";
+  if (t <= 0.7) return "Balanced";
+  if (t <= 0.9) return "Creative";
+  return "Wild";
+}
+function depthWord(d: number): string {
+  if (d <= 1) return "Quick look";
+  if (d <= 2) return "Light";
+  if (d <= 3) return "Normal";
+  if (d <= 4) return "Deep";
+  return "Very deep";
+}
+
 interface ArtifactRow {
   id: TLShapeId;
   title: string;
@@ -429,36 +447,39 @@ export function PowerupRail({
           })}
         </div>
 
-        {/* AI settings — temperature + depth + complexity + web search. */}
+        {/* AI settings — plain language so anyone can tune them. */}
         <div style={{ ...sectionLabel, marginTop: 16, display: "flex", alignItems: "center", gap: 6 }}>
-          <Thermometer style={{ width: 12, height: 12 }} strokeWidth={2} /> Analysis
+          <Thermometer style={{ width: 12, height: 12 }} strokeWidth={2} /> How the AI thinks
         </div>
         <div style={{ marginTop: 8 }}>
           <Knob
-            label="Temperature"
+            label="Creativity"
+            hint="Low = careful & on-topic. High = wild & surprising."
             value={settings.temperature}
             min={0}
             max={1}
             step={0.05}
-            display={settings.temperature.toFixed(2)}
+            display={creativityWord(settings.temperature)}
             onChange={(v) => setAiSetting("temperature", v)}
           />
           <Knob
-            label="Depth"
+            label="Thinking depth"
+            hint="How far down it breaks the idea apart."
             value={settings.depth}
             min={DEPTH_MIN}
             max={DEPTH_MAX}
             step={1}
-            display={String(settings.depth)}
+            display={depthWord(settings.depth)}
             onChange={(v) => setAiSetting("depth", Math.round(v))}
           />
           <Knob
-            label="Questions"
+            label="Questions for you"
+            hint="How many things it double-checks before building."
             value={settings.complexity}
             min={COMPLEXITY_MIN}
             max={COMPLEXITY_MAX}
             step={1}
-            display={String(settings.complexity)}
+            display={`${settings.complexity}`}
             onChange={(v) => setAiSetting("complexity", Math.round(v))}
           />
           <button
@@ -466,15 +487,37 @@ export function PowerupRail({
             onClick={() => setAiSetting("webSearch", !settings.webSearch)}
             style={{
               ...toggleRow,
+              alignItems: "flex-start",
               color: settings.webSearch
                 ? appleVibe.text.primary
                 : appleVibe.text.tertiary,
             }}
           >
-            <span>Ground with web search</span>
+            <span
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "flex-start",
+                gap: 1,
+                minWidth: 0,
+              }}
+            >
+              <span>Look things up online</span>
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 500,
+                  lineHeight: 1.3,
+                  color: appleVibe.text.faint,
+                }}
+              >
+                Pull in real facts from the web (a bit slower).
+              </span>
+            </span>
             <span
               style={{
                 ...pip,
+                marginTop: 2,
                 background: settings.webSearch
                   ? appleVibe.accent.primary
                   : appleVibe.surface.chip,
@@ -532,6 +575,7 @@ export function PowerupRail({
 
 function Knob({
   label,
+  hint,
   value,
   min,
   max,
@@ -540,6 +584,7 @@ function Knob({
   onChange,
 }: {
   label: string;
+  hint?: string;
   value: number;
   min: number;
   max: number;
@@ -548,9 +593,16 @@ function Knob({
   onChange: (v: number) => void;
 }) {
   return (
-    <div style={{ marginBottom: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: appleVibe.text.secondary }}>
+    <div style={{ marginBottom: 11 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          marginBottom: hint ? 1 : 4,
+        }}
+      >
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: appleVibe.text.secondary }}>
           {label}
         </span>
         <span
@@ -564,6 +616,18 @@ function Knob({
           {display}
         </span>
       </div>
+      {hint && (
+        <div
+          style={{
+            fontSize: 10,
+            lineHeight: 1.3,
+            color: appleVibe.text.faint,
+            marginBottom: 5,
+          }}
+        >
+          {hint}
+        </div>
+      )}
       <input
         type="range"
         min={min}

@@ -36,42 +36,24 @@ import {
 } from "tldraw";
 import "tldraw/tldraw.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RoomCardShapeUtil, type RoomCardShape } from "./shapes/room-card-shape";
+import { type RoomCardShape } from "./shapes/room-card-shape";
+import { type InsightCardShape } from "./shapes/insight-card-shape";
+import { type ArtifactCardShape } from "./shapes/artifact-card-shape";
+import { type SubsystemKgShape } from "./shapes/subsystem-kg-shape";
 import {
-  InsightCardShapeUtil,
-  type InsightCardShape,
-} from "./shapes/insight-card-shape";
-import {
-  ArtifactCardShapeUtil,
-  type ArtifactCardShape,
-} from "./shapes/artifact-card-shape";
-import { OcCardShapeUtil } from "./shapes/oc-card-shape";
-import {
-  SubsystemKgShapeUtil,
-  type SubsystemKgShape,
-} from "./shapes/subsystem-kg-shape";
-import { LayerBandShapeUtil } from "./shapes/layer-band-shape";
-import {
-  SpecForgeCardShapeUtil,
   OPEN_CAUSAL_MODEL_EVENT,
   type OpenCausalModelDetail,
 } from "./shapes/specforge-card-shape";
 import {
-  TechSpecCardShapeUtil,
   OPEN_TECH_SPEC_EVENT,
   BUILD_PROTOTYPE_EVENT,
   type OpenTechSpecDetail,
 } from "./shapes/tech-spec-card-shape";
 import {
-  PrototypeCardShapeUtil,
   PROTOTYPE_REFINE_EVENT,
   type PrototypeCardShape,
   type PrototypeRefineDetail,
 } from "./shapes/prototype-card-shape";
-import { PromptSharpeningCardShapeUtil } from "./shapes/prompt-sharpening-card-shape";
-import { ObjectiveImageCardShapeUtil } from "./shapes/objective-image-card-shape";
-import { ChatboxCardShapeUtil } from "./shapes/chatbox-card-shape";
-import { ObjectiveCardShapeUtil } from "./shapes/objective-card-shape";
 import { TechSpecPanel } from "./tech-spec-panel";
 import { CausalModelPanel } from "./causal-model-panel";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
@@ -119,7 +101,6 @@ import {
 } from "./canvas-interactions/specforge-runner";
 import { ConvergeDivergePopup } from "./canvas-interactions/converge-diverge-popup";
 import { PowerupRail, FORGE_REQUEST_EVENT } from "./canvas-interactions/powerup-rail";
-import { RoomPill } from "./canvas-interactions/room-pill";
 import { CollapsibleStylePanel } from "./canvas-interactions/collapsible-style-panel";
 import type { TLComponents, TLPageId } from "tldraw";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
@@ -169,11 +150,10 @@ import {
 } from "./canvas-interactions/intake-board";
 import { deployImageCardOnBoard } from "./canvas-interactions/objective-image-board";
 import {
-  VoiceNoteCardShapeUtil,
-  JournalCardShapeUtil,
   deployVoiceNoteOnBoard,
   deployJournalOnBoard,
 } from "./canvas-interactions/voice-journal-board";
+import { CUSTOM_SHAPE_UTILS } from "./board-shape-utils";
 import { syncDataFlowUnfurl } from "./unfurl/render-dataflow-unfurl";
 import type { DataFlowGraph } from "@/lib/objective-canvas/build-data-flow-graph";
 import {
@@ -631,24 +611,6 @@ const BOARD_COMPONENTS: TLComponents = {
   // positions; see canvas-interactions/sharpening-connectors.tsx.
   InFrontOfTheCanvas: SharpeningConnectorsOverlay,
 };
-
-const CUSTOM_SHAPE_UTILS = [
-  RoomCardShapeUtil,
-  InsightCardShapeUtil,
-  ArtifactCardShapeUtil,
-  OcCardShapeUtil,
-  SubsystemKgShapeUtil,
-  LayerBandShapeUtil,
-  SpecForgeCardShapeUtil,
-  TechSpecCardShapeUtil,
-  PrototypeCardShapeUtil,
-  PromptSharpeningCardShapeUtil,
-  ObjectiveImageCardShapeUtil,
-  ChatboxCardShapeUtil,
-  ObjectiveCardShapeUtil,
-  VoiceNoteCardShapeUtil,
-  JournalCardShapeUtil,
-];
 
 export function WhiteboardBase({
   spaceId,
@@ -2362,11 +2324,9 @@ function BoardOverlay({
         <Home style={{ width: 13, height: 13 }} strokeWidth={2.2} />
         Home
       </button>
-      {/* Room pill — the always-visible current-objective indicator + ＋ to
-          start a new one. Grouped just right of Home (top-left nav cluster). */}
-      <div style={{ position: "absolute", top: 12, left: 96, zIndex: 70 }}>
-        <RoomPill editor={editor} />
-      </div>
+      {/* RoomPill removed — it duplicated the objective name the centered
+          PageTabs already shows; "+ new objective" now lives in the Powerups
+          rail ("New objective + refine") and the Home nav. */}
       {/* Decompose (and every other op) now lives in the Powerups rail — no
           stray bottom-left float. Converge/Diverge are the inline verbs. */}
       {/* Top-center AI thinking-settings cluster (depth · complexity · temp ·

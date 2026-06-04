@@ -1,81 +1,18 @@
-// ── /app/objective — Objective Canvas landing ──
+// ── /app/objective — retired landing ──
 //
-// Server route. Fetches the user's profile + recent objective
-// canvases, then hands off to <LandingExperience />, a state-based
-// client orchestrator that owns the portal ↔ entry transition.
-//
-// The previous "click the start card to navigate to /new" pattern
-// is gone — we now transition in-place via Framer Motion's layoutId
-// for the smoothest possible feel. Back-compat: /app/objective/new
-// redirects here with ?stage=entry so any deep links still land
-// on the entry form.
+// The old Objective Canvas landing (the HomeTabNav "Objective Canvas / Synergy
+// / Strategy Lab" tabs + the LandingExperience portal + Templates/Create/
+// Explore empty state) is retired per the "only home + objective canvas"
+// direction (see project_old_build_deprecation). The home (/app) is now the
+// single entry point — the clean chatbox + library — and individual boards
+// live at /app/objective/[spaceId]. The bare landing just redirects home so
+// none of the old shell can render (and any board that can't resolve a space
+// lands on the clean home, not the legacy portal).
 
 import { redirect } from "next/navigation";
-import { createClient, getAuthUser } from "@/lib/supabase/server";
-import { HomeTabNav } from "@/components/app/home-tab-nav";
-import { ObjectiveTopChrome } from "@/components/objective/objective-top-chrome";
-import { LandingExperience } from "@/components/objective/landing-experience";
-import {
-  loadWorkspaceLibrary,
-  type WorkspaceCardData,
-} from "@/lib/objective-canvas/load-workspace-library";
 
 export const dynamic = "force-dynamic";
 
-export default async function ObjectiveCanvasLandingPage() {
-  const user = await getAuthUser();
-  if (!user) redirect("/auth/login");
-
-  const supabase = await createClient();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = supabase as any;
-
-  // Workspace library — rich card data per objective canvas. Soft-
-  // fails to an empty list on any error so a brand-new account still
-  // sees the portal entry.
-  let library: WorkspaceCardData[] = [];
-  try {
-    library = await loadWorkspaceLibrary({
-      db,
-      userId: user.id,
-      limit: 12,
-    });
-  } catch (err) {
-    console.warn("[objective landing] loadWorkspaceLibrary failed:", err);
-  }
-
-  // Credit balance for the top-right profile chip + synergy display
-  // name for the time-aware greeting. Both fall through cleanly if
-  // the rows don't exist yet (new accounts).
-  const [{ data: profile }, { data: synergyProfile }] = await Promise.all([
-    db.from("profiles").select("credit_balance").eq("id", user.id).single(),
-    db
-      .from("synergy_profiles")
-      .select("display_name")
-      .eq("user_id", user.id)
-      .maybeSingle(),
-  ]);
-  const creditBalance: number =
-    (profile?.credit_balance as number | undefined) ?? 0;
-  const displayName: string | null =
-    (synergyProfile?.display_name as string | null) ?? null;
-
-  return (
-    <div
-      className="fixed inset-0 z-40 overflow-y-auto"
-      style={{ background: "#fafafa" }}
-    >
-      <ObjectiveTopChrome
-        userEmail={user.email ?? ""}
-        creditBalance={creditBalance}
-      />
-      <HomeTabNav />
-
-      <LandingExperience
-        library={library}
-        userEmail={user.email ?? ""}
-        displayName={displayName}
-      />
-    </div>
-  );
+export default function ObjectiveCanvasLandingRedirect() {
+  redirect("/app");
 }

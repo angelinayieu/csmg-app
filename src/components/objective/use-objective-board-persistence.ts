@@ -40,6 +40,12 @@ export function useObjectiveBoardPersistence(
   onRestoredRef.current = onRestored;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inflightRef = useRef<AbortController | null>(null);
+  // Becomes true ONLY after the restore attempt fully settles. Until then NO
+  // save may run: tldraw mounts with an empty document (~1–2 KB), and saving
+  // (or flushing on a fast navigate-away) that empty store overwrites the real
+  // server board with a blank one. This race is the root cause of "cards
+  // disappear on reload" — gating every save path on it is the fix.
+  const restoreCompleteRef = useRef(false);
 
   // ── Restore (server → localStorage fallback, prefer the newer) ──
   useEffect(() => {
@@ -154,6 +160,9 @@ export function useObjectiveBoardPersistence(
         // Else: nothing to restore — fresh board.
       };
       applyRestore();
+      // Restore has settled (content applied, or confirmed nothing to
+      // restore) — saving is now safe.
+      restoreCompleteRef.current = true;
       onRestoredRef.current?.();
     })();
 
@@ -214,6 +223,10 @@ export function useObjectiveBoardPersistence(
     let lsTimer: ReturnType<typeof setTimeout> | null = null;
     const unsub = editor.store.listen(
       () => {
+        // Ignore every change until restore settles — the empty initial store
+        // (and the restore's own apply) must never schedule a save that
+        // clobbers the server board. Normal autosave resumes after restore.
+        if (!restoreCompleteRef.current) return;
         if (lsTimer) clearTimeout(lsTimer);
         lsTimer = setTimeout(() => {
           try {
@@ -232,8 +245,10 @@ export function useObjectiveBoardPersistence(
     );
 
     const flushSync = () => {
-      // Always capture the CURRENT board on unload/hide — NOT gated on a pending
-      // save — so a reload restores the latest, never a stale snapshot.
+      // NEVER flush before restore settles — flushing the empty initial store
+      // on a fast navigate-away/hide is exactly what wiped real boards. Once
+      // restored, capture the CURRENT board so a reload restores the latest.
+      if (!restoreCompleteRef.current) return;
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;

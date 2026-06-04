@@ -17,6 +17,8 @@ import type {
   DifferentiationResult,
   SolutionFamiliesResult,
   MvpVariationsResult,
+  EvaluationResult,
+  EvaluationCandidate,
   RecommendationResult,
 } from "./types";
 
@@ -319,6 +321,66 @@ export function resultToCards(
       });
     }
 
+    case "evaluation": {
+      const r = result as EvaluationResult;
+      const cands: EvaluationCandidate[] = Array.isArray(r.candidates)
+        ? r.candidates.filter((c) => clean(c?.name))
+        : [];
+      const winner = clean(r.winner);
+      const ranked = cands
+        .slice()
+        .sort(
+          (a, b) =>
+            (Number(b.weighted_score) || 0) - (Number(a.weighted_score) || 0),
+        )
+        .slice(0, 3);
+      if (!cands.length && !winner) return [];
+      const criteriaSummary =
+        Array.isArray(r.criteria) && r.criteria.length
+          ? `${r.criteria.length} criteria · weights ${r.criteria
+              .slice(0, 4)
+              .map((c) => `${clean(c.name)}${Number.isFinite(Number(c.weight)) ? ` ${Math.round(Number(c.weight))}` : ""}`)
+              .filter(Boolean)
+              .join(", ")}${r.criteria.length > 4 ? ", …" : ""}`
+          : "";
+      const winnerCand = winner
+        ? cands.find(
+            (c) => clean(c.name).toLowerCase() === winner.toLowerCase(),
+          )
+        : undefined;
+      const winnerScore = winnerCand
+        ? Math.round(Number(winnerCand.weighted_score) || 0)
+        : null;
+      const rankingLine = ranked.length
+        ? `Ranked: ${ranked
+            .map(
+              (c) =>
+                `${clean(c.name)} ${Math.round(Number(c.weighted_score) || 0)}`,
+            )
+            .join(" · ")}`
+        : "";
+      const tradeoff = firstClean(r.tradeoffs);
+      const flip = firstClean(r.assumptions_that_could_reverse_decision);
+      return [
+        {
+          stage: "evaluation",
+          eyebrow: "Evaluation rubric",
+          title: winner
+            ? `${winner}${winnerScore !== null ? ` · ${winnerScore}/100` : ""}`
+            : "Rubric ranking",
+          subtitle: clean(r.why_winner_won) || clean(r.decision_context) || undefined,
+          body: bullets([
+            criteriaSummary,
+            rankingLine,
+            tradeoff && `Tradeoff: ${tradeoff}`,
+            flip && `Reverses if: ${flip}`,
+            clean(r.confidence_level) && `Rubric confidence: ${clean(r.confidence_level)}`,
+          ]),
+          layout: "spine",
+        },
+      ];
+    }
+
     case "recommendation": {
       const r = result as RecommendationResult;
       const pick = clean(r.recommendation);
@@ -493,6 +555,75 @@ export function summarizeForContext(
       return [
         names && `MVP variations: ${names}`,
         `Recommended MVP: ${clean(r.recommended_mvp)}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "evaluation": {
+      const r = result as EvaluationResult;
+      const criteriaLine = Array.isArray(r.criteria)
+        ? r.criteria
+            .map((c) =>
+              [
+                clean(c.name),
+                Number.isFinite(Number(c.weight))
+                  ? `(w ${Math.round(Number(c.weight))})`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" "),
+            )
+            .filter(Boolean)
+            .join("; ")
+        : "";
+      const ranked = (Array.isArray(r.candidates) ? r.candidates : [])
+        .slice()
+        .sort(
+          (a, b) =>
+            (Number(b.weighted_score) || 0) - (Number(a.weighted_score) || 0),
+        )
+        .slice(0, 5)
+        .map(
+          (c) =>
+            `${clean(c.name)} ${Math.round(Number(c.weighted_score) || 0)}/100`,
+        )
+        .filter((s) => !s.startsWith(" "))
+        .join(" · ");
+      const losses = (Array.isArray(r.why_others_lost) ? r.why_others_lost : [])
+        .slice(0, 3)
+        .map((l) => `${clean(l.candidate)} — ${clean(l.reason)}`)
+        .filter((s) => !s.startsWith(" — "))
+        .join(" | ");
+      const tradeoffs = (Array.isArray(r.tradeoffs) ? r.tradeoffs : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join("; ");
+      const flips = (Array.isArray(r.assumptions_that_could_reverse_decision)
+        ? r.assumptions_that_could_reverse_decision
+        : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join("; ");
+      const constraints = (Array.isArray(r.constraints_passed_downstream)
+        ? r.constraints_passed_downstream
+        : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 4)
+        .join("; ");
+      return [
+        clean(r.decision_context) && `Decision context: ${clean(r.decision_context)}`,
+        criteriaLine && `Rubric criteria: ${criteriaLine}`,
+        ranked && `Ranked candidates: ${ranked}`,
+        clean(r.winner) && `Rubric winner: ${clean(r.winner)}`,
+        clean(r.why_winner_won) && `Why winner won: ${clean(r.why_winner_won)}`,
+        losses && `Why others lost: ${losses}`,
+        tradeoffs && `Tradeoffs: ${tradeoffs}`,
+        flips && `Decision reverses if: ${flips}`,
+        constraints && `Constraints to pass downstream: ${constraints}`,
+        clean(r.confidence_level) && `Rubric confidence: ${clean(r.confidence_level)}`,
       ]
         .filter(Boolean)
         .join("\n");

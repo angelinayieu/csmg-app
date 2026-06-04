@@ -17,6 +17,7 @@ import type {
   DifferentiationResult,
   SolutionFamiliesResult,
   MvpVariationsResult,
+  EvaluationResult,
   RecommendationResult,
 } from "./types";
 
@@ -225,6 +226,59 @@ export function evaluateSpecForgeQuality(
       return finalize(engine, issues, repaired, [clean(r.recommended_mvp)].filter(Boolean));
     }
 
+    case "evaluation": {
+      const r = result as EvaluationResult;
+      const criteria = arr<{ name?: unknown; weight?: unknown }>(r.criteria);
+      const candidates = arr<{
+        name?: unknown;
+        scores?: unknown;
+        weighted_score?: unknown;
+        confidence?: unknown;
+      }>(r.candidates);
+      const totalWeight = criteria.reduce(
+        (sum, c) => sum + (Number.isFinite(Number(c.weight)) ? Number(c.weight) : 0),
+        0,
+      );
+      const criterionNames = new Set(
+        criteria.map((c) => clean(c.name)).filter(Boolean),
+      );
+      const candidatesMissingScores = candidates.filter((c) => {
+        const scores =
+          c.scores && typeof c.scores === "object"
+            ? (c.scores as Record<string, unknown>)
+            : null;
+        if (!scores) return true;
+        const scored = new Set(Object.keys(scores).filter((k) => Number.isFinite(Number(scores[k]))));
+        for (const name of criterionNames) {
+          if (!scored.has(name)) return true;
+        }
+        return false;
+      }).length;
+      add(issues, criteria.length < 6, "high", "rubric specificity", `only ${criteria.length} evaluation criteria`, "define 6–9 weighted criteria across user/problem/result/differentiation/buildability/risk");
+      add(issues, totalWeight < 70 || totalWeight > 130, "medium", "rubric calibration", `criteria weights sum to ${Math.round(totalWeight)} (target ~100)`, "rebalance weights to roughly sum to 100");
+      add(issues, candidates.length < 2, "critical", "narrowing strength", "fewer than 2 candidates scored", "score every MVP variation against the rubric");
+      add(issues, criterionNames.size > 0 && candidatesMissingScores > 0, "high", "rubric coverage", `${candidatesMissingScores} candidate(s) missing scores`, "score every candidate on every criterion");
+      add(issues, !clean(r.winner), "critical", "decision clarity", "no rubric winner", "name the highest-scoring candidate explicitly");
+      const winnerCand = clean(r.winner)
+        ? candidates.find(
+            (c) => clean(c.name).toLowerCase() === clean(r.winner).toLowerCase(),
+          )
+        : undefined;
+      add(issues, !!clean(r.winner) && !winnerCand, "high", "decision clarity", "rubric winner is not in the scored candidates list", "ensure the winner name matches one scored candidate exactly");
+      add(issues, !clean(r.why_winner_won), "high", "evidence honesty", "winner lacks rationale", "explain which weighted criteria drove the win");
+      add(issues, arr(r.why_others_lost).length < 1, "medium", "narrowing strength", "no losing rationales", "explain why each non-winner lost on at least one decisive criterion");
+      add(issues, arr(r.tradeoffs).length < 2, "medium", "uncertainty visibility", "few tradeoffs surfaced", "name tensions no candidate dominates on");
+      add(issues, arr(r.assumptions_that_could_reverse_decision).length < 2, "high", "uncertainty visibility", "few flip-the-decision assumptions", "list assumptions that would reverse the winner if false");
+      add(issues, arr(r.constraints_passed_downstream).length < 1, "medium", "downstream usefulness", "no downstream constraints", "name constraints the winner imposes on build/validation");
+      add(issues, !clean(r.confidence_level), "medium", "evidence honesty", "missing rubric confidence level", "state rubric confidence honestly (low/medium/high)");
+      return finalize(
+        engine,
+        issues,
+        repaired,
+        arr(r.constraints_passed_downstream).map(clean).filter(Boolean).slice(0, 4),
+      );
+    }
+
     case "recommendation": {
       const r = result as RecommendationResult;
       add(issues, !clean(r.recommendation), "critical", "downstream usefulness", "missing recommended first build", "name the one first build");
@@ -232,6 +286,24 @@ export function evaluateSpecForgeQuality(
       add(issues, arr(r.why_others_lost).length < 2, "medium", "constraint satisfaction", "losing options not explained", "state why alternatives lost");
       add(issues, arr(r.assumptions_to_test).length < 2, "medium", "uncertainty visibility", "few assumptions to test", "name assumptions that could reverse the decision");
       add(issues, !clean(r.next_best_action), "medium", "buildability", "missing next action", "state the immediate next validation or build action");
+      // Constraint-citation discipline (paired with the recommendation prompt
+      // update): the rationale should reference which constraints the build
+      // satisfies. Soft keyword check — matches the prompt's required language
+      // without needing the client-side accumulator state on the server.
+      const rationale = clean(r.why_this_won).toLowerCase();
+      const citesConstraints =
+        /\bconstraint(s)?\b/.test(rationale) ||
+        /\battacks?\b/.test(rationale) ||
+        /\bsatisf(y|ies)\b/.test(rationale) ||
+        /\broot[- ]?cause\b/.test(rationale);
+      add(
+        issues,
+        clean(r.why_this_won).length > 60 && !citesConstraints,
+        "medium",
+        "constraint satisfaction",
+        "rationale does not cite which constraints the winner satisfies",
+        "name at least two critical constraints the recommended build attacks or satisfies",
+      );
       return finalize(engine, issues, repaired, arr(r.assumptions_to_test).map(clean).filter(Boolean).slice(0, 3));
     }
   }

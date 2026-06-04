@@ -26,7 +26,9 @@ export type SpecForgeStage =
   | "differentiation" // differentiation thesis (indigo)
   | "families" // solution families — the diverge lead-in (bronze-gold)
   | "mvp" // top MVP variations (warm gold)
+  | "evaluation" // narrowing rubric over MVPs (slate-blue)
   | "recommendation" // recommended first build (green)
+  | "constraints" // accumulated constraint strip (warm amber)
   | "quality"; // causal quality critic / repair report (cyan)
 
 export interface StageMeta {
@@ -49,7 +51,9 @@ export const STAGE_META: Record<SpecForgeStage, StageMeta> = {
   differentiation: { label: "Differentiation", color: "#6366D6" },
   families: { label: "Solution families", color: "#A8762F" },
   mvp: { label: "MVP variation", color: "#C8923A" },
+  evaluation: { label: "Evaluation rubric", color: "#4F6B8C" },
   recommendation: { label: "Recommended first build", color: "#2FA968" },
+  constraints: { label: "Constraint accumulation", color: "#B5743B" },
   quality: { label: "Quality gate", color: "#0EA5A4" },
 };
 
@@ -64,6 +68,7 @@ export type SpecForgeEngineId =
   | "differentiation"
   | "solution_families"
   | "mvp_variations"
+  | "evaluation"
   | "recommendation";
 
 /** The chain the runner executes, in causal order (converge → diverge →
@@ -81,6 +86,7 @@ export const SPECFORGE_CHAIN: SpecForgeEngineId[] = [
   "differentiation",
   "solution_families",
   "mvp_variations",
+  "evaluation",
   "recommendation",
 ];
 
@@ -95,6 +101,7 @@ export const ENGINE_LABEL: Record<SpecForgeEngineId, string> = {
   differentiation: "Comparing the alternatives",
   solution_families: "Generating solution families",
   mvp_variations: "Shaping MVP variations",
+  evaluation: "Scoring against the rubric",
   recommendation: "Choosing the first build",
 };
 
@@ -374,6 +381,63 @@ export interface MvpVariationsResult {
   recommended_mvp: string;
 }
 
+/** Evaluation Lab / Narrowing Engine — structured rubric over MVP variations.
+ *  Sits between mvp_variations (generate) and recommendation (final pick with
+ *  build scope). Per specforge_evaluation_lab_narrowing_engine.md §5.6 (MVP App
+ *  Direction Evaluation) + §6 (standard schema), narrowed to fields that change
+ *  downstream behavior. Output gives recommendation an explicit winner-with-
+ *  rationale prior; does NOT duplicate mvp_variations.value_score (those are
+ *  generator-side gut estimates — this is a rubric pass). */
+export interface EvaluationCriterion {
+  /** Short label, e.g. "root_cause_attacked". */
+  name: string;
+  /** Weight 0–100; weights across criteria should sum to roughly 100. */
+  weight: number;
+  why_it_matters: string;
+  /** "1–5: 1 = absent · 5 = clearly demonstrated by the candidate". */
+  scoring_guidance: string;
+}
+
+export interface EvaluationCandidate {
+  name: string;
+  /** Map of criterion.name → score on the rubric's 0..5 scale. */
+  scores: Record<string, number>;
+  /** 0..100 — criterion weight × score, summed and normalized. */
+  weighted_score: number;
+  strengths: string[];
+  weaknesses: string[];
+  risks: string[];
+  /** Honest read on how much real evidence backs this candidate. */
+  evidence_strength: "low" | "medium" | "high";
+  /** 0..100 — how confident the evaluator is in this candidate's score. */
+  confidence: number;
+}
+
+export interface EvaluationLoss {
+  candidate: string;
+  reason: string;
+}
+
+export interface EvaluationResult {
+  decision_context: string;
+  criteria: EvaluationCriterion[];
+  candidates: EvaluationCandidate[];
+  /** Tensions across criteria that no single candidate dominates on. */
+  tradeoffs: string[];
+  /** Named candidate the rubric ranks highest; recommendation may confirm or
+   *  override with build-scope reasoning. */
+  winner: string;
+  why_winner_won: string;
+  why_others_lost: EvaluationLoss[];
+  /** Assumptions that, if false, would flip the winner. */
+  assumptions_that_could_reverse_decision: string[];
+  /** Evidence the engine would need to raise its confidence. */
+  evidence_needed: string[];
+  /** Constraints the winner imposes on later stages (build, validation). */
+  constraints_passed_downstream: string[];
+  confidence_level: "low" | "medium" | "high";
+}
+
 export interface RecommendationResult {
   recommendation: string;
   why_this_won: string;
@@ -394,5 +458,6 @@ export interface EngineResultMap {
   differentiation: DifferentiationResult;
   solution_families: SolutionFamiliesResult;
   mvp_variations: MvpVariationsResult;
+  evaluation: EvaluationResult;
   recommendation: RecommendationResult;
 }

@@ -217,7 +217,7 @@ export function AiSettingsBar() {
               rightHint="Deep"
             />
             <SliderRow
-              label="Complexity (questions)"
+              label="Questions for you"
               valueText={`${s.complexity}`}
               value={s.complexity}
               min={COMPLEXITY_MIN}
@@ -228,15 +228,25 @@ export function AiSettingsBar() {
               rightHint="More"
             />
             <SliderRow
-              label="Temperature"
-              valueText={s.temperature.toFixed(2)}
+              label="Creativity"
+              valueText={
+                s.temperature <= 0.2
+                  ? "Very focused"
+                  : s.temperature <= 0.45
+                    ? "Focused"
+                    : s.temperature <= 0.7
+                      ? "Balanced"
+                      : s.temperature <= 0.9
+                        ? "Creative"
+                        : "Wild"
+              }
               value={s.temperature}
               min={0}
               max={1}
               step={0.05}
               onChange={(v) => update("temperature", v)}
-              leftHint="Precise"
-              rightHint="Creative"
+              leftHint="Safe"
+              rightHint="Wild"
             />
 
             {/* Web search toggle */}

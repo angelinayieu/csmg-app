@@ -2,17 +2,34 @@
 
 // ── BoardHistoryLauncher ──────────────────────────────────────────
 //
-// Version history for the objective board. A left-edge pill opens a panel of
-// timestamped snapshots (newest first) you can restore. Snapshots are captured
-// automatically every few minutes WHEN the board changed (a dirty flag set by a
-// store listener), plus on demand via "Save version". Restore replaces the
-// current board (loadSnapshot) after a confirm. Reads/writes
-// /api/objective/[spaceId]/board/history[/snapshotId]. Self-contained.
+// Version history for the objective board. A left-edge pill opens a two-pane
+// panel: a list of timestamped snapshots (newest first) on the left + a LIVE
+// PREVIEW of the selected version's screen on the right (rendered statically
+// with <TldrawImage> using the board's custom shape utils, so cards render
+// exactly as they do on the canvas). Restore replaces the current board
+// (loadSnapshot) after a confirm.
+//
+// Snapshots are captured automatically every few minutes WHEN the board changed
+// (a dirty flag set by a store listener), plus on demand via "Save version".
+// Reads/writes /api/objective/[spaceId]/board/history[/snapshotId]. Self-contained.
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { type Editor, getSnapshot, loadSnapshot } from "tldraw";
-import { History, X, RotateCcw, Save, Loader2 } from "lucide-react";
+import {
+  Component,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import {
+  type Editor,
+  getSnapshot,
+  loadSnapshot,
+  TldrawImage,
+} from "tldraw";
+import { History, X, RotateCcw, Save, Loader2, ImageOff } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { CUSTOM_SHAPE_UTILS } from "../board-shape-utils";
 
 interface Version {
   id: string;
@@ -45,9 +62,20 @@ export function BoardHistoryLauncher({
   const [open, setOpen] = useState(false);
   const [versions, setVersions] = useState<Version[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const dirtyRef = useRef(false);
   const [refreshTick, setRefreshTick] = useState(0);
+
+  // The version being PREVIEWED. Derived default = newest, so the preview shows
+  // immediately on open without a setState-in-effect.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{
+    id: string;
+    snapshot: unknown | null;
+  } | null>(null);
+  const activeId = selectedId ?? versions?.[0]?.id ?? null;
+  const activeVersion = versions?.find((v) => v.id === activeId) ?? null;
+  const previewLoading = !!activeId && preview?.id !== activeId;
 
   // Mark dirty on any document change + auto-capture on an interval (only when
   // dirty, so an idle board doesn't pile up identical versions).
@@ -96,6 +124,24 @@ export function BoardHistoryLauncher({
     };
   }, [open, spaceId, refreshTick]);
 
+  // Fetch the active version's snapshot for the preview. setState only in the
+  // async callbacks (never synchronously in the effect body).
+  useEffect(() => {
+    if (!open || !activeId || preview?.id === activeId) return;
+    let alive = true;
+    fetch(`/api/objective/${spaceId}/board/history/${activeId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (alive) setPreview({ id: activeId, snapshot: j?.snapshot ?? null });
+      })
+      .catch(() => {
+        if (alive) setPreview({ id: activeId, snapshot: null });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, activeId, spaceId, preview?.id]);
+
   async function saveNow() {
     if (busy) return;
     setBusy(true);
@@ -119,21 +165,27 @@ export function BoardHistoryLauncher({
     if (busy) return;
     setBusy(true);
     try {
-      const r = await fetch(`/api/objective/${spaceId}/board/history/${id}`);
-      if (r.ok) {
-        const j = (await r.json()) as { snapshot: unknown };
-        if (j.snapshot) {
-          loadSnapshot(
-            editor.store,
-            j.snapshot as Parameters<typeof loadSnapshot>[1],
-          );
-        }
+      // Reuse the already-fetched preview snapshot when restoring the version
+      // we're previewing; otherwise fetch it.
+      let snap: unknown | null =
+        preview?.id === id ? preview.snapshot : null;
+      if (!snap) {
+        const r = await fetch(
+          `/api/objective/${spaceId}/board/history/${id}`,
+        );
+        if (r.ok) snap = ((await r.json()) as { snapshot: unknown }).snapshot;
+      }
+      if (snap) {
+        loadSnapshot(
+          editor.store,
+          snap as Parameters<typeof loadSnapshot>[1],
+        );
       }
     } catch {
       /* soft-fail */
     } finally {
       setBusy(false);
-      setConfirmId(null);
+      setConfirming(false);
       setOpen(false);
     }
   }
@@ -156,59 +208,211 @@ export function BoardHistoryLauncher({
   return (
     <div onPointerDown={(e) => e.stopPropagation()} style={panel}>
       <div style={panelHeader}>
-        <History style={{ width: 14, height: 14, color: appleVibe.text.secondary }} strokeWidth={2.2} />
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: appleVibe.text.primary }}>
+        <History
+          style={{ width: 14, height: 14, color: appleVibe.text.secondary }}
+          strokeWidth={2.2}
+        />
+        <span
+          style={{
+            fontSize: 12.5,
+            fontWeight: 700,
+            color: appleVibe.text.primary,
+          }}
+        >
           Version history
         </span>
-        <button type="button" title="Save version now" onClick={saveNow} disabled={busy} style={saveBtn}>
-          {busy ? <Loader2 className="animate-spin" style={{ width: 12, height: 12 }} /> : <Save style={{ width: 12, height: 12 }} strokeWidth={2.2} />}
+        <button
+          type="button"
+          title="Save version now"
+          onClick={saveNow}
+          disabled={busy}
+          style={saveBtn}
+        >
+          {busy ? (
+            <Loader2 className="animate-spin" style={{ width: 12, height: 12 }} />
+          ) : (
+            <Save style={{ width: 12, height: 12 }} strokeWidth={2.2} />
+          )}
           Save
         </button>
-        <button type="button" title="Close" onClick={() => setOpen(false)} style={iconBtn}>
+        <button
+          type="button"
+          title="Close"
+          onClick={() => setOpen(false)}
+          style={iconBtn}
+        >
           <X style={{ width: 15, height: 15 }} strokeWidth={2.2} />
         </button>
       </div>
 
-      <div style={list}>
-        {versions === null ? (
-          <div style={emptyRow}><Loader2 className="animate-spin" style={{ width: 13, height: 13 }} /> Loading…</div>
-        ) : versions.length === 0 ? (
-          <div style={{ padding: "14px 4px", fontSize: 12, lineHeight: 1.4, color: appleVibe.text.tertiary }}>
-            No versions yet — they accrue as you work, or hit Save to checkpoint now.
-          </div>
-        ) : (
-          versions.map((v) => (
-            <div key={v.id} style={row}>
-              {confirmId === v.id ? (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
-                  <span style={{ flex: 1, fontSize: 11.5, color: appleVibe.text.secondary }}>
-                    Replace current board?
-                  </span>
-                  <button type="button" onClick={() => setConfirmId(null)} style={cancelBtn}>Cancel</button>
-                  <button type="button" onClick={() => restore(v.id)} disabled={busy} style={restoreBtn}>Restore</button>
-                </div>
-              ) : (
-                <>
-                  <span style={{ minWidth: 0, flex: 1 }}>
+      <div style={body}>
+        {/* Left rail — the version list. Clicking a row previews it. */}
+        <div style={rail}>
+          {versions === null ? (
+            <div style={emptyRow}>
+              <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />{" "}
+              Loading…
+            </div>
+          ) : versions.length === 0 ? (
+            <div
+              style={{
+                padding: "14px 4px",
+                fontSize: 12,
+                lineHeight: 1.4,
+                color: appleVibe.text.tertiary,
+              }}
+            >
+              No versions yet — they accrue as you work, or hit Save to checkpoint
+              now.
+            </div>
+          ) : (
+            versions.map((v) => {
+              const active = v.id === activeId;
+              return (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedId(v.id);
+                    setConfirming(false);
+                  }}
+                  style={{
+                    ...row,
+                    background: active
+                      ? appleVibe.surface.chipHover
+                      : "transparent",
+                    boxShadow: active
+                      ? `inset 2px 0 0 ${appleVibe.accent.primary}`
+                      : "none",
+                  }}
+                >
+                  <span style={{ minWidth: 0, flex: 1, textAlign: "left" }}>
                     <span style={rowTitle}>{v.label || "Autosave"}</span>
                     <span style={rowTime}>{timeAgo(v.created_at)}</span>
                   </span>
-                  <button
-                    type="button"
-                    title="Restore this version"
-                    onClick={() => setConfirmId(v.id)}
-                    style={rowRestore}
-                  >
-                    <RotateCcw style={{ width: 12, height: 12 }} strokeWidth={2.2} />
-                  </button>
-                </>
-              )}
-            </div>
-          ))
-        )}
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        {/* Right pane — the live preview of the selected version's screen. */}
+        <div style={previewPane}>
+          <div style={previewFrame}>
+            {!activeId ? (
+              <div style={previewMsg}>Select a version to preview</div>
+            ) : previewLoading ? (
+              <div style={previewMsg}>
+                <Loader2
+                  className="animate-spin"
+                  style={{ width: 18, height: 18 }}
+                />
+              </div>
+            ) : preview?.snapshot ? (
+              <PreviewBoundary
+                key={activeId}
+                fallback={
+                  <div style={previewMsg}>
+                    <ImageOff style={{ width: 18, height: 18 }} /> Preview
+                    unavailable
+                  </div>
+                }
+              >
+                <div className="oc-version-preview">
+                  <TldrawImage
+                    snapshot={
+                      preview.snapshot as Parameters<
+                        typeof loadSnapshot
+                      >[1]
+                    }
+                    shapeUtils={CUSTOM_SHAPE_UTILS}
+                    background
+                  />
+                </div>
+              </PreviewBoundary>
+            ) : (
+              <div style={previewMsg}>
+                <ImageOff style={{ width: 18, height: 18 }} /> Preview
+                unavailable
+              </div>
+            )}
+          </div>
+
+          {/* Footer — active version meta + restore (with confirm). */}
+          <div style={previewFooter}>
+            <span style={{ minWidth: 0, flex: 1 }}>
+              <span style={rowTitle}>
+                {activeVersion?.label || "Autosave"}
+              </span>
+              <span style={rowTime}>
+                {activeVersion ? timeAgo(activeVersion.created_at) : ""}
+              </span>
+            </span>
+            {confirming ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span
+                  style={{
+                    fontSize: 11.5,
+                    color: appleVibe.text.secondary,
+                  }}
+                >
+                  Replace current board?
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setConfirming(false)}
+                  style={cancelBtn}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => activeId && restore(activeId)}
+                  disabled={busy || !activeId}
+                  style={restoreBtn}
+                >
+                  Restore
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                title="Restore this version"
+                onClick={() => setConfirming(true)}
+                disabled={!activeId || !preview?.snapshot}
+                style={{
+                  ...restoreBtn,
+                  opacity: activeId && preview?.snapshot ? 1 : 0.5,
+                }}
+              >
+                <RotateCcw style={{ width: 12, height: 12 }} strokeWidth={2.2} />
+                Restore
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
+}
+
+// ── Preview error boundary ──
+// A custom shape's static render can throw (e.g. a shape util that assumes the
+// live editor); contain it so the panel survives with a fallback.
+class PreviewBoundary extends Component<
+  { children: ReactNode; fallback: ReactNode },
+  { failed: boolean }
+> {
+  constructor(props: { children: ReactNode; fallback: ReactNode }) {
+    super(props);
+    this.state = { failed: false };
+  }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
 }
 
 // ── styles ──
@@ -231,15 +435,16 @@ const launcherPill: CSSProperties = {
   background: "var(--glass-float-bg)",
   backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
   WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-  boxShadow: "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
+  boxShadow:
+    "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
 };
 const panel: CSSProperties = {
   position: "absolute",
   top: 138,
   left: 16,
   zIndex: 93,
-  width: 300,
-  maxHeight: "min(60vh, 520px)",
+  width: "min(720px, 92vw)",
+  maxHeight: "min(70vh, 560px)",
   display: "flex",
   flexDirection: "column",
   minHeight: 0,
@@ -248,7 +453,8 @@ const panel: CSSProperties = {
   backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
   WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
   border: "1px solid var(--glass-border)",
-  boxShadow: "inset 0 1px 0 var(--glass-highlight), 0 28px 60px -24px rgba(11,18,40,0.38)",
+  boxShadow:
+    "inset 0 1px 0 var(--glass-highlight), 0 28px 60px -24px rgba(11,18,40,0.38)",
   fontFamily: appleVibe.font.stack,
 };
 const panelHeader: CSSProperties = {
@@ -257,6 +463,51 @@ const panelHeader: CSSProperties = {
   gap: 8,
   padding: "11px 11px 9px",
   borderBottom: "1px solid var(--glass-border)",
+};
+const body: CSSProperties = {
+  flex: 1,
+  display: "flex",
+  minHeight: 0,
+};
+const rail: CSSProperties = {
+  width: 210,
+  flexShrink: 0,
+  overflowY: "auto",
+  padding: "6px 8px 10px",
+  borderRight: "1px solid var(--glass-border)",
+  minHeight: 0,
+};
+const previewPane: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: "flex",
+  flexDirection: "column",
+  padding: 12,
+  gap: 10,
+};
+const previewFrame: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  borderRadius: appleVibe.radius.md,
+  border: "1px solid var(--glass-border)",
+  background: appleVibe.surface.base,
+  overflow: "hidden",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+const previewMsg: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  color: appleVibe.text.tertiary,
+  fontSize: 12,
+};
+const previewFooter: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  flexShrink: 0,
 };
 const saveBtn: CSSProperties = {
   marginLeft: "auto",
@@ -285,31 +536,38 @@ const iconBtn: CSSProperties = {
   cursor: "pointer",
   color: appleVibe.text.tertiary,
 };
-const list: CSSProperties = { flex: 1, overflowY: "auto", padding: "6px 8px 10px", minHeight: 0 };
-const emptyRow: CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "16px 4px", color: appleVibe.text.tertiary, fontSize: 12 };
+const emptyRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "16px 4px",
+  color: appleVibe.text.tertiary,
+  fontSize: 12,
+};
 const row: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
+  width: "100%",
   padding: "8px 9px",
   marginBottom: 2,
   borderRadius: appleVibe.radius.sm,
-  background: appleVibe.surface.chip,
-};
-const rowTitle: CSSProperties = { display: "block", fontSize: 12.5, fontWeight: 600, color: appleVibe.text.primary, letterSpacing: "-0.01em" };
-const rowTime: CSSProperties = { display: "block", marginTop: 1, fontSize: 11, color: appleVibe.text.faint };
-const rowRestore: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 26,
-  height: 26,
-  flexShrink: 0,
-  borderRadius: appleVibe.radius.sm,
-  border: "1px solid var(--glass-border)",
-  background: "white",
-  color: appleVibe.text.secondary,
+  border: "none",
   cursor: "pointer",
+  fontFamily: appleVibe.font.stack,
+};
+const rowTitle: CSSProperties = {
+  display: "block",
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: appleVibe.text.primary,
+  letterSpacing: "-0.01em",
+};
+const rowTime: CSSProperties = {
+  display: "block",
+  marginTop: 1,
+  fontSize: 11,
+  color: appleVibe.text.faint,
 };
 const cancelBtn: CSSProperties = {
   padding: "5px 10px",
@@ -323,7 +581,10 @@ const cancelBtn: CSSProperties = {
   fontFamily: appleVibe.font.stack,
 };
 const restoreBtn: CSSProperties = {
-  padding: "5px 11px",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "6px 12px",
   borderRadius: 999,
   border: `1px solid ${appleVibe.accent.primary}`,
   background: appleVibe.accent.primary,

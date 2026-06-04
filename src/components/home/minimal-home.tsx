@@ -11,9 +11,10 @@
 // real objective canvas. Everything else (synergy, strategy, dashboards)
 // is re-routed off the default path — reachable via /app?legacy=1.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
+import { Coins, Settings as SettingsIcon, LogOut } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { InterAxisLogo } from "@/components/brand/interaxis-logo";
@@ -63,6 +64,20 @@ export function MinimalHome({
   // composing = the user has started typing → morph onto the whiteboard.
   const [composing, setComposing] = useState(false);
 
+  // Profile dropdown (avatar → settings / credits / logout).
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!profileOpen) return;
+    function onDown(e: MouseEvent) {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+        setProfileOpen(false);
+      }
+    }
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [profileOpen]);
+
   async function logout() {
     try {
       await createClient().auth.signOut();
@@ -101,11 +116,11 @@ export function MinimalHome({
       </AnimatePresence>
 
       <div
-        className="relative mx-auto w-full max-w-[1100px] pb-20"
+        className="relative mx-auto w-full max-w-[1100px] pb-20 pt-7"
         style={{ zIndex: 2, fontFamily: appleVibe.font.stack }}
       >
         {/* ── Header ── */}
-        <header className="flex items-center justify-between py-2">
+        <header className="flex items-center justify-between py-1.5">
           <div className="flex items-center gap-2.5">
             <InterAxisLogo
               className="h-9 w-9"
@@ -120,38 +135,147 @@ export function MinimalHome({
             </span>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            {/* Credit pill */}
             <button
               type="button"
               onClick={() => router.push("/app/credits")}
-              className="text-[12px] font-medium transition-opacity hover:opacity-70"
-              style={{ color: appleVibe.text.tertiary }}
+              title="Credits & billing"
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-semibold tabular-nums transition-colors hover:brightness-[0.98]"
+              style={{
+                background: appleVibe.surface.card,
+                border: `1px solid ${appleVibe.stroke.soft}`,
+                color: appleVibe.text.secondary,
+                boxShadow: appleVibe.shadow.chip,
+              }}
             >
-              {creditBalance.toLocaleString()} credits
+              <Coins
+                style={{ width: 14, height: 14, color: appleVibe.accent.primary }}
+                strokeWidth={2.2}
+              />
+              {creditBalance.toLocaleString()}
             </button>
-            <div className="flex items-center gap-2">
-              <div
-                className="flex h-9 w-9 items-center justify-center rounded-full text-[13px] font-semibold text-white"
-                style={{ background: appleVibe.stage.features }}
+
+            {/* Profile chip → dropdown (settings / credits / logout) */}
+            <div ref={profileRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setProfileOpen((v) => !v)}
+                className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2.5 transition-colors"
+                style={{
+                  background: profileOpen ? appleVibe.surface.chip : "transparent",
+                }}
               >
-                {initial}
-              </div>
-              <div className="leading-tight">
                 <div
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-[13px] font-semibold text-white"
+                  style={{ background: appleVibe.stage.features }}
+                >
+                  {initial}
+                </div>
+                <span
                   className="text-[13px] font-semibold"
                   style={{ color: appleVibe.text.primary }}
                 >
                   {displayName}
-                </div>
-                <button
-                  type="button"
-                  onClick={logout}
-                  className="text-[11px] font-medium transition-opacity hover:opacity-70"
-                  style={{ color: appleVibe.text.faint }}
+                </span>
+              </button>
+
+              {profileOpen && (
+                <div
+                  className="absolute right-0 z-30 mt-2 w-60 overflow-hidden rounded-2xl"
+                  style={{
+                    background: appleVibe.surface.card,
+                    border: `1px solid ${appleVibe.stroke.soft}`,
+                    boxShadow:
+                      "0 18px 44px -18px rgba(11,18,40,0.30), 0 2px 8px -2px rgba(11,18,40,0.12)",
+                  }}
                 >
-                  Logout
-                </button>
-              </div>
+                  {/* identity */}
+                  <div
+                    className="flex items-center gap-2.5 px-3.5 py-3"
+                    style={{ borderBottom: `1px solid ${appleVibe.stroke.soft}` }}
+                  >
+                    <div
+                      className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-[13px] font-semibold text-white"
+                      style={{ background: appleVibe.stage.features }}
+                    >
+                      {initial}
+                    </div>
+                    <div className="min-w-0 leading-tight">
+                      <div
+                        className="truncate text-[13px] font-semibold"
+                        style={{ color: appleVibe.text.primary }}
+                      >
+                        {displayName}
+                      </div>
+                      {email && (
+                        <div
+                          className="truncate text-[11px]"
+                          style={{ color: appleVibe.text.faint }}
+                        >
+                          {email}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* actions */}
+                  <div className="p-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProfileOpen(false);
+                        router.push("/app/settings");
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-black/[0.04]"
+                      style={{ color: appleVibe.text.primary }}
+                    >
+                      <SettingsIcon
+                        style={{ width: 15, height: 15, color: appleVibe.text.tertiary }}
+                        strokeWidth={2}
+                      />
+                      Profile settings
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProfileOpen(false);
+                        router.push("/app/credits");
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-black/[0.04]"
+                      style={{ color: appleVibe.text.primary }}
+                    >
+                      <Coins
+                        style={{ width: 15, height: 15, color: appleVibe.text.tertiary }}
+                        strokeWidth={2}
+                      />
+                      Credits
+                      <span
+                        className="ml-auto tabular-nums text-[12px] font-semibold"
+                        style={{ color: appleVibe.text.tertiary }}
+                      >
+                        {creditBalance.toLocaleString()}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* logout */}
+                  <div
+                    className="p-1.5"
+                    style={{ borderTop: `1px solid ${appleVibe.stroke.soft}` }}
+                  >
+                    <button
+                      type="button"
+                      onClick={logout}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-black/[0.04]"
+                      style={{ color: "#DC2626" }}
+                    >
+                      <LogOut style={{ width: 15, height: 15 }} strokeWidth={2} />
+                      Logout
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </header>

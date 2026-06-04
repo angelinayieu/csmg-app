@@ -42,7 +42,6 @@ import { PromptSharpeningMount } from "@/components/objective/prompt-sharpening-
 import { ObjectiveImageMount } from "@/components/objective/objective-image-mount";
 import { VoiceRecordFab } from "@/components/objective/voice/voice-record-fab";
 import { AnnotationsVisibilityToggle } from "@/components/objective/annotations-visibility-toggle";
-import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 interface Props {
@@ -180,7 +179,6 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   if (!isWide) {
     return (
       <>
-        {!minimal && <HomeTabNav />}
         {children}
         {!minimal && <AnnotationsVisibilityToggle />}
       </>
@@ -207,13 +205,10 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   // disjoint regions, so they're visible side-by-side simultaneously.
   return (
     <>
-      {/* Primary tab nav lives at the layout level — a sibling ABOVE the
-          shell overlay (z-40) so it anchors to the very top of the
-          viewport instead of being trapped inside the room-window's
-          scroll/overflow/stacking context. Rendered once here; child
-          pages must NOT render their own (would double-stack). Hides
-          itself on ?embed=1. */}
-      {!minimal && <HomeTabNav />}
+      {/* The old "Objective Canvas / Synergy / Strategy Lab" top tab nav is
+          retired — the objective canvas is now just the clean board (see
+          project_old_build_deprecation). Home + account live on the board
+          chrome itself (Home pill + BoardSettingsLauncher). */}
 
       {/* The whiteboard floor + room-window live HERE, at the layout
           level — so EVERY route under the objective (main canvas,

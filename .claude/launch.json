@@ -9,6 +9,14 @@
       "env": { "PATH": "/usr/local/bin:/usr/bin:/bin" },
       "port": 3000,
       "autoPort": false
+    },
+    {
+      "name": "static-public",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8201"],
+      "cwd": "/Users/angelina/Desktop/interaxis kg build v1/public",
+      "port": 8201,
+      "autoPort": false
     }
   ]
 }

@@ -25,6 +25,7 @@ import {
   type SpecForgeCard,
   type SpecForgeEngineId,
   type PowerUpResult,
+  type RecommendationResult,
 } from "@/lib/objective-canvas/specforge/types";
 import {
   resultToCards,
@@ -39,6 +40,13 @@ import {
   qualityReportToCard,
   type QualityCriticResult,
 } from "@/lib/objective-canvas/specforge/quality-critic";
+import {
+  type Constraint,
+  constraintAccumulationToCard,
+  dedupeConstraints,
+  extractConstraintsFromEngineResult,
+  summarizeConstraintsForContext,
+} from "@/lib/objective-canvas/specforge/constraints";
 
 export interface SpecForgeProgress {
   phase: "running" | "done" | "error";
@@ -63,6 +71,7 @@ const ENGINE_TIMEOUT_MS = 45_000;
 type SpecForgeArtifactId =
   | SpecForgeEngineId
   | "depth_selection"
+  | "constraint_accumulation"
   | "quality_critic";
 
 /** Estimate a card's height from its content so the spine packs tightly but
@@ -154,6 +163,11 @@ export async function runSpecForge(
   // dependency graph (sequence → fork → converge) once the chain finishes.
   const allPlaced: PlacedCard[] = [];
   const critics: QualityCriticResult[] = [];
+  // Constraint Accumulation: extract from each engine result as it returns,
+  // thread the rolled-up strip into downstream prompts (Evaluation +
+  // Recommendation consume it). One final card before the Quality Gate.
+  let constraints: Constraint[] = [];
+  let recommendationResult: RecommendationResult | null = null;
 
   opts.onProgress?.({
     phase: "running",
@@ -171,7 +185,14 @@ export async function runSpecForge(
       label: ENGINE_LABEL[engine],
     });
 
-    const response = await fetchEngine(engine, idea, contextParts.join("\n\n"));
+    // Prepend the accumulated constraint strip so this engine sees the
+    // criticals + highs in its context. Evaluation + Recommendation prompts
+    // are tuned to consume this block.
+    const constraintStrip = summarizeConstraintsForContext(constraints);
+    const threaded = constraintStrip
+      ? [`[constraints]\n${constraintStrip}`, ...contextParts].join("\n\n")
+      : contextParts.join("\n\n");
+    const response = await fetchEngine(engine, idea, threaded);
     if (response) {
       if (response.critic) critics.push(response.critic);
       const summary = summarizeForContext(engine, response.result);
@@ -183,6 +204,21 @@ export async function runSpecForge(
         cursorY = batch.cursorY;
         allPlaced.push(...batch.placed);
         createdAny = true;
+      }
+
+      // Capture the recommendation for the constraint alignment check.
+      if (engine === "recommendation") {
+        recommendationResult = response.result as RecommendationResult;
+      }
+
+      // Constraint Accumulation — deterministic extraction from this
+      // engine's output (no LLM). Dedupes against the running set.
+      const newConstraints = extractConstraintsFromEngineResult(
+        engine,
+        response.result,
+      );
+      if (newConstraints.length) {
+        constraints = dedupeConstraints([...constraints, ...newConstraints]);
       }
 
       if (engine === "power_up" && response.result && typeof response.result === "object") {
@@ -204,6 +240,24 @@ export async function runSpecForge(
         createdAny = true;
       }
     }
+  }
+
+  const constraintCard = constraintAccumulationToCard(
+    constraints,
+    recommendationResult,
+  );
+  if (constraintCard) {
+    const batch = placeBatch(
+      editor,
+      [constraintCard],
+      "constraint_accumulation",
+      anchorMidX,
+      cursorY,
+      stamp,
+    );
+    cursorY = batch.cursorY;
+    allPlaced.push(...batch.placed);
+    createdAny = true;
   }
 
   const qualityCard = qualityReportToCard(critics);

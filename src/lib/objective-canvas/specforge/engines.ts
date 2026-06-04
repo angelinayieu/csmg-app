@@ -464,16 +464,119 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
     },
   },
 
-  // ── 9 · Evaluation Engine → recommended first build (§18) ──
+  // ── 9 · Evaluation Lab / Narrowing Engine
+  //  (specforge_evaluation_lab_narrowing_engine.md §5.6 + §6) ──
+  // Sits between mvp_variations (generate) and recommendation (pick + build
+  // scope). Forces an EXPLICIT rubric — weighted criteria, per-candidate
+  // scores 1–5, tradeoffs, honest assumptions that could flip the winner — so
+  // recommendation no longer picks on vibes. Does NOT duplicate
+  // mvp_variations.value_score (those are generator-side gut estimates) and
+  // does NOT produce a build-scope plan (that's recommendation's job).
+  evaluation: {
+    temperature: 0.3,
+    maxTokens: 3200,
+    system:
+      "You are the SpecForge Evaluation Lab / Narrowing Engine. You are NOT " +
+      "generating ideas — every candidate is already in mvp_variations. You are " +
+      "running a rubric. Define 6–9 evaluation criteria with explicit weights " +
+      "(weights should roughly sum to 100) and 1–5 scoring guidance. Use the " +
+      "MVP App Direction criteria from the spec: target_user_fit, " +
+      "root_cause_attacked, desired_result_enabled, complete_product_loop, " +
+      "speed_to_value, differentiation, buildability, downstream_leverage, " +
+      "risk_acceptable, evidence_strength. Adapt phrasing to the idea but keep " +
+      "the spirit. For every MVP variation, score it 1–5 on EVERY criterion you " +
+      "defined (each score must appear in the candidate's scores map keyed by " +
+      "criterion.name), compute a 0–100 weighted_score, and call out strengths, " +
+      "weaknesses, risks, an evidence_strength (low/medium/high), and a " +
+      "confidence 0–100. Name tradeoffs that no candidate dominates on. Name a " +
+      "winner from the candidates list — recommendation will confirm or override " +
+      "with build-scope reasoning. Explain why the winner won and why each other " +
+      "candidate lost. List assumptions that, if false, would flip the winner. " +
+      "List the evidence that would raise your confidence. List constraints the " +
+      "winner imposes on later stages. Do NOT re-rank by mvp_variations." +
+      "value_score and do NOT invent new candidates. " +
+      "IF an '[constraints]' block appears in your context, treat each CRITICAL " +
+      "constraint as a hard filter (a candidate that violates it cannot win) " +
+      "and each HIGH constraint as a heavily-weighted criterion — your " +
+      "criteria list should reflect them by name. Add violating candidates' " +
+      "constraint violations into their weaknesses." +
+      SHARED_TAIL,
+    schema: {
+      name: "specforge_evaluation",
+      schema: obj({
+        decision_context: str,
+        criteria: arr(
+          obj({
+            name: str,
+            weight: num,
+            why_it_matters: str,
+            scoring_guidance: str,
+          }),
+        ),
+        candidates: arr(
+          obj({
+            name: str,
+            scores: {
+              type: "object",
+              additionalProperties: { type: "number" },
+            },
+            weighted_score: num,
+            strengths: strArr,
+            weaknesses: strArr,
+            risks: strArr,
+            evidence_strength: {
+              type: "string",
+              enum: ["low", "medium", "high"],
+            },
+            confidence: num,
+          }),
+        ),
+        tradeoffs: strArr,
+        winner: str,
+        why_winner_won: str,
+        why_others_lost: arr(
+          obj({
+            candidate: str,
+            reason: str,
+          }),
+        ),
+        assumptions_that_could_reverse_decision: strArr,
+        evidence_needed: strArr,
+        constraints_passed_downstream: strArr,
+        confidence_level: {
+          type: "string",
+          enum: ["low", "medium", "high"],
+        },
+      }),
+    },
+  },
+
+  // ── 10 · Recommendation / First Build (§18) ──
+  // Consumes the Evaluation Lab rubric as a prior — the winner, the weighted
+  // candidate scores, tradeoffs, and assumptions are already explicit, so this
+  // engine focuses on BUILD SCOPE: confirm or override with reasoning, state
+  // what to build first, what to delay, and what to validate next.
   recommendation: {
     temperature: 0.3,
     system:
-      "You are the SpecForge Evaluation Engine. Choose the single recommended " +
-      "FIRST BUILD from the MVP variations, judged on root-cause alignment, " +
-      "target-user fit, desired-result fit, differentiation, speed-to-value, " +
-      "buildability, and risk. Do not score on vibes — explain the causal and " +
-      "differentiation basis for why this one won and the others lost. Name the " +
-      "riskiest assumptions to test first and the immediate next best action." +
+      "You are the SpecForge Recommendation Engine. The Evaluation Lab has " +
+      "ALREADY produced a structured rubric over the MVP variations: weighted " +
+      "criteria, per-candidate scores, a named winner, tradeoffs, and " +
+      "assumptions that could reverse the decision. Treat the rubric winner as " +
+      "a strong prior. If you override it, state explicitly which criterion or " +
+      "assumption justifies the override — do not override on vibes. Choose the " +
+      "single recommended FIRST BUILD, judged on root-cause alignment, target-" +
+      "user fit, desired-result fit, differentiation, speed-to-value, " +
+      "buildability, and risk. Explain why this one won (referencing the rubric " +
+      "score and decisive criteria) and why the others lost. Name the riskiest " +
+      "assumptions to test first (lift these from " +
+      "assumptions_that_could_reverse_decision) and the immediate next best " +
+      "action. Do NOT redo the rubric. " +
+      "IF an '[constraints]' block appears in your context, your why_this_won " +
+      "MUST explicitly cite at least two of the CRITICAL constraints the build " +
+      "satisfies (e.g. \"attacks root constraint X; satisfies target-user " +
+      "constraint Y\"). A recommendation that doesn't reference the critical " +
+      "constraints will be flagged as unverified by the constraint accumulator." +
       SHARED_TAIL,
     schema: {
       name: "specforge_recommendation",
