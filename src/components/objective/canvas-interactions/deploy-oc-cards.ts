@@ -1,19 +1,26 @@
 // ── Deploy decomposed Feature/Variable cards onto the board ──
 //
 // Takes the output of /api/objective/[spaceId]/decompose-cards and lays it
-// out as oc-card shapes: features in a left column, variables in a right
-// column, with calm dashed arrows for their connections. Decoupled from the
-// board internals via DECOMPOSE_INTO_CARDS_EVENT so any trigger (button,
-// command palette, card action) can request a decompose.
+// out as a SYSTEMS graph: subsystems = horizontal swimlanes, causal depth =
+// left→right columns, dependencies = DIRECTED arrows. Replaces the old
+// "features in a left column, variables in a right column, undirected dashed
+// lines" placer, which produced crossing spaghetti that showed neither
+// direction nor grouping. The layout math lives in layout-systems-graph;
+// this module just materializes it as tldraw shapes.
+//
+// Decoupled from the board internals via DECOMPOSE_INTO_CARDS_EVENT so any
+// trigger (button, command palette, card action) can request a decompose.
 
 import {
   createShapeId,
+  toRichText,
   type Editor,
   type TLArrowShape,
   type TLShapeId,
   type TLShapePartial,
 } from "tldraw";
 import type { OcCardShape, OcCardKind } from "../shapes/oc-card-shape";
+import { layoutSystemsGraph } from "@/lib/objective-canvas/layout-systems-graph";
 
 /** Fire to ask the board to decompose the current objective into cards. */
 export const DECOMPOSE_INTO_CARDS_EVENT = "objective-board:decompose-into-cards";
@@ -30,23 +37,21 @@ export interface DeployCard {
   kind: OcCardKind;
   name: string;
   body: string;
+  /** Cohesive cluster → its swimlane. Defaults to "Core" when absent. */
+  subsystem?: string;
 }
 export interface DeployLink {
   fromObjectId: string;
   toObjectId: string;
+  /** "feeds" → from drives to; "depends_on" → from needs to (flow reversed). */
   relation: string;
 }
 
 const CARD_W = 248;
-// Spawn height fits the card's clamped face (2-line name + 3-line body +
-// footer) so nothing is cropped on spawn, and the row pitch leaves slack for
-// the shape's useAutoFitHeight to grow a touch without overlapping the next
-// row. Keep in sync with OcCardShapeUtil.getDefaultProps.
 const CARD_H = 176;
-const GAP_Y = 26;
-const COL_GAP = 220;
 
-/** Lay out the cards, wire their connections, frame the result. Returns the
+/** Lay the cards out as a swimlane × causal-layer systems graph, wire their
+ *  directed connections, label the lanes, frame the result. Returns the
  *  created card shape ids. */
 export function deployOcCards(
   editor: Editor,
@@ -54,14 +59,28 @@ export function deployOcCards(
   links: DeployLink[],
 ): TLShapeId[] {
   if (cards.length === 0) return [];
-  const features = cards.filter((c) => c.kind === "feature");
-  const variables = cards.filter((c) => c.kind === "variable");
-  const vp = editor.getViewportPageBounds();
-  const idByObject = new Map<string, TLShapeId>();
-  const created: TLShapeId[] = [];
 
-  // Anchor the cluster BELOW the objective + sharpening cards so it reads as
-  // a downstream layer instead of piling on top of them (the overlap bug).
+  // ── Causal direction. "feeds" flows from→to (a feature drives a variable);
+  //    "depends_on" flows to→from (the variable is an input the feature
+  //    needs). Normalizing here means every edge points downstream, so the
+  //    layering + arrows read strictly left→right. ──
+  const edges = links
+    .map((l) =>
+      l.relation === "depends_on"
+        ? { from: l.toObjectId, to: l.fromObjectId }
+        : { from: l.fromObjectId, to: l.toObjectId },
+    )
+    .filter((e) => e.from !== e.to);
+
+  const layout = layoutSystemsGraph(
+    cards.map((c) => ({ id: c.objectId, subsystem: c.subsystem || "Core" })),
+    edges,
+    { cardW: CARD_W, cardH: CARD_H, startX: 0, startY: 0 },
+  );
+
+  // Anchor the cluster horizontally centered, BELOW the objective + sharpening
+  // cards so it reads as a downstream layer (not piling on top of them).
+  const vp = editor.getViewportPageBounds();
   const existingBottoms = editor
     .getCurrentPageShapes()
     .filter(
@@ -72,45 +91,67 @@ export function deployOcCards(
     )
     .map((s) => editor.getShapePageBounds(s.id)?.maxY)
     .filter((v): v is number => typeof v === "number");
-  const startY =
-    existingBottoms.length > 0
-      ? Math.max(...existingBottoms) + 96
-      : vp.center.y;
+  const anchorX = vp.center.x - layout.sinkX / 2;
+  const anchorY =
+    existingBottoms.length > 0 ? Math.max(...existingBottoms) + 110 : vp.center.y;
 
-  const placeColumn = (list: DeployCard[], x: number) => {
-    // Both columns top-align at startY (below the upstream cards) so the
-    // feature→variable links read cleanly in their own downstream band.
-    let y = startY;
-    for (const c of list) {
-      const id = createShapeId();
-      idByObject.set(c.objectId, id);
-      created.push(id);
-      editor.createShape<OcCardShape>({
-        id,
-        type: "oc-card",
-        x,
-        y,
-        props: {
-          w: CARD_W,
-          h: CARD_H,
-          kind: c.kind,
-          name: c.name,
-          body: c.body,
-          objectId: c.objectId,
-          metaCount: 0,
-        },
-      });
-      y += CARD_H + GAP_Y;
-    }
-  };
+  const idByObject = new Map<string, TLShapeId>();
+  const cardIds: TLShapeId[] = [];
+  const allCreated: TLShapeId[] = [];
 
-  placeColumn(features, vp.center.x - CARD_W - COL_GAP / 2);
-  placeColumn(variables, vp.center.x + COL_GAP / 2);
+  // ── Quiet swimlane labels (no boxes — a soft label + whitespace keep it
+  //    minimal while making the subsystem grouping legible). ──
+  for (const lane of layout.lanes) {
+    const labelId = createShapeId();
+    editor.createShape({
+      id: labelId,
+      type: "text",
+      x: anchorX - 8,
+      y: anchorY + lane.top - 34,
+      props: {
+        richText: toRichText(lane.subsystem),
+        size: "s",
+        color: "grey",
+        font: "sans",
+        textAlign: "start",
+        autoSize: true,
+        scale: 1,
+      },
+      meta: { ocLaneLabel: true },
+    });
+    allCreated.push(labelId);
+  }
 
-  // Connections — calm dashed arrows (feature → variable).
-  for (const l of links) {
-    const a = idByObject.get(l.fromObjectId);
-    const b = idByObject.get(l.toObjectId);
+  // ── Feature / Variable oc-cards at their swimlane × layer position. ──
+  for (const c of cards) {
+    const p = layout.pos.get(c.objectId);
+    if (!p) continue;
+    const id = createShapeId();
+    idByObject.set(c.objectId, id);
+    cardIds.push(id);
+    allCreated.push(id);
+    editor.createShape<OcCardShape>({
+      id,
+      type: "oc-card",
+      x: anchorX + p.x,
+      y: anchorY + p.y,
+      props: {
+        w: CARD_W,
+        h: CARD_H,
+        kind: c.kind,
+        name: c.name,
+        body: c.body,
+        objectId: c.objectId,
+        metaCount: 0,
+      },
+    });
+  }
+
+  // ── Directed dependency arrows — clean, solid, small arrowhead; bound
+  //    source-right → target-left so direction reads as the left→right flow. ──
+  for (const e of edges) {
+    const a = idByObject.get(e.from);
+    const b = idByObject.get(e.to);
     if (!a || !b) continue;
     const arrowId = createShapeId();
     const arrow: TLShapePartial<TLArrowShape> = {
@@ -119,18 +160,15 @@ export function deployOcCards(
       props: {
         color: "grey",
         size: "s",
-        dash: "dashed",
-        // Clean connector — no arrowheads + a soft curve, matching the
-        // sharpening connectors. Bound feature right-edge → variable
-        // left-edge so links read as a tidy left→right flow, not a
-        // center-to-center criss-cross.
+        dash: "solid",
         arrowheadStart: "none",
-        arrowheadEnd: "none",
-        bend: 26,
+        arrowheadEnd: "arrow",
+        bend: 0,
       },
       meta: { ocLink: true },
     };
     editor.createShapes([arrow]);
+    allCreated.push(arrowId);
     editor.createBindings([
       {
         fromId: arrowId,
@@ -159,10 +197,10 @@ export function deployOcCards(
     ]);
   }
 
-  if (created.length > 0) {
-    editor.select(...created);
+  if (allCreated.length > 0) {
+    editor.select(...allCreated);
     editor.zoomToSelection({ animation: { duration: 300 } });
     editor.selectNone();
   }
-  return created;
+  return cardIds;
 }
