@@ -46,6 +46,7 @@ const SYSTEM = `You decompose a user's objective into the concrete building bloc
 - FEATURE — a concrete capability or action the plan will build or do. Name it DIRECTLY by its utility: simple, clear, no metaphors, no buzzwords (e.g. "Daily check-in reminder", NOT "Engagement catalyst"). Give a sharp, information-dense 1-2 sentence description of what it does.
 - VARIABLE — a measurable concept the objective turns on (a quantity, factor, or condition). Name it plainly (e.g. "Posting friction", "Sleep quality"). Give a sharp 1-sentence definition.
 Then CONNECT them with links: a feature "feeds" a variable it moves/improves, and "depends_on" a variable it needs.
+Also GROUP everything into 2-4 cohesive SUBSYSTEMS — clusters of features plus the variables they act on that form one functional part of the plan. Give each a short Title Case name (<= 3 words, e.g. "Onboarding", "Content Engine", "Retention Loop"). Assign EVERY feature and variable a "subsystem" equal to one of those names.
 Rules: 4-7 features, 3-6 variables. Names <= 6 words, Title Case, no trailing period. Be concrete and specific to THIS objective — never generic. "from"/"to" in links MUST reference the exact slug values you assign.`;
 
 const SCHEMA: { name: string; schema: Record<string, unknown> } = {
@@ -63,8 +64,9 @@ const SCHEMA: { name: string; schema: Record<string, unknown> } = {
             slug: { type: "string" },
             name: { type: "string" },
             description: { type: "string" },
+            subsystem: { type: "string" },
           },
-          required: ["slug", "name", "description"],
+          required: ["slug", "name", "description", "subsystem"],
         },
       },
       variables: {
@@ -76,8 +78,9 @@ const SCHEMA: { name: string; schema: Record<string, unknown> } = {
             slug: { type: "string" },
             name: { type: "string" },
             definition: { type: "string" },
+            subsystem: { type: "string" },
           },
-          required: ["slug", "name", "definition"],
+          required: ["slug", "name", "definition", "subsystem"],
         },
       },
       links: {
@@ -103,6 +106,7 @@ interface RawCard {
   name?: unknown;
   description?: unknown;
   definition?: unknown;
+  subsystem?: unknown;
 }
 interface RawLink {
   from?: unknown;
@@ -176,12 +180,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     kind: "feature" | "variable";
     name: string;
     body: string;
+    subsystem: string;
   }> = [];
 
   async function makeCard(kind: "feature" | "variable", raw: RawCard) {
     const name = (typeof raw.name === "string" ? raw.name : "").trim().slice(0, 80) || "Untitled";
     const bodyRaw = kind === "feature" ? raw.description : raw.definition;
     const body = (typeof bodyRaw === "string" ? bodyRaw : "").trim().slice(0, 400);
+    const subsystem =
+      (typeof raw.subsystem === "string" ? raw.subsystem : "").trim().slice(0, 40) || "Core";
     const slug = slugify(typeof raw.slug === "string" && raw.slug ? raw.slug : name);
     const objectId = await upsertLibraryObject(db, {
       spaceId,
@@ -194,7 +201,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       cardFace: { name, body, from_updated_at: now },
     });
     if (!objectId) return;
-    cards.push({ objectId, kind, name, body });
+    cards.push({ objectId, kind, name, body, subsystem });
     // Index under both the assigned slug and the name so LLM link refs resolve.
     byRef.set(norm(raw.slug), { objectId });
     byRef.set(norm(name), { objectId });
