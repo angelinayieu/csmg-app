@@ -215,13 +215,19 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
       {/* ── Template gallery (scroll-snap rail) ── */}
       <section className="relative w-full px-6 pb-3">
         <div className="relative mx-auto max-w-[1180px] pb-5">
-          {/* Grey tray — a BACKGROUND layer that starts below the rail's top,
-              so a hovered card lifts up out of it instead of being clipped by
-              the horizontal scroller's overflow. */}
+          {/* Whiteboard base — a dot-grid surface (matches the app's tldraw
+              canvas) that starts below the rail's top, so a hovered card lifts
+              up out of it instead of being clipped by the scroller's overflow. */}
           <div
             aria-hidden
             className="absolute inset-x-0 bottom-0 rounded-[32px]"
-            style={{ top: 40, background: "#EEF0F3" }}
+            style={{
+              top: 40,
+              backgroundColor: "#F2F4F7",
+              backgroundImage:
+                "radial-gradient(rgba(15,23,42,0.085) 1.1px, transparent 1.1px)",
+              backgroundSize: "22px 22px",
+            }}
           />
 
           {/* Edge-fade mask so cards dissolve into the tray at both ends. */}
