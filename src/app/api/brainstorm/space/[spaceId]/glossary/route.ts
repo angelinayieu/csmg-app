@@ -194,13 +194,33 @@ export async function POST(_req: NextRequest, ctx: RouteContext) {
     })
     .filter((e) => e.name.length > 0 && e.definition.trim().length > 0);
 
+  // ── Library objects (the NEW object layer — feature/variable cards from
+  //    decompose-cards) seed the glossary directly: title → term, summary →
+  //    definition, object_type → layer_tag. This is how the generated cards
+  //    contribute now that the entity/room path is deprecated. ──
+  const { data: objs } = await db
+    .from("library_objects")
+    .select("title, summary, object_type")
+    .eq("space_id", spaceId);
+  const objectSeeds: AnnotationSeed[] = (
+    (objs ?? []) as Array<{ title?: unknown; summary?: unknown; object_type?: unknown }>
+  )
+    .map((o) => ({
+      phrase: typeof o.title === "string" ? o.title : "",
+      reading: typeof o.summary === "string" ? o.summary : "",
+      layer_tag: typeof o.object_type === "string" ? o.object_type : null,
+      weight: 3,
+    }))
+    .filter((s) => s.phrase.trim().length > 0 && s.reading.trim().length > 0);
+
   if (
     !coreObjectiveText &&
     entityNames.length === 0 &&
-    annotationSeeds.length === 0
+    annotationSeeds.length === 0 &&
+    objectSeeds.length === 0
   ) {
     return NextResponse.json(
-      { error: "Nothing to build a glossary from yet — generate some rooms first." },
+      { error: "Nothing to build a glossary from yet — add objects or an objective first." },
       { status: 409 },
     );
   }
@@ -213,7 +233,7 @@ export async function POST(_req: NextRequest, ctx: RouteContext) {
     subObjectiveTitles,
     entityNames,
     entityDefinitions,
-    annotations: annotationSeeds,
+    annotations: [...annotationSeeds, ...objectSeeds],
     existing: readGlossary(space.synthesis_data),
   });
 

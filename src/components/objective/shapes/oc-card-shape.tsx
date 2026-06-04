@@ -10,7 +10,7 @@
 //                definition.
 //
 // The face shows ONLY the concrete summary (name + body). The rich
-// metadata library + knowledge graph live behind a double-click, which
+// metadata library + knowledge graph live behind a single click, which
 // fires OPEN_CARD_DETAIL_EVENT (the board opens the expand drawer). The
 // name/body are AI-refined from the card's metadata server-side and
 // written back onto these props.
@@ -20,17 +20,21 @@
 // capital-grey eyebrow. Name is the bold near-black focal line; the body
 // is smaller + lighter. Self-contained (no app context).
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
   T,
+  stopEventPropagation,
+  useEditor,
   type RecordProps,
   type TLBaseShape,
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
+import { Heart } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { useAutoFitHeight } from "@/components/objective/canvas-interactions/use-auto-fit-height";
 
 export type OcCardKind = "feature" | "variable";
 
@@ -51,7 +55,7 @@ export type OcCardShape = TLBaseShape<
   }
 >;
 
-/** Fired on double-click — the board opens the card's expand drawer
+/** Fired on click — the board opens the card's expand drawer
  *  (metadata → categorized gallery → knowledge graph). */
 export const OPEN_CARD_DETAIL_EVENT = "objective-board:open-card-detail";
 
@@ -97,9 +101,12 @@ export class OcCardShapeUtil extends BaseBoxShapeUtil<OcCardShape> {
     return resizeBox(shape, info);
   };
 
-  // Double-click opens the metadata/KG drawer (single-click stays selection,
-  // which Connect / Synthesize / Converge rely on).
-  override onDoubleClick = (shape: OcCardShape) => {
+  // Single-click opens the metadata/KG drawer — smooth, no double-click (which
+  // raced tldraw's edit and felt unreliable). A modifier-click (shift / ctrl /
+  // alt) is left for multi-select so Connect / Synthesize / Converge still work.
+  override onClick = (shape: OcCardShape) => {
+    const i = this.editor.inputs;
+    if (i.shiftKey || i.ctrlKey || i.altKey) return;
     openCardDetail({
       objectId: shape.props.objectId,
       shapeId: shape.id,
@@ -111,7 +118,9 @@ export class OcCardShapeUtil extends BaseBoxShapeUtil<OcCardShape> {
   getDefaultProps(): OcCardShape["props"] {
     return {
       w: 248,
-      h: 132,
+      // Fits the clamped face (2-line name + 3-line body + footer) so the card
+      // never spawns cropped; useAutoFitHeight grows it further if needed.
+      h: 176,
       kind: "feature",
       name: "Untitled",
       body: "",
@@ -130,15 +139,60 @@ export class OcCardShapeUtil extends BaseBoxShapeUtil<OcCardShape> {
 }
 
 function OcCardRenderer({ shape }: { shape: OcCardShape }) {
-  const { kind, name, body, metaCount } = shape.props;
+  const { kind, name, body, metaCount, objectId } = shape.props;
   const accent = ACCENT[kind];
   const [hovered, setHovered] = useState(false);
+
+  // No-crop on spawn: grow the card to fit its rendered face so the name/body
+  // are never clipped. The standardized board-card rule (see useAutoFitHeight),
+  // same as the prompt-sharpening card.
+  const editor = useEditor();
+  const contentRef = useRef<HTMLDivElement>(null);
+  useAutoFitHeight(editor, shape.id, "oc-card", shape.props.h, contentRef, [
+    kind,
+    name,
+    body,
+    shape.props.w,
+  ]);
+
+  // Favorite (meta.favorited) — surfaces the card in the FavoritesSidebar and
+  // weights it higher in the objective node's contents. For a card with a
+  // backing library object it ALSO flags included_in_spec so the favorite
+  // carries real weight into the build spec.
+  const favorited = !!(shape.meta as { favorited?: boolean })?.favorited;
+  function toggleFavorite(e: React.MouseEvent) {
+    e.stopPropagation();
+    const next = !favorited;
+    editor.updateShape({
+      id: shape.id,
+      type: "oc-card",
+      meta: { ...shape.meta, favorited: next },
+    });
+    if (objectId) {
+      // spaceId isn't on the shape props — read it from the board URL.
+      const m =
+        typeof window !== "undefined"
+          ? window.location.pathname.match(/\/objective\/([^/?#]+)/)
+          : null;
+      const spaceId = m?.[1];
+      if (spaceId) {
+        void fetch(`/api/brainstorm/space/${spaceId}/library/objects`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "include", objectId, included: next }),
+        }).catch(() => {
+          /* best-effort — the board meta is the source of truth for the heart */
+        });
+      }
+    }
+  }
 
   return (
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
     >
       <div
+        ref={contentRef}
         onPointerEnter={() => setHovered(true)}
         onPointerLeave={() => setHovered(false)}
         style={{
@@ -179,6 +233,40 @@ function OcCardRenderer({ shape }: { shape: OcCardShape }) {
           >
             {KIND_WORD[kind]}
           </span>
+          <button
+            type="button"
+            onPointerDown={stopEventPropagation}
+            onClick={toggleFavorite}
+            aria-label={favorited ? "Unfavorite" : "Favorite"}
+            title={
+              favorited ? "Remove weight" : "Favorite — weights the build spec"
+            }
+            style={{
+              marginLeft: "auto",
+              display: "inline-grid",
+              placeItems: "center",
+              width: 22,
+              height: 22,
+              borderRadius: 999,
+              border: "none",
+              background: favorited
+                ? "rgba(244,63,94,0.10)"
+                : "rgba(15,23,42,0.04)",
+              cursor: "pointer",
+              opacity: favorited || hovered ? 1 : 0.5,
+              transition: "opacity 160ms ease-out",
+            }}
+          >
+            <Heart
+              style={{
+                width: 13,
+                height: 13,
+                color: favorited ? "#F43F5E" : appleVibe.text.faint,
+              }}
+              fill={favorited ? "#F43F5E" : "none"}
+              strokeWidth={2.2}
+            />
+          </button>
         </div>
 
         {/* Name — the bold near-black focal line. */}
@@ -218,20 +306,58 @@ function OcCardRenderer({ shape }: { shape: OcCardShape }) {
           </div>
         )}
 
-        {/* Metadata footer — only when there's something attached. */}
-        {metaCount > 0 && (
-          <div
+        {/* Footer — a quiet "Open" affordance signalling the card opens. The
+            whole card opens on a single click (ShapeUtil.onClick); a
+            modifier-click (shift / ctrl) stays selection for Connect /
+            Synthesize / Converge. */}
+        <div
+          style={{
+            marginTop: "auto",
+            paddingTop: 10,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+          }}
+        >
+          {metaCount > 0 ? (
+            <span
+              style={{
+                fontSize: 10.5,
+                fontWeight: 500,
+                color: appleVibe.text.faint,
+              }}
+            >
+              {metaCount} in library
+            </span>
+          ) : (
+            <span />
+          )}
+          <button
+            type="button"
+            onPointerDown={stopEventPropagation}
+            onClick={(e) => {
+              e.stopPropagation();
+              openCardDetail({ objectId, shapeId: shape.id, kind, name });
+            }}
             style={{
-              marginTop: "auto",
-              paddingTop: 10,
-              fontSize: 10.5,
-              fontWeight: 500,
-              color: appleVibe.text.faint,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 3,
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 600,
+              color: accent,
+              padding: 0,
+              opacity: hovered ? 1 : 0.65,
+              transition: "opacity 160ms ease-out",
             }}
           >
-            {metaCount} in library
-          </div>
-        )}
+            Open ↗
+          </button>
+        </div>
       </div>
     </HTMLContainer>
   );

@@ -26,6 +26,7 @@ import { stashPendingIntake } from "@/components/landing/pending-intake";
 import { AuthModal } from "@/components/auth/auth-modal";
 import { StarburstSVG } from "@/components/landing/starburst-svg";
 import { CardGlyph } from "@/components/landing/card-glyph";
+import { CardDecomposition } from "@/components/landing/card-decomposition";
 import { InterAxisLogo } from "@/components/brand/interaxis-logo";
 
 // 3D hero node — code-split off the initial bundle (three.js is heavy) and
@@ -144,17 +145,22 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
         </div>
 
         <nav className="flex items-center gap-6 pt-1 sm:gap-7">
-          {NAV.map((item) => (
-            <a
-              key={item}
-              href="#"
-              onClick={(e) => e.preventDefault()}
-              className="text-[15px] font-medium underline decoration-1 underline-offset-[5px] transition-opacity hover:opacity-60"
-              style={{ color: INK }}
-            >
-              {item}
-            </a>
-          ))}
+          {NAV.map((item) => {
+            // "Plans" routes to the public pricing page; the rest stay
+            // as stubs until their destinations exist.
+            const isPlans = item === "Plans";
+            return (
+              <a
+                key={item}
+                href={isPlans ? "/pricing" : "#"}
+                onClick={isPlans ? undefined : (e) => e.preventDefault()}
+                className="text-[15px] font-medium underline decoration-1 underline-offset-[5px] transition-opacity hover:opacity-60"
+                style={{ color: INK }}
+              >
+                {item}
+              </a>
+            );
+          })}
         </nav>
       </header>
 
@@ -171,7 +177,7 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
           from <span className="font-extrabold">idea</span>
         </h1>
 
-        <div className="mx-auto my-0.5 w-full max-w-[400px]">
+        <div className="mx-auto my-0.5 w-full max-w-[480px]">
           <Starburst3D />
         </div>
 
@@ -233,7 +239,7 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
             <div
               ref={railRef}
               onScroll={updateProgress}
-              className="flex gap-6 overflow-x-auto overscroll-x-contain px-[calc(50%-130px)] pb-7 pt-12 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              className="flex items-start gap-6 overflow-x-auto overscroll-x-contain px-[calc(50%-130px)] pb-7 pt-12 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               style={{ scrollSnapType: "x mandatory" }}
             >
               {cards.map((card, i) => (
@@ -250,10 +256,10 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
                   {/* Inner card does the lifting (CSS hover) — rises up and
                       grows out of the grey tray, fully visible. */}
                   <div className="overflow-hidden rounded-2xl bg-white shadow-[0_2px_2px_rgba(11,18,40,0.04),0_16px_36px_-18px_rgba(11,18,40,0.22)] ring-1 ring-black/[0.04] transition-[transform,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:-translate-y-5 group-hover:scale-[1.045] group-hover:shadow-[0_2px_2px_rgba(11,18,40,0.05),0_38px_64px_-20px_rgba(11,18,40,0.45)]">
-                    {/* Wash + glyph — a miniature of the graph this template
-                        builds; self-assembles on scroll-in. */}
+                    {/* Slim accent banner with the graph glyph shrunk to a
+                        small icon in the top-left corner. */}
                     <div
-                      className="relative h-[112px] w-full"
+                      className="relative h-[76px] w-full"
                       style={{
                         background: `linear-gradient(155deg, ${card.accent}26 0%, ${card.accent}0d 55%, #ffffff 100%)`,
                       }}
@@ -266,7 +272,7 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
                             "radial-gradient(120% 80% at 80% 0%, rgba(255,255,255,0.7), rgba(255,255,255,0) 60%)",
                         }}
                       />
-                      <div className="absolute inset-0 px-3 py-2">
+                      <div className="absolute left-3.5 top-3 h-9 w-14">
                         <CardGlyph
                           templateId={card.id}
                           accent={card.accent}
@@ -288,6 +294,15 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
                       >
                         {card.tagline}
                       </div>
+
+                      {/* Hover reveal: what you can feed in + what it
+                          generates. Hidden until you hover the card, then
+                          it grows in place (items-start keeps siblings from
+                          stretching). */}
+                      <CardDecomposition
+                        templateId={card.id}
+                        accent={card.accent}
+                      />
 
                       {/* Verified footer — roomier (wider card + bigger gap).
                           The pill cross-fades to "Use template →" on hover. */}

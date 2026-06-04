@@ -1,22 +1,23 @@
 "use client";
 
-// ── Library rail (dedicated, right edge) ──────────────────────────
+// ── Library rail (dedicated, right edge) — over the NEW OBJECT layer ──
 //
-// The space's reference surface: a docked panel (expandable to full screen)
-// with two views over the SAME space graph the per-card detail drawer reads:
-//   • Glossary — layer-grouped terms (wired to /api/brainstorm/space/[id]/glossary)
-//   • Graph    — every entity + relationship (/api/spaces/[id]/graph), browsable
-//                and grouped by layer (the node-link force render is the last mile)
+// Re-pointed off the old entities graph onto `library_objects` (the oc-card
+// layer) per project_old_build_deprecation. Two views:
+//   • Glossary — layer-grouped terms (…/glossary); click resolves to its object
+//                (by title) when one exists, else focuses the board card.
+//   • Objects  — every library_object grouped by type (…/library/objects).
 //
-// Clicking a glossary term OR a graph entity opens the real ItemDetailDrawer —
-// the same per-card metadata/expanded-KG surface — so macro (Library) and micro
-// (card press) are one graph at two altitudes. A term also focuses its card on
-// the board. Self-contained launcher (toggle + rail + drawer).
+// Clicking an object fires OPEN_CARD_DETAIL_EVENT {objectId} — the SAME event the
+// oc-cards dispatch for their metadata/KG drawer (currently WIP/unwired) — AND,
+// when the object carries a source_entity_id, opens ItemDetailDrawer as the
+// working detail until that object drawer lands. Self-contained launcher.
 
 import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type Dispatch,
@@ -25,7 +26,7 @@ import {
 import type { Editor, TLShapeId } from "tldraw";
 import {
   BookOpen,
-  Share2,
+  Boxes,
   Maximize2,
   Minimize2,
   X,
@@ -35,45 +36,35 @@ import {
   Loader2,
   RefreshCw,
   Library as LibraryIcon,
-  Zap,
-  AlertTriangle,
-  Diamond,
 } from "lucide-react";
 import type { GlossaryTerm } from "@/lib/objective-canvas/generate-glossary";
-import { ItemDetailDrawer } from "@/components/objective/item-detail-drawer";
+import { OPEN_CARD_DETAIL_EVENT } from "@/components/objective/canvas-interactions/object-detail-drawer";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
-type View = "glossary" | "graph";
-type ItemLayer = "pain" | "features" | "outcomes" | "objective";
+type View = "glossary" | "objects";
 
-/** Graph node shape returned by GET /api/spaces/[id]/graph. */
-interface LibNode {
-  id: string;
-  name: string;
-  type: string;
-  layer: string | null;
-  importance: string | null;
-  centrality: number | null;
-  isLeverage: boolean;
-  isRisk: boolean;
-  isBottleneck: boolean;
+/** A library_objects row (GET …/library/objects → { objects }). */
+interface LibObject {
+  id: string; // library_objects.id — the objectId
+  title: string;
+  type: string; // object_type
+  summary: string;
+  sourceEntityId: string | null;
   subObjectiveId: string | null;
-}
-interface LibGraph {
-  nodes: LibNode[];
-  links: { id: string; source: string; target: string; relationship: string }[];
+  onWhiteboard: boolean;
 }
 
-const LAYER_ORDER = [
-  "objective",
-  "pain",
-  "pains",
-  "mechanism",
-  "mechanisms",
+const TYPE_ORDER = [
   "feature",
-  "features",
-  "outcome",
-  "outcomes",
+  "variable",
+  "mechanism",
+  "insight",
+  "recommendation",
+  "deliverable",
+  "experiment",
+  "variation",
+  "ui_idea",
+  "brainstorm_cluster",
 ];
 const titleCase = (s: string) =>
   s.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -84,19 +75,22 @@ const SOURCE_DOT: Record<string, string> = {
   llm: "#94A3B8",
 };
 
-/** Map a raw entity layer string → the drawer's strict lane union. */
-function toItemLayer(layer: string | null): ItemLayer {
-  const l = (layer ?? "").toLowerCase();
-  if (l.includes("pain")) return "pain";
-  if (l.includes("outcome")) return "outcomes";
-  if (l.includes("objective")) return "objective";
-  return "features";
-}
-
-const layerRank = (k: string) => {
-  const i = LAYER_ORDER.indexOf(k.toLowerCase());
+const typeRank = (k: string) => {
+  const i = TYPE_ORDER.indexOf(k.toLowerCase());
   return i === -1 ? 50 + (k.charCodeAt(0) || 0) / 1000 : i;
 };
+
+function mapObject(o: any): LibObject {
+  return {
+    id: String(o.id),
+    title: typeof o.title === "string" && o.title.trim() ? o.title : "Untitled",
+    type: o.object_type ?? "object",
+    summary: typeof o.summary === "string" ? o.summary : "",
+    sourceEntityId: o.source_entity_id ?? null,
+    subObjectiveId: o.source_sub_objective_id ?? null,
+    onWhiteboard: !!o.on_whiteboard,
+  };
+}
 
 /** Find the board card whose title/text matches a term, select + center it. */
 function focusTermOnBoard(editor: Editor, term: string): boolean {
@@ -104,10 +98,11 @@ function focusTermOnBoard(editor: Editor, term: string): boolean {
   if (!needle) return false;
   try {
     for (const s of editor.getCurrentPageShapes()) {
-      const p = s.props as { title?: unknown; subtitle?: unknown };
+      const p = s.props as { title?: unknown; subtitle?: unknown; name?: unknown };
       const hay = [
         typeof p.title === "string" ? p.title : "",
         typeof p.subtitle === "string" ? p.subtitle : "",
+        typeof p.name === "string" ? p.name : "",
       ]
         .join(" ")
         .toLowerCase();
@@ -128,26 +123,16 @@ function focusTermOnBoard(editor: Editor, term: string): boolean {
   return false;
 }
 
-function NodeBadges({ n }: { n: LibNode }) {
-  return (
-    <span style={{ display: "inline-flex", gap: 4, flexShrink: 0 }}>
-      {n.isLeverage && <Zap style={{ width: 11, height: 11, color: "#2563EB" }} strokeWidth={2.4} />}
-      {n.isRisk && <AlertTriangle style={{ width: 11, height: 11, color: "#DC2626" }} strokeWidth={2.4} />}
-      {n.isBottleneck && <Diamond style={{ width: 11, height: 11, color: "#EA580C" }} strokeWidth={2.4} />}
-    </span>
-  );
-}
-
 function GlossaryView({
   spaceId,
   editor,
-  nodes,
-  onOpenDetail,
+  objects,
+  onOpen,
 }: {
   spaceId: string;
   editor: Editor;
-  nodes: LibNode[];
-  onOpenDetail: (n: LibNode) => void;
+  objects: LibObject[];
+  onOpen: (o: LibObject) => void;
 }) {
   const [terms, setTerms] = useState<GlossaryTerm[]>([]);
   const [loading, setLoading] = useState(true);
@@ -183,12 +168,23 @@ function GlossaryView({
     void load(false);
   }, [load]);
 
-  // term name (lowercased) → entity node, for click-through to the drawer.
-  const nodeByName = useMemo(() => {
-    const m = new Map<string, LibNode>();
-    for (const n of nodes) m.set(n.name.trim().toLowerCase(), n);
+  // Auto-build the glossary from objects the FIRST time it's empty but objects
+  // exist — so the generated feature/variable cards contribute without a manual
+  // regenerate. Ref-guarded → fires at most once (no repeated LLM calls).
+  const autoRegen = useRef(false);
+  useEffect(() => {
+    if (!autoRegen.current && !loading && terms.length === 0 && objects.length > 0) {
+      autoRegen.current = true;
+      void load(true);
+    }
+  }, [loading, terms.length, objects.length, load]);
+
+  // term (lowercased) → object, for click-through to the object detail.
+  const objByTitle = useMemo(() => {
+    const m = new Map<string, LibObject>();
+    for (const o of objects) m.set(o.title.trim().toLowerCase(), o);
     return m;
-  }, [nodes]);
+  }, [objects]);
 
   const shelves = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -208,7 +204,7 @@ function GlossaryView({
       else groups.set(key, [t]);
     }
     return Array.from(groups.entries())
-      .sort((a, b) => layerRank(a[0]) - layerRank(b[0]))
+      .sort((a, b) => typeRank(a[0]) - typeRank(b[0]))
       .map(([key, items]) => ({
         key,
         label: key === "general" ? "General" : titleCase(key),
@@ -217,13 +213,13 @@ function GlossaryView({
   }, [terms, query]);
 
   function onTermClick(t: GlossaryTerm) {
-    const node = nodeByName.get(t.term.trim().toLowerCase());
-    if (node) {
-      onOpenDetail(node);
+    const obj = objByTitle.get(t.term.trim().toLowerCase());
+    if (obj) {
+      onOpen(obj);
       return;
     }
     const hit = focusTermOnBoard(editor, t.term);
-    setFlash(hit ? `Focused "${t.term}"` : `"${t.term}" — no entity yet`);
+    setFlash(hit ? `Focused "${t.term}"` : `"${t.term}" — no object yet`);
     window.setTimeout(() => setFlash((c) => (c && c.includes(t.term) ? null : c)), 1600);
   }
 
@@ -253,7 +249,7 @@ function GlossaryView({
           <div style={{ padding: "16px 4px", fontSize: 12.5, color: appleVibe.text.tertiary }}>{error}</div>
         ) : shelves.length === 0 ? (
           <div style={{ padding: "16px 4px", fontSize: 12.5, lineHeight: 1.4, color: appleVibe.text.tertiary }}>
-            No terms yet. Build rooms / annotate the objective, then hit regenerate.
+            No terms yet — they accrue as you build out objects on the board.
           </div>
         ) : (
           shelves.map((shelf) => {
@@ -267,13 +263,13 @@ function GlossaryView({
                 </button>
                 {!isCollapsed &&
                   shelf.items.map((t) => {
-                    const linked = nodeByName.has(t.term.trim().toLowerCase());
+                    const linked = objByTitle.has(t.term.trim().toLowerCase());
                     return (
                       <button
                         key={t.term}
                         type="button"
                         onClick={() => onTermClick(t)}
-                        title={linked ? `Open "${t.term}" detail` : `Focus "${t.term}" on the board`}
+                        title={linked ? `Open "${t.term}"` : `Focus "${t.term}" on the board`}
                         style={termRow}
                         onMouseEnter={(e) => (e.currentTarget.style.background = appleVibe.surface.chipHover)}
                         onMouseLeave={(e) => (e.currentTarget.style.background = appleVibe.surface.chip)}
@@ -296,41 +292,41 @@ function GlossaryView({
   );
 }
 
-function GraphView({
-  graph,
+function ObjectsView({
+  objects,
   loading,
-  onOpenDetail,
+  onOpen,
 }: {
-  graph: LibGraph | null;
+  objects: LibObject[] | null;
   loading: boolean;
-  onOpenDetail: (n: LibNode) => void;
+  onOpen: (o: LibObject) => void;
 }) {
   const shelves = useMemo(() => {
-    if (!graph) return [];
-    const groups = new Map<string, LibNode[]>();
-    for (const n of graph.nodes) {
-      const key = n.layer?.trim() || "general";
+    if (!objects) return [];
+    const groups = new Map<string, LibObject[]>();
+    for (const o of objects) {
+      const key = o.type?.trim() || "object";
       const arr = groups.get(key);
-      if (arr) arr.push(n);
-      else groups.set(key, [n]);
+      if (arr) arr.push(o);
+      else groups.set(key, [o]);
     }
     return Array.from(groups.entries())
-      .sort((a, b) => layerRank(a[0]) - layerRank(b[0]))
-      .map(([key, items]) => ({ key, label: key === "general" ? "General" : titleCase(key), items }));
-  }, [graph]);
+      .sort((a, b) => typeRank(a[0]) - typeRank(b[0]))
+      .map(([key, items]) => ({ key, label: titleCase(key), items }));
+  }, [objects]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
       <div style={{ padding: "10px 12px 4px", fontSize: 11, fontWeight: 600, color: appleVibe.text.tertiary }}>
-        {graph ? `${graph.nodes.length} entities · ${graph.links.length} relationships` : "—"}
+        {objects ? `${objects.length} object${objects.length === 1 ? "" : "s"}` : "—"}
         <span style={{ marginLeft: 8, color: appleVibe.text.faint, fontWeight: 500 }}>· node-link map coming</span>
       </div>
       <div style={scrollArea}>
-        {loading && !graph ? (
-          <div style={emptyRow}><Loader2 className="animate-spin" style={{ width: 14, height: 14 }} /> Loading graph…</div>
-        ) : !graph || graph.nodes.length === 0 ? (
+        {loading && !objects ? (
+          <div style={emptyRow}><Loader2 className="animate-spin" style={{ width: 14, height: 14 }} /> Loading objects…</div>
+        ) : !objects || objects.length === 0 ? (
           <div style={{ padding: "16px 4px", fontSize: 12.5, lineHeight: 1.4, color: appleVibe.text.tertiary }}>
-            No entities yet — generate rooms to populate the space graph.
+            No objects yet — synthesize / save cards on the board to populate the library.
           </div>
         ) : (
           shelves.map((shelf) => (
@@ -338,22 +334,24 @@ function GraphView({
               <div style={{ ...shelfLabel, padding: "6px 2px" }}>
                 {shelf.label} <span style={shelfCount}>{shelf.items.length}</span>
               </div>
-              {shelf.items.map((n) => (
+              {shelf.items.map((o) => (
                 <button
-                  key={n.id}
+                  key={o.id}
                   type="button"
-                  onClick={() => onOpenDetail(n)}
-                  title={`Open "${n.name}" detail`}
+                  onClick={() => onOpen(o)}
+                  title={`Open "${o.title}"`}
                   style={termRow}
                   onMouseEnter={(e) => (e.currentTarget.style.background = appleVibe.surface.chipHover)}
                   onMouseLeave={(e) => (e.currentTarget.style.background = appleVibe.surface.chip)}
                 >
                   <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={termName}>{n.name}</span>
-                    <NodeBadges n={n} />
+                    <span style={termName}>{o.title}</span>
+                    {o.onWhiteboard && (
+                      <span style={{ width: 6, height: 6, borderRadius: 999, flexShrink: 0, background: appleVibe.accent.primary }} title="On the board" />
+                    )}
                     <ChevronRight style={{ width: 12, height: 12, color: appleVibe.text.faint, marginLeft: "auto" }} strokeWidth={2.4} />
                   </span>
-                  <span style={termDef}>{titleCase(n.type)}</span>
+                  {o.summary && <span style={termDef}>{o.summary}</span>}
                 </button>
               ))}
             </div>
@@ -376,35 +374,43 @@ function toggle(set: Dispatch<SetStateAction<Set<string>>>, key: string) {
 export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: Editor }) {
   const [open, setOpen] = useState(false);
   const [full, setFull] = useState(false);
-  const [view, setView] = useState<View>("glossary");
-  const [graph, setGraph] = useState<LibGraph | null>(null);
-  const [detail, setDetail] = useState<LibNode | null>(null);
+  const [view, setView] = useState<View>("objects");
+  const [objects, setObjects] = useState<LibObject[] | null>(null);
 
-  // Fetch the space graph once the rail opens (shared by both views + the
-  // glossary term → entity resolution). Soft-fails to an empty graph. Loading
-  // is derived (no synchronous setState in the effect).
+  // Fetch the space's library_objects once the rail opens (shared by both
+  // views). Soft-fails to []. Loading is derived (no setState in effect body).
   useEffect(() => {
-    if (!open || graph) return;
+    if (!open || objects) return;
     let alive = true;
-    fetch(`/api/spaces/${spaceId}/graph`)
-      .then((r) => (r.ok ? r.json() : { nodes: [], links: [] }))
+    fetch(`/api/brainstorm/space/${spaceId}/library/objects`)
+      .then((r) => (r.ok ? r.json() : { objects: [] }))
       .then((j) => {
-        if (alive) setGraph({ nodes: j.nodes ?? [], links: j.links ?? [] });
+        if (alive) setObjects(Array.isArray(j.objects) ? j.objects.map(mapObject) : []);
       })
       .catch(() => {
-        if (alive) setGraph({ nodes: [], links: [] });
+        if (alive) setObjects([]);
       });
     return () => {
       alive = false;
     };
-  }, [open, graph, spaceId]);
-  const graphLoading = open && graph === null;
+  }, [open, objects, spaceId]);
+  const loading = open && objects === null;
+
+  // Open an object → fire OPEN_CARD_DETAIL_EVENT; the board-level
+  // ObjectDetailMount listens and opens the object detail drawer.
+  function openObject(o: LibObject) {
+    try {
+      window.dispatchEvent(new CustomEvent(OPEN_CARD_DETAIL_EVENT, { detail: { objectId: o.id } }));
+    } catch {
+      /* event is best-effort */
+    }
+  }
 
   if (!open) {
     return (
       <button
         type="button"
-        title="Library — glossary + knowledge graph"
+        title="Library — objects + glossary"
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => setOpen(true)}
         style={launcherPill}
@@ -416,8 +422,8 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
   }
 
   const tabs: { id: View; label: string; Icon: typeof BookOpen }[] = [
+    { id: "objects", label: "Objects", Icon: Boxes },
     { id: "glossary", label: "Glossary", Icon: BookOpen },
-    { id: "graph", label: "Graph", Icon: Share2 },
   ];
 
   return (
@@ -447,24 +453,12 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
           </div>
         </div>
 
-        {view === "glossary" ? (
-          <GlossaryView spaceId={spaceId} editor={editor} nodes={graph?.nodes ?? []} onOpenDetail={setDetail} />
+        {view === "objects" ? (
+          <ObjectsView objects={objects} loading={loading} onOpen={openObject} />
         ) : (
-          <GraphView graph={graph} loading={graphLoading} onOpenDetail={setDetail} />
+          <GlossaryView spaceId={spaceId} editor={editor} objects={objects ?? []} onOpen={openObject} />
         )}
       </div>
-
-      {detail && (
-        <ItemDetailDrawer
-          entityId={detail.id}
-          itemName={detail.name}
-          itemLayer={toItemLayer(detail.layer)}
-          linkedChains={[]}
-          spaceId={spaceId}
-          subObjectiveId={detail.subObjectiveId ?? undefined}
-          onClose={() => setDetail(null)}
-        />
-      )}
     </>
   );
 }

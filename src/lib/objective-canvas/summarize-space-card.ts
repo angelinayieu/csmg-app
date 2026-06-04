@@ -115,6 +115,18 @@ export async function summarizeSpaceCard(
   if (error || !space) return null;
   const s = space as SpaceRow;
 
+  // Skip un-promoted DRAFT spaces (name "Draft", no objective yet). An LLM
+  // handed the bare word "Draft" + thin content hallucinates generic "Draft
+  // Review and Feedback" filler, which then caches and sticks. Drafts aren't
+  // shown in the library anyway; once promoted, the brief regenerates from
+  // the real objective + sharpening.
+  const isDraft =
+    (s.synthesis_data as { objective_canvas?: { draft?: unknown } } | null)
+      ?.objective_canvas?.draft === true ||
+    (!(s.input_text ?? "").trim() &&
+      (s.name ?? "").trim().toLowerCase() === "draft");
+  if (isDraft) return null;
+
   const sharp = readSharpening(s.synthesis_data);
 
   // Deterministic title: the sharpening distilled title (the concise title

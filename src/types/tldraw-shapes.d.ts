@@ -1080,6 +1080,32 @@ declare module "@tldraw/tlschema" {
       objective: string;
       color: string;
     };
+    // Voice journal — a spoken entry committed to the board (profile +
+    // transcript). The durable note; the board snapshot is its store.
+    "voice-note-card": {
+      w: number;
+      h: number;
+      voiceNoteId: string;
+      spaceId: string;
+      authorName: string;
+      transcript: string;
+      createdAtIso: string;
+      color: string;
+    };
+    // Voice journal — the synthesized note-page / 3D-booklet artifact that
+    // aggregates all voice notes + re-synthesizes as more are added.
+    "journal-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      title: string;
+      /** synthesized sections, JSON-encoded ([{ heading, body }]). */
+      sectionsJson: string;
+      pageCount: number;
+      status: "fresh" | "regenerating" | "stale";
+      open: boolean;
+      color: string;
+    };
   }
 }
 

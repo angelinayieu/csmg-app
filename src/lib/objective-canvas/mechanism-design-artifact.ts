@@ -34,7 +34,7 @@
 //   • Session 1 user message ("create the final jsx artifacts and
 //     also make the designs look better")
 
-import { llmGenerate } from "@/lib/llm";
+import { llmGenerate, BEST_FAST_CLAUDE_MODEL } from "@/lib/llm";
 import type {
   MechanismDesignIntent,
   MechanismSpec,
@@ -468,7 +468,7 @@ Compose the artifact as STRICT JSON. Premium, specific, calm.`;
 
 // ─── Public generator ────────────────────────────────────────────
 
-const CLAUDE_ARTIFACT_MODEL = "claude-3-5-sonnet-20241022";
+const CLAUDE_ARTIFACT_MODEL = BEST_FAST_CLAUDE_MODEL;
 
 /** Compose a `DesignArtifact` for the mechanism via Claude Sonnet.
  *  Returns null on any failure (parse failure, Anthropic unavailable,

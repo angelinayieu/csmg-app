@@ -103,7 +103,7 @@ function buildSystem(
         "a commitment, a constraint, a narrowed choice, or a must-hold criterion. " +
         "Concrete and decision-bearing, not exploratory. " +
         "title = 2-6 words; subtitle = one crisp sentence.";
-  return `${base}\n${depthGuidance(depth)}`;
+  return `${base}\nFor EACH node also set "type": "feature" (a concrete capability / thing to build), "variable" (a measurable quantity or metric the work turns on), "factor" (a qualitative dimension or consideration), "decision" (a commitment or constraint), or "question" (an open question to resolve). Classify honestly — diverge nodes are usually factors / variables / features; converge nodes are usually decisions.\n${depthGuidance(depth)}`;
 }
 
 const RESPONSE_SCHEMA = {
@@ -132,8 +132,12 @@ const RESPONSE_SCHEMA = {
           properties: {
             title: { type: "string" },
             subtitle: { type: "string" },
+            type: {
+              type: "string",
+              enum: ["feature", "variable", "factor", "decision", "question"],
+            },
           },
-          required: ["title", "subtitle"],
+          required: ["title", "subtitle", "type"],
         },
       },
     },
@@ -217,6 +221,37 @@ async function webGround(idea: string): Promise<string> {
   }
 }
 
+/** Distill answered questions into result nodes when the model returns an empty
+ *  `nodes` array. The strict node framing — especially converge's "decision /
+ *  constraint" demand — can yield zero nodes on a thin/abstract card even though
+ *  the model answered every question; rather than render nothing, we turn each
+ *  answer into a node so the verb ALWAYS produces something actionable.
+ *  Deterministic (no extra LLM call): title = the answer's lead clause (≤8
+ *  words); subtitle = the full answer (falls back to the question); type =
+ *  decision (converge) / factor (diverge). */
+function deriveNodesFromTrace(
+  trace: Array<{ q: string; a: string }>,
+  kind: Direction,
+): Array<{ title: string; subtitle: string; type: string }> {
+  const type = kind === "converge" ? "decision" : "factor";
+  const out: Array<{ title: string; subtitle: string; type: string }> = [];
+  for (const { q, a } of trace) {
+    const source = (a || q).trim();
+    if (!source) continue;
+    const firstSentence = source.split(/(?<=[.!?])\s+/)[0] ?? source;
+    const words = firstSentence.split(/\s+/).filter(Boolean);
+    let title = words.slice(0, 8).join(" ").replace(/[\s.,;:—–-]+$/, "");
+    if (words.length > 8) title += "…";
+    out.push({
+      title: title || source.slice(0, 60),
+      subtitle: a || q,
+      type,
+    });
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
 export async function POST(request: Request) {
   const { error: authError } = await safeAuth();
   if (authError) return authError;
@@ -280,13 +315,14 @@ export async function POST(request: Request) {
 
     const r = result as {
       questions?: Array<{ q?: string; a?: string }>;
-      nodes?: Array<{ title?: string; subtitle?: string }>;
+      nodes?: Array<{ title?: string; subtitle?: string; type?: string }>;
     };
-    const items = (r.nodes ?? [])
+    let items = (r.nodes ?? [])
       .filter((it) => typeof it.title === "string" && it.title.trim().length > 0)
       .map((it) => ({
         title: (it.title as string).trim(),
         subtitle: typeof it.subtitle === "string" ? it.subtitle.trim() : "",
+        type: typeof it.type === "string" ? it.type : "factor",
       }));
     const trace = (r.questions ?? [])
       .filter((it) => typeof it.q === "string" && it.q.trim().length > 0)
@@ -294,6 +330,13 @@ export async function POST(request: Request) {
         q: (it.q as string).trim(),
         a: typeof it.a === "string" ? it.a.trim() : "",
       }));
+
+    // Never silently return nothing: if the strict node prompt came back empty
+    // but the questions were answered, distill the trace into nodes. (When BOTH
+    // are empty the client still shows the "Empty — retry" affordance.)
+    if (items.length === 0 && trace.length > 0) {
+      items = deriveNodesFromTrace(trace, kind);
+    }
 
     return NextResponse.json({ items, trace });
   } catch (err) {

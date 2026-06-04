@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Journal book proto</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #F7F8FA;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+    color: #0B0B0C;
+    padding: 40px;
+  }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  p.sub { color: #64748B; font-size: 14px; margin: 0 0 28px; }
+  .row { display: flex; gap: 40px; align-items: flex-start; flex-wrap: wrap; }
+  .stage {
+    width: 420px; height: 320px;
+    border-radius: 16px; background: #fff;
+    box-shadow: 0 12px 32px -20px rgba(11,18,40,0.3);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card {
+    width: 240px; border-radius: 16px; overflow: hidden; background: #fff;
+    box-shadow: 0 18px 40px -18px rgba(11,18,40,0.28);
+  }
+  .banner {
+    position: relative; height: 112px; width: 100%;
+    background: linear-gradient(155deg, #d9770626 0%, #d977060d 55%, #fff 100%);
+  }
+  .card-body { padding: 12px 14px 16px; }
+  .card-title { font-size: 14px; font-weight: 600; }
+  .card-tag { margin-top: 6px; font-size: 11.5px; color: #64748B; line-height: 1.35; }
+
+  /* ── book host ── */
+  .jb-host {
+    --jb-accent: #d97706;
+    --dur: 8s;
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 100%;
+  }
+
+  .jb-book {
+    position: relative;
+    width: var(--jb-w); height: var(--jb-h);
+    transform-style: preserve-3d;
+    animation: jb-float var(--dur) ease-in-out infinite;
+  }
+  @keyframes jb-float {
+    0%, 100% { transform: rotateX(13deg) rotateY(-30deg); }
+    50%      { transform: rotateX(8deg)  rotateY(-13deg); }
+  }
+  .jb-face { position: absolute; inset: 0; border-radius: 2px 6px 6px 2px; backface-visibility: hidden; }
+  .jb-back {
+    background: linear-gradient(145deg, color-mix(in srgb, var(--jb-accent) 70%, #000), color-mix(in srgb, var(--jb-accent) 88%, #000));
+    transform: translateZ(calc(var(--jb-d) / -2));
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12);
+  }
+  /* fore-edge (right) + top + bottom faces — close the volume so the book
+     reads as one solid block instead of a loose stack of panels. */
+  .jb-fore {
+    width: var(--jb-d); height: 100%; right: 0; top: 0; position: absolute;
+    transform-origin: right center;
+    transform: translateX(calc(var(--jb-d) / 2)) rotateY(90deg);
+    background: repeating-linear-gradient(180deg, #efe7d6 0 2px, #d8cdb6 2px 3px);
+  }
+  .jb-edge-t, .jb-edge-b { position: absolute; left: 0; width: 100%; height: var(--jb-d);
+    background: repeating-linear-gradient(90deg, #efe7d6 0 2px, #d8cdb6 2px 3px); }
+  .jb-edge-t { top: 0; transform-origin: top center; transform: translateY(calc(var(--jb-d) / -2)) rotateX(90deg); }
+  .jb-edge-b { bottom: 0; transform-origin: bottom center; transform: translateY(calc(var(--jb-d) / 2)) rotateX(-90deg); }
+
+  /* page block (ruled cream pages) — the "current" page that stays put */
+  .jb-paper {
+    inset: 4px 5px 4px 7px; border-radius: 1px 3px 3px 1px;
+    background:
+      repeating-linear-gradient(180deg, transparent 0 12px, rgba(15,23,42,0.10) 12px 13px),
+      linear-gradient(180deg, #fffdf7, #f3ecdd);
+    transform: translateZ(calc(var(--jb-d) / 2 - 5px));
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.05), inset -6px 0 10px -8px rgba(0,0,0,0.25);
+  }
+  .jb-paper::before { content: ""; position: absolute; left: 17%; top: 7%; bottom: 7%; width: 1.5px; background: rgba(190,30,45,0.45); }
+
+  /* riffling leaves — flip through in sequence during the open hold */
+  .jb-leaf {
+    position: absolute; inset: 4px 5px 4px 7px; border-radius: 1px 3px 3px 1px;
+    background: linear-gradient(180deg, #fffefb, #f5eede);
+    transform-origin: left center; backface-visibility: hidden;
+    box-shadow: 1px 0 4px -1px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.04);
+  }
+  .jb-pg1 { animation: jb-pg1 var(--dur) ease-in-out infinite; }
+  .jb-pg2 { animation: jb-pg2 var(--dur) ease-in-out infinite; }
+  .jb-pg3 { animation: jb-pg3 var(--dur) ease-in-out infinite; }
+  @keyframes jb-pg1 {
+    0%, 40%   { transform: translateZ(calc(var(--jb-d)/2 - 2px)) rotateY(0deg); }
+    52%, 86%  { transform: translateZ(calc(var(--jb-d)/2 - 2px)) rotateY(-158deg); }
+    94%, 100% { transform: translateZ(calc(var(--jb-d)/2 - 2px)) rotateY(0deg); }
+  }
+  @keyframes jb-pg2 {
+    0%, 48%   { transform: translateZ(calc(var(--jb-d)/2 - 3px)) rotateY(0deg); }
+    60%, 86%  { transform: translateZ(calc(var(--jb-d)/2 - 3px)) rotateY(-158deg); }
+    94%, 100% { transform: translateZ(calc(var(--jb-d)/2 - 3px)) rotateY(0deg); }
+  }
+  @keyframes jb-pg3 {
+    0%, 56%   { transform: translateZ(calc(var(--jb-d)/2 - 4px)) rotateY(0deg); }
+    68%, 86%  { transform: translateZ(calc(var(--jb-d)/2 - 4px)) rotateY(-158deg); }
+    94%, 100% { transform: translateZ(calc(var(--jb-d)/2 - 4px)) rotateY(0deg); }
+  }
+
+  /* front cover (swings open on the spine) */
+  .jb-cover {
+    background: linear-gradient(150deg, color-mix(in srgb, var(--jb-accent) 100%, #fff 8%), color-mix(in srgb, var(--jb-accent) 82%, #000));
+    transform-origin: left center;
+    transform: translateZ(calc(var(--jb-d) / 2)) rotateY(0deg);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 8px 18px -10px rgba(0,0,0,0.55);
+    overflow: hidden; animation: jb-open var(--dur) ease-in-out infinite;
+  }
+  @keyframes jb-open {
+    0%, 10%  { transform: translateZ(calc(var(--jb-d) / 2)) rotateY(0deg); }
+    36%, 74% { transform: translateZ(calc(var(--jb-d) / 2)) rotateY(-150deg); }
+    92%,100% { transform: translateZ(calc(var(--jb-d) / 2)) rotateY(0deg); }
+  }
+  .jb-cover-frame { position: absolute; inset: 8%; border: 1px solid rgba(255,255,255,0.28); border-radius: 3px; }
+  .jb-cover-title {
+    position: absolute; left: 22%; right: 22%; top: 26%; height: 3px; border-radius: 2px;
+    background: rgba(255,255,255,0.55);
+    box-shadow: 0 9px 0 rgba(255,255,255,0.35), 0 18px 0 rgba(255,255,255,0.22);
+  }
+  .jb-cover-seal { position: absolute; left: 50%; top: 60%; width: 18%; aspect-ratio: 1; transform: translate(-50%,-50%); border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.5); }
+  .jb-band { position: absolute; top: -4%; bottom: -4%; right: 14%; width: 5%; background: rgba(0,0,0,0.22); }
+  .jb-spine {
+    position: absolute; left: 0; top: 0; width: var(--jb-d); height: 100%;
+    transform-origin: left center; transform: translateX(calc(var(--jb-d) / -2)) rotateY(-90deg);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--jb-accent) 92%, #000), color-mix(in srgb, var(--jb-accent) 75%, #000));
+    border-radius: 2px;
+  }
+  .jb-ribbon {
+    position: absolute; top: -3px; right: 30%; width: 7px; height: 64%;
+    background: linear-gradient(180deg, #0e7490, #155e75);
+    transform: translateZ(calc(var(--jb-d) / 2 - 6px));
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 84%, 0 100%);
+  }
+  .jb-shadow {
+    position: absolute; left: 50%; bottom: -14%; width: 78%; height: 16px;
+    transform: translateX(-50%) translateZ(calc(var(--jb-d) / -2));
+    background: radial-gradient(ellipse at center, rgba(11,18,40,0.28), transparent 70%);
+    filter: blur(4px);
+  }
+</style>
+</head>
+<body>
+  <h1>Journal card — 3D book (proto)</h1>
+  <p class="sub">standalone — floats, cover opens, pages riffle through (8s loop)</p>
+  <div class="row">
+    <div class="stage">
+      <div class="jb-host" style="--jb-w:170px; --jb-h:230px; --jb-d:34px; perspective:1150px;">
+        <div class="jb-book">
+          <div class="jb-shadow"></div>
+          <div class="jb-face jb-back"></div>
+          <div class="jb-fore"></div>
+          <div class="jb-edge-t"></div>
+          <div class="jb-edge-b"></div>
+          <div class="jb-face jb-paper"></div>
+          <div class="jb-leaf jb-pg3"></div>
+          <div class="jb-leaf jb-pg2"></div>
+          <div class="jb-leaf jb-pg1"></div>
+          <div class="jb-spine"></div>
+          <div class="jb-face jb-cover">
+            <div class="jb-cover-frame"></div>
+            <div class="jb-cover-title"></div>
+            <div class="jb-cover-seal"></div>
+            <div class="jb-band"></div>
+          </div>
+          <div class="jb-ribbon"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="banner">
+        <div class="jb-host" style="--jb-w:71px; --jb-h:96px; --jb-d:14px; perspective:480px;">
+          <div class="jb-book">
+            <div class="jb-shadow"></div>
+            <div class="jb-face jb-back"></div>
+            <div class="jb-fore"></div>
+            <div class="jb-edge-t"></div>
+            <div class="jb-edge-b"></div>
+            <div class="jb-face jb-paper"></div>
+            <div class="jb-leaf jb-pg3"></div>
+            <div class="jb-leaf jb-pg2"></div>
+            <div class="jb-leaf jb-pg1"></div>
+            <div class="jb-spine"></div>
+            <div class="jb-face jb-cover">
+              <div class="jb-cover-frame"></div>
+              <div class="jb-cover-title"></div>
+              <div class="jb-cover-seal"></div>
+              <div class="jb-band"></div>
+            </div>
+            <div class="jb-ribbon"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="card-title">Self-Discovery Journal</div>
+        <div class="card-tag">Daily journaling that asks better questions over time</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

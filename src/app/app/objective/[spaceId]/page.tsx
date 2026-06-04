@@ -8,6 +8,7 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { ObjectiveCanvasView } from "@/components/objective/objective-canvas-view";
+import { MinimalObjectiveRedirect } from "@/components/objective/minimal-objective-redirect";
 import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
 import type { MainCanvasSub } from "@/components/objective/main-canvas-view";
 import { readObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
@@ -43,34 +44,6 @@ import {
 import { computeSubProgress } from "@/lib/objective-canvas/elected-ready-variations";
 
 export const dynamic = "force-dynamic";
-
-// Minimal-mode surface — shown only if the user expands the objective card
-// (the collapsed shell normally hides this page entirely). The whiteboard
-// itself carries the objective card + the AI prompt-sharpening card. See
-// MINIMAL_INTAKE_MODE.md for what's hidden + how to restore the full canvas.
-function MinimalObjectiveSurface({ objective }: { objective: string }) {
-  return (
-    <div className="mx-auto max-w-2xl px-6 py-10">
-      <div
-        className="text-[11px] font-semibold uppercase tracking-[0.14em]"
-        style={{ color: "#64748B" }}
-      >
-        Objective
-      </div>
-      <h1
-        className="mt-2 text-[22px] font-semibold leading-snug"
-        style={{ color: "#0F172A" }}
-      >
-        {objective}
-      </h1>
-      <p className="mt-4 text-[13px] font-light" style={{ color: "#94A3B8" }}>
-        Your whiteboard shows the objective card + the AI prompt-sharpening
-        card. Append <code>?full=1</code> to the URL for the full analysis
-        canvas (rooms, clarifying, sub-objectives).
-      </p>
-    </div>
-  );
-}
 
 export default async function ObjectiveCanvasPage({
   params,
@@ -116,7 +89,9 @@ export default async function ObjectiveCanvasPage({
   const sp = await searchParams;
   const fullMode = sp?.full === "1";
   if (!fullMode) {
-    return <MinimalObjectiveSurface objective={objective} />;
+    // Opening the objective card → go straight to the full canvas (no
+    // dead-end placeholder). Mounts only when the card's window opens.
+    return <MinimalObjectiveRedirect />;
   }
 
   // ── Phase 2 — space glossary (server-rendered for popover lookup) ──

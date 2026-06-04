@@ -16,6 +16,8 @@
 //   insight-card  → "insight" | "synergy"  — AI connect/synthesis; its
 //                   `sourceIds` become parent/parents, so the source cards
 //                   read as "expanded threads" (kept) in the auto-marker
+//   oc-card       → "branch"   — new Variable/Feature object cards
+//                   (library_objects-backed); deliberate content like artifacts
 //   note (tldraw) → "variation" — brainstorm scratch; exploratory →
 //                   excluded by default unless it gained children
 //   everything else (arrow / geo / draw / text / layer-band / frame) is
@@ -107,6 +109,11 @@ export function boardShapesToNodes(shapes: TLShape[]): ClientNode[] {
         });
         break;
 
+      case "oc-card":
+        // New Variable/Feature object cards → deliberate content, like artifacts.
+        nodes.push({ ...base, kind: "branch", label: asString(props.name, "Card") });
+        break;
+
       default:
         // arrow / geo / draw / text / layer-band / frame → not content
         break;
@@ -153,6 +160,17 @@ export function shapeToScanTarget(shape: TLShape): OperationTarget | null {
     }
     case "insight-card": {
       const text = [asString(props.headline), asString(props.body)]
+        .filter(Boolean)
+        .join(" — ");
+      return text.length >= 3 ? { text, shapeId: shape.id as string } : null;
+    }
+    case "oc-card": {
+      // The new Variable/Feature object cards (library_objects-backed):
+      // props.name = title, props.body = description/definition. Lets every AI
+      // surface (scanner, converge/diverge, Spec/Custom, Deep Synthesize, Goal
+      // ranking) read the new cards. objectId stays on the shape for the
+      // object-detail path; the text ops only need the text.
+      const text = [asString(props.name), asString(props.body)]
         .filter(Boolean)
         .join(" — ");
       return text.length >= 3 ? { text, shapeId: shape.id as string } : null;

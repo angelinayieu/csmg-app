@@ -71,6 +71,22 @@ export class ArtifactCardShapeUtil extends BaseBoxShapeUtil<ArtifactCardShape> {
     return resizeBox(shape, info);
   };
 
+  // A "lab" result node with a backfilled library objectId (in meta) opens its
+  // object detail drawer on a single click — same as the oc-cards, so AI
+  // results aren't dead ends. A modifier-click is left for multi-select.
+  override onClick = (shape: ArtifactCardShape) => {
+    const i = this.editor.inputs;
+    if (i.shiftKey || i.ctrlKey || i.altKey) return;
+    const objectId = (shape.meta as { objectId?: unknown }).objectId;
+    if (typeof objectId === "string" && objectId) {
+      window.dispatchEvent(
+        new CustomEvent("objective-board:open-card-detail", {
+          detail: { objectId },
+        }),
+      );
+    }
+  };
+
   getDefaultProps(): ArtifactCardShape["props"] {
     return {
       w: 240,

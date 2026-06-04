@@ -19,10 +19,18 @@ import {
 } from "./prompt-sharpening-prompt";
 import { patchObjectiveCanvasState } from "./clarifying-state";
 
-// The Prompt Sharpening agent runs on Opus 4.6 (product decision — NOT 4.8).
-// Scoped here so only this intake generator changes; the global
-// BEST_CLAUDE_MODEL default is left untouched for everything else.
-const PROMPT_SHARPENING_MODEL = "claude-opus-4-6";
+// Speed is the priority for the intake card — it's the first thing the user
+// waits on, and Opus made it take 30–60s. Sonnet is ~3–4x faster for this
+// structured rewrite + extraction task with negligible quality loss (the
+// trimmed visible-only schema does most of the speedup). To prefer maximal
+// quality over speed, set this to BEST_CLAUDE_MODEL (slower).
+//
+// MUST be a CURRENT model id. The previous value "claude-3-5-sonnet-20241022"
+// is RETIRED and the API now 404s it — llmJSON threw, generation soft-failed
+// to null, the artifact was never persisted, and the intake card sat at the
+// 94% progress cap (its design max) until the ~4-min poll gave up. Use the
+// current fast Sonnet, which the rest of the app already runs on.
+const PROMPT_SHARPENING_MODEL = "claude-sonnet-4-6";
 
 export async function generatePromptSharpeningForSpace(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -50,14 +58,17 @@ export async function generatePromptSharpeningForSpace(
     }
 
     // ── Agent: generate the sharpening artifact ──
-    // Opus 4.6 (no temperature param) — output quality IS the product here.
-    // The validator normalizes + guarantees all 10 heatmap zones are present.
+    // Fast Sonnet + a trimmed visible-only schema → snappy intake. The
+    // validator normalizes + guarantees all 10 heatmap zones are present.
     let artifact = await llmJSON<PromptSharpeningArtifact>({
       system: SHARPENING_AGENT_SYSTEM,
       user: SHARPENING_AGENT_USER(raw),
       provider: "anthropic",
       model: PROMPT_SHARPENING_MODEL,
-      maxTokens: 4096,
+      // Trimmed schema → small output (~600 tokens). 2048 is a safe cap with
+      // headroom so a slightly verbose model can't truncate → invalid JSON →
+      // a failed parse → a card stuck "loading".
+      maxTokens: 2048,
       responseSchema: SHARPENING_RESPONSE_SCHEMA,
       validator: (d) => normalizeSharpening(d, raw),
     });

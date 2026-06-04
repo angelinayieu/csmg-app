@@ -270,6 +270,10 @@ export function ObjectiveCanvasShell({
       ).detail;
       const roomId = detail?.roomId;
       if (!roomId) return;
+      // The objective opens as a NODE now (ObjectiveNode drawer), not the
+      // legacy sub-objective picker. Ignore the "__obj" room intent in minimal
+      // mode; the old picker stays reachable only via ?full=1.
+      if (roomId === "__obj" && minimal) return;
       const idx =
         roomId === "__obj" ? 0 : rooms.findIndex((r) => r.id === roomId);
       if (idx >= 0) navTo(idx, detail?.focusEntityId);
@@ -277,7 +281,7 @@ export function ObjectiveCanvasShell({
     window.addEventListener(OPEN_ROOM_EVENT, onOpenRoom);
     return () => window.removeEventListener(OPEN_ROOM_EVENT, onOpenRoom);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rooms.length, pathname]);
+  }, [rooms.length, pathname, minimal]);
 
   return (
     <div className="fixed inset-0 z-40 overflow-hidden">

@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { Coins, LogOut } from "lucide-react";
 import { InterAxisLogo } from "@/components/brand/interaxis-logo";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { BuyCreditsModal } from "@/components/billing/buy-credits-modal";
 
 interface Props {
   userEmail: string;
@@ -23,6 +24,7 @@ interface Props {
 
 export function ObjectiveTopChrome({ userEmail, creditBalance = 0 }: Props) {
   const [open, setOpen] = useState(false);
+  const [buyOpen, setBuyOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const initials = userEmail.split("@")[0].slice(0, 2).toUpperCase();
 
@@ -156,6 +158,24 @@ export function ObjectiveTopChrome({ userEmail, creditBalance = 0 }: Props) {
               className="px-2 pb-2 pt-1"
               style={{ borderTop: `1px solid ${appleVibe.stroke.hairline}` }}
             >
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  setBuyOpen(true);
+                }}
+                className="block w-full rounded-lg px-3 py-1.5 text-left text-[11px] font-semibold transition-colors hover:bg-black/5"
+                style={{ color: appleVibe.text.secondary }}
+              >
+                Buy credits
+              </button>
+              <Link
+                href="/pricing"
+                className="block rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors hover:bg-black/5"
+                style={{ color: appleVibe.text.secondary }}
+              >
+                Plans &amp; pricing
+              </Link>
               <Link
                 href="/app/settings"
                 className="block rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors hover:bg-black/5"
@@ -181,6 +201,8 @@ export function ObjectiveTopChrome({ userEmail, creditBalance = 0 }: Props) {
           </div>
         )}
       </div>
+
+      <BuyCreditsModal open={buyOpen} onClose={() => setBuyOpen(false)} />
     </>
   );
 }

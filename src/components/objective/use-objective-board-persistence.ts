@@ -72,11 +72,19 @@ export function useObjectiveBoardPersistence(
     };
 
     const restore = (snapshot: unknown) => {
-      loadSnapshot(
-        editor.store,
-        snapshot as Parameters<typeof loadSnapshot>[1],
-      );
-      setStatus("saved");
+      try {
+        loadSnapshot(
+          editor.store,
+          snapshot as Parameters<typeof loadSnapshot>[1],
+        );
+        setStatus("saved");
+      } catch (err) {
+        // Surface (don't swallow) so a bad/incompatible snapshot is visible in
+        // the console instead of silently leaving an empty board — and re-throw
+        // so applyRestore falls back to another source.
+        console.warn("[objective-board] loadSnapshot failed", err);
+        throw err;
+      }
     };
 
     (async () => {
@@ -197,18 +205,43 @@ export function useObjectiveBoardPersistence(
       }
     };
 
+    // localStorage mirror on a SHORT trailing debounce so a dev HMR re-mount or
+    // a fast reload restores the LATEST board, not a stale debounced copy — the
+    // #1 cause of "cards disappearing". The server PUT stays on the longer
+    // debounce. Scope drops the `source: "user"` filter so PROGRAMMATIC card
+    // deploys (AI results, sharpening, decompose) are persisted too, not just
+    // direct user edits.
+    let lsTimer: ReturnType<typeof setTimeout> | null = null;
     const unsub = editor.store.listen(
       () => {
+        if (lsTimer) clearTimeout(lsTimer);
+        lsTimer = setTimeout(() => {
+          try {
+            window.localStorage.setItem(
+              lsKey(spaceId),
+              JSON.stringify({ snapshot: getSnapshot(editor.store), savedAt: Date.now() }),
+            );
+          } catch {
+            /* quota / private mode — non-fatal */
+          }
+        }, 200);
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => save(2), DEBOUNCE_MS);
       },
-      { scope: "document", source: "user" },
+      { scope: "document" },
     );
 
     const flushSync = () => {
-      if (!timerRef.current) return;
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
+      // Always capture the CURRENT board on unload/hide — NOT gated on a pending
+      // save — so a reload restores the latest, never a stale snapshot.
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      if (lsTimer) {
+        clearTimeout(lsTimer);
+        lsTimer = null;
+      }
       try {
         const snapshot = getSnapshot(editor.store);
         try {
@@ -245,6 +278,7 @@ export function useObjectiveBoardPersistence(
       window.removeEventListener("beforeunload", flushSync);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (timerRef.current) clearTimeout(timerRef.current);
+      if (lsTimer) clearTimeout(lsTimer);
       inflightRef.current?.abort();
     };
   }, [editor, spaceId]);

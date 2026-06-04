@@ -17,13 +17,16 @@ export function CanvasTopControls() {
   return (
     <div
       style={{
+        // Centered BELOW the page-toggle pill (PageTabs sits at top:10), so the
+        // two stack + align rather than crowding the top row.
         position: "absolute",
-        top: 12,
+        top: 56,
         left: "50%",
         transform: "translateX(-50%)",
         zIndex: 66,
         display: "flex",
         alignItems: "flex-start",
+        justifyContent: "center",
         gap: 8,
       }}
     >

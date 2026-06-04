@@ -68,22 +68,19 @@ export interface PromptSharpeningArtifact {
 
 // ── JSON schema for llmJSON (Anthropic forced tool-use → typed object) ──
 
+// Lean zone — only the fields the card actually renders (severity drives the
+// heatmap color; ambiguity + question feed the fork). Dropping why_it_matters
+// + downstream_agents_affected roughly halves the generated tokens → far
+// faster generation. (normalizeSharpening still fills the dropped fields with
+// safe defaults so the artifact type is unchanged.)
 const ZONE_SCHEMA = {
   type: "object",
   properties: {
     severity: { type: "string", enum: ["high", "medium", "low"] },
     ambiguity: { type: "string" },
-    why_it_matters: { type: "string" },
     question_to_resolve: { type: "string" },
-    downstream_agents_affected: { type: "array", items: { type: "string" } },
   },
-  required: [
-    "severity",
-    "ambiguity",
-    "why_it_matters",
-    "question_to_resolve",
-    "downstream_agents_affected",
-  ],
+  required: ["severity", "ambiguity", "question_to_resolve"],
 } as const;
 
 const HEATMAP_SCHEMA = {
@@ -110,67 +107,29 @@ export const SHARPENING_RESPONSE_SCHEMA = {
             ambiguity_type: { type: "string" },
             severity: { type: "string", enum: ["high", "medium", "low"] },
             ambiguity: { type: "string" },
-            why_it_matters: { type: "string" },
             question_to_resolve: { type: "string" },
-            downstream_agents_affected: {
-              type: "array",
-              items: { type: "string" },
-            },
           },
           required: [
             "rank",
             "ambiguity_type",
             "severity",
             "ambiguity",
-            "why_it_matters",
             "question_to_resolve",
-            "downstream_agents_affected",
           ],
         },
       },
       ambiguity_heatmap: HEATMAP_SCHEMA,
-      hidden_metadata_for_agents: {
-        type: "object",
-        properties: {
-          explicit_meaning: { type: "array", items: { type: "string" } },
-          inferred_meaning: { type: "array", items: { type: "string" } },
-          deep_intent: { type: "string" },
-          hidden_assumptions: { type: "array", items: { type: "string" } },
-          known_constraints: { type: "array", items: { type: "string" } },
-          layered_understanding: { type: "array", items: { type: "string" } },
-          ambiguity_to_question_map: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                ambiguity: { type: "string" },
-                question: { type: "string" },
-              },
-              required: ["ambiguity", "question"],
-            },
-          },
-          downstream_payloads: { type: "object" },
-        },
-        required: [
-          "explicit_meaning",
-          "inferred_meaning",
-          "deep_intent",
-          "hidden_assumptions",
-          "known_constraints",
-          "layered_understanding",
-          "ambiguity_to_question_map",
-          "downstream_payloads",
-        ],
-      },
-      quality_status: { type: "string" },
-      confidence: { type: "number" },
     },
+    // hidden_metadata_for_agents + quality_status + confidence are NOT
+    // requested — they were a large, currently-unused output (no downstream
+    // agent consumes them yet) and dominated generation latency. The
+    // normalizer fills them with empty defaults; generate them lazily later
+    // if/when a downstream agent needs them.
     required: [
       "distilled_title",
       "sharpened_prompt",
       "ranked_ambiguities",
       "ambiguity_heatmap",
-      "hidden_metadata_for_agents",
     ],
   },
 } as const;
@@ -178,47 +137,17 @@ export const SHARPENING_RESPONSE_SCHEMA = {
 // ── Agent system prompt (spec §11) ──
 export const SHARPENING_AGENT_SYSTEM = `You are the Prompt Sharpening Agent for SpecForge.
 
-Run a compact mini diverge → mini converge loop on the user's raw prompt.
+Run a FAST, compact pass on the user's raw prompt. Be terse — every field is ONE short line. DO NOT generate solutions, MVPs, feature lists, next actions, or a report. Your only job is to make the raw prompt sharper.
 
-DO NOT generate solutions. DO NOT generate MVPs or feature lists. DO NOT
-recommend next actions or system depth. DO NOT write a long report. Your job
-is ONLY to make the user's raw information sharper before downstream Explore /
-Distill agents run.
+Produce exactly:
+1. distilled_title — specific, compact, NOT generic.
+2. sharpened_prompt — a concise, direct, high-signal rewrite of the user's exact intent (first principles → the strongest direct version). 1–2 sentences max.
+3. ranked_ambiguities — the 3–5 HIGHEST-IMPACT ambiguities only, ranked. Each: rank, ambiguity_type, severity, a one-line ambiguity, a one-line question_to_resolve.
+4. ambiguity_heatmap — ALL 10 keys (intent, target_user, problem, desired_outcome, scope, mechanism, output_format, source_context, constraint, downstream_routing), each with severity (high|medium|low), a one-line ambiguity, a one-line question_to_resolve.
 
-VISIBLE output (what the user sees) must only be:
-1. distilled_title — specific, compact, NOT generic
-2. sharpened_prompt — a concise, direct, high-signal rewrite that reflects the
-   user's exact intent and needs (take it to first principles, then reason
-   back up to the strongest, most influential, direct version)
-3. ranked_ambiguities — ranked by IMPACT
-4. ambiguity_heatmap — severity across the full prompt landscape
+Rank by impact: changes what the user sees > changes scope > changes interpretation of intent > affects later quality > creates constraints.
 
-HIDDEN metadata (for downstream agents, never shown to the user): explicit
-meaning, inferred meaning, deep intent, hidden assumptions, known constraints,
-layered understanding, ambiguity→question map, downstream payloads.
-
-Process:
-1. Preserve the raw prompt.
-2. Mini-diverge: extract explicit meaning; infer deeper intent; detect hidden
-   assumptions; detect ambiguities across the FULL landscape; map ambiguities
-   to questions; identify which downstream agents each affects.
-3. Mini-converge: compress into a sharp title; rewrite into a concise direct
-   version; rank ambiguities by importance; build the ambiguity heatmap; store
-   all deeper analysis as hidden metadata.
-
-Ambiguity landscape (heatmap keys): intent, target_user, problem,
-desired_outcome, scope, mechanism, output_format, source_context, constraint,
-downstream_routing. EVERY key must be present with a severity (high|medium|low),
-the ambiguity statement, why it matters, a question to resolve it, and the
-downstream agents affected.
-
-Ranking criteria (most → least): changes what the user sees; changes downstream
-agent reasoning; changes product scope; changes interpretation of user intent;
-affects future Explore/Distill quality; creates or changes constraints.
-
-Surface only the highest-priority ambiguities in ranked_ambiguities (3–6). Keep
-low-priority ones in the heatmap only. Ambiguities must be specific to THIS
-prompt and must actually change downstream reasoning — never generic.`;
+Ambiguities must be specific to THIS prompt and actually change downstream reasoning — never generic. Keep it tight; do not pad.`;
 
 export const SHARPENING_AGENT_USER = (rawPrompt: string) =>
   `Raw prompt:\n"""\n${rawPrompt}\n"""\n\nReturn the prompt_sharpening_card JSON.`;

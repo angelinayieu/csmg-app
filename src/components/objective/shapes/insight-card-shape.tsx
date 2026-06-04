@@ -14,6 +14,7 @@
 // This keeps the focused objective board free of the heavy canvas
 // chrome the main InteraxisCanvas uses for the same lifecycle.
 
+import { useLayoutEffect, useRef } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
@@ -23,10 +24,8 @@ import {
   stopEventPropagation,
   type RecordProps,
   type TLBaseShape,
-  type TLResizeInfo,
   type TLShape,
   type TLShapeId,
-  resizeBox,
 } from "tldraw";
 import { Check, X, Globe } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
@@ -101,12 +100,9 @@ export class InsightCardShapeUtil extends BaseBoxShapeUtil<InsightCardShape> {
 
   static override migrations = insightCardMigrations;
 
-  override canResize = () => true;
+  // Auto-sized to content (full headline always shows) — no manual resize.
+  override canResize = () => false;
   override canEdit = () => false;
-
-  override onResize = (shape: InsightCardShape, info: TLResizeInfo<InsightCardShape>) => {
-    return resizeBox(shape, info);
-  };
 
   getDefaultProps(): InsightCardShape["props"] {
     return {
@@ -153,6 +149,23 @@ function InsightCardRenderer({
   const proposed = status === "proposed";
   const isHub = role === "hub";
   const isBranch = role === "branch";
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Auto-grow the card to fit the full headline + body (no cropping). Guard on
+  // a >1px delta so it converges; re-measures on content/width (not on h).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const needed = Math.ceil(el.offsetHeight);
+    if (needed > 0 && Math.abs(needed - shape.props.h) > 1) {
+      editor.updateShape<InsightCardShape>({
+        id: shape.id,
+        type: "insight-card",
+        props: { h: needed },
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shape.props.w, headline, body, citations.length, proposed]);
 
   /** Arrows tethering THIS insight to its sources (single-card lifecycle). */
   function linkedArrowIds(): TLShapeId[] {
@@ -236,10 +249,10 @@ function InsightCardRenderer({
       }}
     >
       <div
+        ref={ref}
         style={{
           position: "relative",
           width: "100%",
-          height: "100%",
           borderRadius: 20,
           background:
             "linear-gradient(160deg, rgba(255,255,255,0.99) 0%, rgba(249,247,255,0.97) 100%)",
@@ -252,7 +265,6 @@ function InsightCardRenderer({
           padding: "14px 15px 12px",
           display: "flex",
           flexDirection: "column",
-          overflow: "hidden",
           opacity: proposed ? 0.97 : 1,
           fontFamily:
             '-apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui, sans-serif',
@@ -294,10 +306,7 @@ function InsightCardRenderer({
             fontWeight: 650,
             lineHeight: 1.2,
             color: appleVibe.text.primary,
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
+            overflowWrap: "anywhere",
           }}
         >
           {headline}
@@ -383,8 +392,7 @@ function InsightCardRenderer({
         {proposed && !isBranch && (
           <div
             style={{
-              marginTop: "auto",
-              paddingTop: 10,
+              marginTop: 12,
               display: "flex",
               gap: 7,
             }}

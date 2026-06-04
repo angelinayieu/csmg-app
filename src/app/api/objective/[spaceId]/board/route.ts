@@ -64,28 +64,42 @@ export async function GET(
 
   const db = supabase as AnyDb;
   try {
-    const rootGoalId = await resolveRootGoalId(db, spaceId);
-    if (!rootGoalId) return NextResponse.json({ snapshot: null });
-
-    const { data, error } = await db
-      .from("canvases")
+    // Primary: the space-keyed store (always available — drafts + promoted).
+    const { data: ob } = await db
+      .from("objective_boards")
       .select("snapshot, schema_version, updated_at")
-      .eq("scope", "objective")
-      .eq("scope_ref_type", "improvement_goal")
-      .eq("scope_ref_id", rootGoalId)
-      .eq("archived", false)
+      .eq("space_id", spaceId)
       .maybeSingle();
-
-    if (error) {
-      console.error("[objective/board/GET]", error);
-      return NextResponse.json({ error: "Load failed" }, { status: 500 });
+    if (ob?.snapshot) {
+      return NextResponse.json({
+        snapshot: ob.snapshot,
+        schema_version: ob.schema_version,
+        updated_at: ob.updated_at,
+      });
     }
-    if (!data) return NextResponse.json({ snapshot: null });
-    return NextResponse.json({
-      snapshot: data.snapshot,
-      schema_version: data.schema_version,
-      updated_at: data.updated_at,
-    });
+
+    // Legacy fallback: the old canvases row anchored on the root goal, so
+    // boards saved before the space-keyed store still load (and migrate on
+    // the next save).
+    const rootGoalId = await resolveRootGoalId(db, spaceId);
+    if (rootGoalId) {
+      const { data } = await db
+        .from("canvases")
+        .select("snapshot, schema_version, updated_at")
+        .eq("scope", "objective")
+        .eq("scope_ref_type", "improvement_goal")
+        .eq("scope_ref_id", rootGoalId)
+        .eq("archived", false)
+        .maybeSingle();
+      if (data?.snapshot) {
+        return NextResponse.json({
+          snapshot: data.snapshot,
+          schema_version: data.schema_version,
+          updated_at: data.updated_at,
+        });
+      }
+    }
+    return NextResponse.json({ snapshot: null });
   } catch (err) {
     return NextResponse.json(
       { error: `Load failed: ${sanitizeErrorMessage(err)}` },
@@ -118,70 +132,37 @@ export async function PUT(
 
   const db = supabase as AnyDb;
   try {
-    const rootGoalId = await resolveRootGoalId(db, spaceId);
-    // No anchor yet → soft no-op; the client keeps its local mirror.
-    if (!rootGoalId) {
-      return NextResponse.json({ ok: false, reason: "no_objective_anchor" });
-    }
-
-    const schemaVersion = body.schema_version ?? 1;
-
-    // The canvases uniqueness is a PARTIAL index (archived = false), which
-    // can't be an upsert onConflict target — so update-or-insert explicitly
-    // (mirrors the table's own sync trigger).
-    const { data: updated, error: updErr } = await db
-      .from("canvases")
-      .update({
-        snapshot: body.snapshot,
-        schema_version: schemaVersion,
-        updated_by: user.id,
-      })
-      .eq("scope", "objective")
-      .eq("scope_ref_type", "improvement_goal")
-      .eq("scope_ref_id", rootGoalId)
-      .eq("archived", false)
-      .select("updated_at");
-
-    if (updErr) {
-      console.error("[objective/board/PUT:update]", updErr);
-      return NextResponse.json({ error: "Save failed" }, { status: 500 });
-    }
-    if (Array.isArray(updated) && updated.length > 0) {
-      // Mark the space modified so its home-library card brief regenerates
-      // with the latest board state (what the user saved/decided). Fire-and-
-      // forget; spaces has no updated_at trigger, so the brief's own write
-      // won't re-bump this → no regen loop.
-      void db
-        .from("spaces")
-        .update({ updated_at: new Date().toISOString() })
-        .eq("id", spaceId);
-      return NextResponse.json({ ok: true, updated_at: updated[0].updated_at });
-    }
-
-    const { data: inserted, error: insErr } = await db
-      .from("canvases")
-      .insert({
-        owner_id: user.id,
-        scope: "objective",
-        scope_ref_type: "improvement_goal",
-        scope_ref_id: rootGoalId,
-        title: "Objective board",
-        snapshot: body.snapshot,
-        schema_version: schemaVersion,
-        updated_by: user.id,
-      })
+    // Space-keyed upsert — ALWAYS persists (no root-goal anchor required), so
+    // drafts and promoted spaces alike survive reload. space_id is the PK, so
+    // onConflict is a real unique target (unlike the canvases partial index).
+    const { data, error } = await db
+      .from("objective_boards")
+      .upsert(
+        {
+          space_id: spaceId,
+          snapshot: body.snapshot,
+          schema_version: body.schema_version ?? 1,
+          updated_at: new Date().toISOString(),
+          updated_by: user.id,
+        },
+        { onConflict: "space_id" },
+      )
       .select("updated_at")
       .single();
 
-    if (insErr) {
-      console.error("[objective/board/PUT:insert]", insErr);
+    if (error) {
+      console.error("[objective/board/PUT]", error);
       return NextResponse.json({ error: "Save failed" }, { status: 500 });
     }
+
+    // Mark the space modified so its home-library card brief regenerates with
+    // the latest board state. Fire-and-forget.
     void db
       .from("spaces")
       .update({ updated_at: new Date().toISOString() })
       .eq("id", spaceId);
-    return NextResponse.json({ ok: true, updated_at: inserted.updated_at });
+
+    return NextResponse.json({ ok: true, updated_at: data?.updated_at });
   } catch (err) {
     return NextResponse.json(
       { error: `Save failed: ${sanitizeErrorMessage(err)}` },

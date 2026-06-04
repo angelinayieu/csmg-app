@@ -280,3 +280,40 @@ export const SEED_OBJECTIVE_EVENT = "objective-board:seed-objective";
 export function seedObjectiveCard(detail: SeedObjectiveDetail) {
   window.dispatchEvent(new CustomEvent(SEED_OBJECTIVE_EVENT, { detail }));
 }
+
+// ── Voice journal → board ──────────────────────────────────────────
+// The recorder commits a spoken entry: WhiteboardBase materializes a
+// voice-note card (profile + transcript). Idempotent by voiceNoteId.
+
+export interface VoiceNoteCardDetail {
+  /** Idempotency key (the commit/session id). */
+  voiceNoteId: string;
+  spaceId: string;
+  authorName: string;
+  transcript: string;
+  createdAtIso: string;
+  color?: string;
+}
+export const DEPLOY_VOICE_NOTE_EVENT = "objective-board:deploy-voice-note";
+export function deployVoiceNoteCard(detail: VoiceNoteCardDetail) {
+  window.dispatchEvent(new CustomEvent(DEPLOY_VOICE_NOTE_EVENT, { detail }));
+}
+
+// ── Journal synthesis artifact → board ─────────────────────────────
+// The journal mount polls the synthesize route + fires this; WhiteboardBase
+// materializes (or updates in place) the single journal note-page / booklet
+// card that synthesizes all voice notes. One per board.
+
+export interface JournalCardDetail {
+  spaceId: string;
+  title: string;
+  /** synthesized sections, JSON-encoded ([{ heading, body }]). */
+  sectionsJson: string;
+  pageCount: number;
+  status: "fresh" | "regenerating" | "stale";
+  color?: string;
+}
+export const DEPLOY_JOURNAL_EVENT = "objective-board:deploy-journal";
+export function deployJournalCard(detail: JournalCardDetail) {
+  window.dispatchEvent(new CustomEvent(DEPLOY_JOURNAL_EVENT, { detail }));
+}

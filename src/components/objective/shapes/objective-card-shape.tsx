@@ -4,9 +4,15 @@
 //
 // The objective on the board — its own card type (replaces the reused
 // room-card "__obj"). The chatbox card transforms into this in place on
-// submit. Pressing the body opens the objective room; the heart favorites
+// submit. Opening it (the "Open ↗" button, or a double-click anywhere) opens
+// the objective as a NODE (the board-sourced ObjectiveNode in the object-detail
+// drawer) whose contents are everything on the whiteboard. The heart favorites
 // it (meta.favorited) so it appears in the left favorites sidebar.
+//
+// AUTO-HEIGHT: the card measures its content and grows to fit, so the FULL
+// title always shows (no clamp / cropping). Width is the standard 340.
 
+import { useLayoutEffect, useRef } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
@@ -14,12 +20,13 @@ import {
   stopEventPropagation,
   type RecordProps,
   type TLBaseShape,
-  type TLResizeInfo,
-  resizeBox,
 } from "tldraw";
 import { Heart } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
-import { OPEN_ROOM_EVENT } from "@/components/objective/shapes/room-card-shape";
+import {
+  OPEN_CARD_DETAIL_EVENT,
+  OBJECTIVE_MARKER,
+} from "@/components/objective/canvas-interactions/object-detail-drawer";
 
 export type ObjectiveCardShape = TLBaseShape<
   "objective-card",
@@ -35,6 +42,15 @@ export type ObjectiveCardShape = TLBaseShape<
   }
 >;
 
+/** Fire the open-objective event (board-sourced ObjectiveNode drawer). */
+function openObjective() {
+  window.dispatchEvent(
+    new CustomEvent(OPEN_CARD_DETAIL_EVENT, {
+      detail: { objectId: OBJECTIVE_MARKER },
+    }),
+  );
+}
+
 export class ObjectiveCardShapeUtil extends BaseBoxShapeUtil<ObjectiveCardShape> {
   static override type = "objective-card" as const;
   static override props: RecordProps<ObjectiveCardShape> = {
@@ -46,13 +62,16 @@ export class ObjectiveCardShapeUtil extends BaseBoxShapeUtil<ObjectiveCardShape>
     color: T.string,
   };
 
-  override canResize = () => true;
+  // Auto-sized to its content — no manual resize (keeps the standard width +
+  // a height that always fits the full title).
+  override canResize = () => false;
   override canEdit = () => false;
 
-  override onResize = (
-    shape: ObjectiveCardShape,
-    info: TLResizeInfo<ObjectiveCardShape>,
-  ) => resizeBox(shape, info);
+  // Double-click anywhere on the card opens it (reliable, unlike a body click
+  // which tldraw can swallow as a selection).
+  override onDoubleClick = () => {
+    openObjective();
+  };
 
   getDefaultProps(): ObjectiveCardShape["props"] {
     return {
@@ -82,15 +101,26 @@ function ObjectiveCardRenderer({
   util: ObjectiveCardShapeUtil;
 }) {
   const editor = util.editor;
-  const { title, objective, color } = shape.props;
+  const { w, h, title, objective, color } = shape.props;
   const favorited = !!(shape.meta as { favorited?: boolean })?.favorited;
+  const ref = useRef<HTMLDivElement>(null);
 
-  function openRoom(e: React.MouseEvent) {
-    e.stopPropagation();
-    window.dispatchEvent(
-      new CustomEvent(OPEN_ROOM_EVENT, { detail: { roomId: "__obj" } }),
-    );
-  }
+  // Grow (or shrink) the shape's height to fit the rendered content so the full
+  // title always shows. Guard on a >1px delta so it converges (no loop).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const needed = Math.ceil(el.offsetHeight);
+    if (needed > 0 && Math.abs(needed - h) > 1) {
+      editor.updateShape<ObjectiveCardShape>({
+        id: shape.id,
+        type: "objective-card",
+        props: { h: needed },
+      });
+    }
+    // Re-measure when the content or width changes (NOT on h → avoids a loop).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [w, title, objective]);
 
   function toggleFavorite(e: React.MouseEvent) {
     e.stopPropagation();
@@ -102,14 +132,12 @@ function ObjectiveCardRenderer({
   }
 
   return (
-    <HTMLContainer
-      style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
-    >
+    <HTMLContainer style={{ width: w, height: h, pointerEvents: "all" }}>
       <div
-        onClick={openRoom}
+        ref={ref}
+        onClick={openObjective}
         style={{
           width: "100%",
-          height: "100%",
           borderRadius: 20,
           background:
             "linear-gradient(160deg, rgba(255,255,255,0.99) 0%, rgba(248,249,252,0.97) 100%)",
@@ -118,7 +146,6 @@ function ObjectiveCardRenderer({
           padding: "14px 15px 13px",
           display: "flex",
           flexDirection: "column",
-          overflow: "hidden",
           cursor: "pointer",
           fontFamily: appleVibe.font.stack,
         }}
@@ -166,24 +193,21 @@ function ObjectiveCardRenderer({
           </button>
         </div>
 
-        {/* Title */}
+        {/* Title — full, no clamp (the card auto-grows to fit it). */}
         <div
           style={{
             marginTop: 8,
             fontSize: 16,
             fontWeight: 700,
-            lineHeight: 1.18,
+            lineHeight: 1.2,
             color: appleVibe.text.primary,
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
+            overflowWrap: "anywhere",
           }}
         >
           {title || "Objective"}
         </div>
 
-        {/* Objective text */}
+        {/* Objective text (kept to a few lines — only the title must be full). */}
         {objective && objective !== title && (
           <div
             style={{
@@ -202,16 +226,30 @@ function ObjectiveCardRenderer({
           </div>
         )}
 
-        <div
+        {/* Open affordance — a real button so a single click reliably opens
+            (the card body click can be swallowed by tldraw's selection). */}
+        <button
+          type="button"
+          onPointerDown={stopEventPropagation}
+          onClick={(e) => {
+            e.stopPropagation();
+            openObjective();
+          }}
           style={{
-            marginTop: "auto",
+            marginTop: 10,
+            alignSelf: "flex-start",
+            border: "none",
+            background: "transparent",
+            padding: 0,
+            cursor: "pointer",
             fontSize: 10.5,
             fontWeight: 600,
             color: appleVibe.text.faint,
+            fontFamily: appleVibe.font.stack,
           }}
         >
           Press to open ↗
-        </div>
+        </button>
       </div>
     </HTMLContainer>
   );

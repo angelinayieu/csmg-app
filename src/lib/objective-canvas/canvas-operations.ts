@@ -38,6 +38,10 @@ export interface OperationTarget {
 export interface OperationResultItem {
   title: string;
   subtitle?: string;
+  /** Classification from the converge-diverge / custom ops: feature | variable
+   *  | factor | decision | question. Drives whether the executor renders an
+   *  oc-card (feature/variable) vs a generic node, and the library object_type. */
+  type?: string;
 }
 
 /** Per-run knobs the scanner / top settings bar thread into the analysis routes.
@@ -52,6 +56,10 @@ export interface OperationRunOptions {
   questionCount?: number;
   /** ground a diverge/converge pass with live web search. */
   webSearch?: boolean;
+  /** the user's own instruction (the "custom" op on a selection). */
+  prompt?: string;
+  /** when set, result cards auto-persist to this space's Library (library_objects). */
+  spaceId?: string;
 }
 
 export interface CanvasOperation {
@@ -171,6 +179,16 @@ export const CANVAS_OPERATIONS: CanvasOperation[] = [
     requiresLlm: true,
     wired: true,
     endpoint: "/api/canvas/converge-diverge",
+    hidden: true,
+  },
+  {
+    id: "custom",
+    label: "Custom",
+    intent: "Run your own instruction over the selection",
+    contract: "text",
+    requiresLlm: true,
+    wired: true,
+    endpoint: "/api/canvas/custom-op",
     hidden: true,
   },
 
@@ -335,11 +353,13 @@ async function runIdeaOp(
         depth: opts.depth,
         questionCount: opts.questionCount,
         webSearch: opts.webSearch,
+        // Honored by /api/canvas/custom-op (the user's instruction).
+        prompt: opts.prompt,
       }),
     });
     if (!res.ok) return [];
     const json = (await res.json()) as {
-      items?: Array<{ title?: string; subtitle?: string }>;
+      items?: Array<{ title?: string; subtitle?: string; type?: string }>;
     };
     return (json.items ?? [])
       .filter(
@@ -348,6 +368,7 @@ async function runIdeaOp(
       .map((it) => ({
         title: (it.title as string).trim(),
         subtitle: typeof it.subtitle === "string" ? it.subtitle : undefined,
+        type: typeof it.type === "string" ? it.type : undefined,
       }))
       .slice(0, MAX_RESULT_ITEMS);
   } catch {

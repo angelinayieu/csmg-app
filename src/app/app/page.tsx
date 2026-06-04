@@ -58,7 +58,7 @@ export default async function StudioPage({
     const rich = await db
       .from("spaces")
       .select(
-        "id, name, description, space_kind, card_brief, updated_at, archived, parent_space_id",
+        "id, name, description, space_kind, card_brief, updated_at, archived, parent_space_id, input_text",
       )
       .is("parent_space_id", null)
       .eq("archived", false)
@@ -68,14 +68,25 @@ export default async function StudioPage({
       ? (
           await db
             .from("spaces")
-            .select("id, name, description, space_kind, card_brief, updated_at")
+            .select("id, name, description, space_kind, card_brief, updated_at, input_text")
             .order("updated_at", { ascending: false })
             .limit(12)
         ).data ?? []
       : rich.data ?? [];
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const spaces: LibrarySpace[] = (spacesRows as any[]).map((s) => {
+    const spaces: LibrarySpace[] = (spacesRows as any[])
+      // Hide un-promoted DRAFT objective spaces (empty input_text) — they're
+      // intake scratch, not library items, and would otherwise pile up as
+      // empty "Draft" cards in the grid.
+      .filter(
+        (s) =>
+          !(
+            s.space_kind === "objective_canvas" &&
+            !String(s.input_text ?? "").trim()
+          ),
+      )
+      .map((s) => {
       // Pass the cached card brief through ONLY when it's well-formed and
       // not stale (its source updated_at is at/after the space's). Stale or
       // missing → null, so the grid regenerates it progressively.

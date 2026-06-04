@@ -19,6 +19,7 @@
 // surfaced.
 
 import { getAnthropicClient } from "@/lib/anthropic";
+import { BEST_FAST_CLAUDE_MODEL } from "@/lib/llm";
 import { getResearchTools, parseResearchResponse } from "@/lib/web-search";
 import type { Citation, ResearchDepth } from "@/lib/web-search";
 import {
@@ -121,7 +122,7 @@ Issue your web searches now.`;
     const depth: ResearchDepth = opts.researchDepth ?? "standard";
     const tools = getResearchTools(depth);
     const resp = await anthropic.messages.create({
-      model: "claude-3-5-sonnet-20241022",
+      model: BEST_FAST_CLAUDE_MODEL,
       max_tokens: 4096,
       system: systemPrompt,
       messages: [{ role: "user", content: userPrompt }],

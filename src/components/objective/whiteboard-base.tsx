@@ -95,7 +95,6 @@ import {
   DECOMPOSE_INTO_CARDS_EVENT,
   DECOMPOSE_DONE_EVENT,
   deployOcCards,
-  requestDecomposeIntoCards,
   type DeployCard,
   type DeployLink,
 } from "./canvas-interactions/deploy-oc-cards";
@@ -106,6 +105,10 @@ import {
 import { getAiSettings } from "@/lib/objective-canvas/ai-settings";
 import { CanvasTopControls } from "./canvas-interactions/canvas-top-controls";
 import { LibraryLauncher } from "./canvas-interactions/library-rail";
+import { ObjectDetailMount } from "./canvas-interactions/object-detail-drawer";
+import { GoalLauncher } from "./canvas-interactions/goal-ranking-sidebar";
+import { BoardHistoryLauncher } from "./canvas-interactions/board-history";
+import { BoardSettingsLauncher } from "./canvas-interactions/board-settings";
 import {
   forkSynthesisMap,
   type SynthesisBranch,
@@ -114,12 +117,14 @@ import {
   runSpecForge,
   type SpecForgeProgress,
 } from "./canvas-interactions/specforge-runner";
-import { AiScannerPanel } from "./canvas-interactions/ai-scanner-panel";
+import { ConvergeDivergePopup } from "./canvas-interactions/converge-diverge-popup";
+import { PowerupRail, FORGE_REQUEST_EVENT } from "./canvas-interactions/powerup-rail";
+import { RoomPill } from "./canvas-interactions/room-pill";
 import { CollapsibleStylePanel } from "./canvas-interactions/collapsible-style-panel";
-import type { TLComponents } from "tldraw";
+import type { TLComponents, TLPageId } from "tldraw";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 import { useFocusMode } from "@/components/synergy/focus-mode/use-focus-mode";
-import { ListChecks, Sparkles, Wand2, Loader2, Check, Globe } from "lucide-react";
+import { ListChecks, Wand2, Loader2, Check, Globe } from "lucide-react";
 import { BoardHint } from "./board-hint";
 import { FavoritesSidebar } from "./favorites-sidebar";
 import { useObjectiveBoardPersistence } from "./use-objective-board-persistence";
@@ -138,6 +143,10 @@ import {
   type AmbiguityForkDetail,
   DEPLOY_IMAGE_CARD_EVENT,
   type ImageCardDetail,
+  DEPLOY_VOICE_NOTE_EVENT,
+  DEPLOY_JOURNAL_EVENT,
+  type VoiceNoteCardDetail,
+  type JournalCardDetail,
   SEED_CHATBOX_EVENT,
   SEED_OBJECTIVE_EVENT,
   PROMOTE_TO_OBJECTIVE_EVENT,
@@ -149,14 +158,22 @@ import {
 import {
   deployPromptSharpeningOnBoard,
   forkAmbiguityOnBoard,
+  clearLegacySharpeningArrows,
 } from "./canvas-interactions/prompt-sharpening-board";
 import { SharpeningConnectorsOverlay } from "./canvas-interactions/sharpening-connectors";
 import {
   deployChatboxOnBoard,
   deployObjectiveOnBoard,
   promoteChatboxToObjective,
+  clearStaleChatboxCards,
 } from "./canvas-interactions/intake-board";
 import { deployImageCardOnBoard } from "./canvas-interactions/objective-image-board";
+import {
+  VoiceNoteCardShapeUtil,
+  JournalCardShapeUtil,
+  deployVoiceNoteOnBoard,
+  deployJournalOnBoard,
+} from "./canvas-interactions/voice-journal-board";
 import { syncDataFlowUnfurl } from "./unfurl/render-dataflow-unfurl";
 import type { DataFlowGraph } from "@/lib/objective-canvas/build-data-flow-graph";
 import {
@@ -186,7 +203,7 @@ import { mockRoomGraph } from "./unfurl/render-room-unfurl";
 import type { UnfurlAnchor } from "./unfurl/anchor-from-path";
 import { buildRoomGraph } from "./causal-map/lib/build-room-graph";
 import type { CanvasGraph } from "./causal-map/lib/types";
-import { X } from "lucide-react";
+import { X, Home } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 /** Detail payload for a collapse-to-card request. */
@@ -263,6 +280,11 @@ function PageTabs() {
   const [lineage, setLineage] = useState<
     { spaceId: string; title: string }[]
   >([]);
+  const [editingId, setEditingId] = useState<TLPageId | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [hoverId, setHoverId] = useState<TLPageId | null>(null);
+  const [confirmId, setConfirmId] = useState<TLPageId | null>(null);
+
   useEffect(() => {
     const sid = window.location.pathname.match(/\/objective\/([^/]+)/)?.[1];
     if (!sid) return;
@@ -277,111 +299,333 @@ function PageTabs() {
       cancelled = true;
     };
   }, []);
-  if (pages.length <= 1 && lineage.length === 0) return null;
+
+  // Auto-name default "Page N" pages from the objective on the board — a concise
+  // condensed title. Only touches still-default names, so manual names persist.
+  useEffect(() => {
+    const obj = editor
+      .getCurrentPageShapes()
+      .find((s) => s.type === "objective-card" || s.type === "room-card");
+    const raw = (obj?.props as { title?: unknown } | undefined)?.title;
+    const objective = typeof raw === "string" ? raw.trim() : "";
+    if (!objective) return;
+    const concise = objective
+      .replace(/[.…]+$/, "")
+      .split(/\s+/)
+      .slice(0, 6)
+      .join(" ")
+      .slice(0, 44);
+    if (!concise) return;
+    // Only auto-name the FIRST page (the main objective board). Pages added
+    // with "+" keep their "New page" name until renamed — they are NOT copies
+    // of the objective.
+    const first = editor.getPages()[0];
+    if (first && /^(Page \d+|New page)$/.test(first.name)) {
+      editor.updatePage({ id: first.id, name: concise });
+    }
+  }, [editor, pages.length]);
+
+  function commitEdit(id: TLPageId) {
+    const name = editValue.trim();
+    if (name) editor.updatePage({ id, name });
+    setEditingId(null);
+  }
+  function deletePage(id: TLPageId) {
+    if (editor.getPages().length > 1) {
+      if (id === currentPageId) {
+        const other = editor.getPages().find((p) => p.id !== id);
+        if (other) editor.setCurrentPage(other.id);
+      }
+      editor.deletePage(id);
+    }
+    setConfirmId(null);
+  }
+
+  const confirmName = pages.find((p) => p.id === confirmId)?.name ?? "this page";
   return (
-    <div
-      style={{
-        pointerEvents: "all",
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        marginTop: 10,
-        fontFamily: appleVibe.font.stack,
-      }}
-    >
-      {/* Branch lineage — clickable ancestor objectives (oldest → parent). */}
-      {lineage.map((e) => (
-        <button
-          key={e.spaceId}
-          type="button"
-          onPointerDown={(ev) => ev.stopPropagation()}
-          onClick={() =>
-            window.location.assign(`/app/objective/${e.spaceId}`)
-          }
-          title={`Back to: ${e.title}`}
-          style={{
-            maxWidth: 150,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            padding: "6px 13px",
-            fontSize: 12,
-            fontWeight: 550,
-            color: appleVibe.text.secondary,
-            background: "var(--glass-float-bg)",
-            border: "1px solid var(--glass-border)",
-            borderRadius: 999,
-            boxShadow:
-              "inset 0 1px 0 var(--glass-highlight), 0 8px 24px -14px rgba(11,18,40,0.28)",
-            backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-            WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-            cursor: "pointer",
-          }}
-        >
-          ‹ {e.title}
-        </button>
-      ))}
-      {/* Page segmented control — one glass pill; active page = filled accent. */}
-      {pages.length > 1 && (
+    <>
+      <div
+        style={{
+          pointerEvents: "all",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginTop: 10,
+          fontFamily: appleVibe.font.stack,
+        }}
+      >
+        {/* Branch lineage — clickable ancestor objectives (oldest → parent). */}
+        {lineage.map((e) => (
+          <button
+            key={e.spaceId}
+            type="button"
+            onPointerDown={(ev) => ev.stopPropagation()}
+            onClick={() => window.location.assign(`/app/objective/${e.spaceId}`)}
+            title={`Back to: ${e.title}`}
+            style={{
+              maxWidth: 150,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              padding: "6px 13px",
+              fontSize: 12,
+              fontWeight: 550,
+              color: appleVibe.text.secondary,
+              background: "var(--glass-float-bg)",
+              border: "1px solid var(--glass-border)",
+              borderRadius: 999,
+              boxShadow:
+                "inset 0 1px 0 var(--glass-highlight), 0 8px 24px -14px rgba(11,18,40,0.28)",
+              backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+              WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+              cursor: "pointer",
+            }}
+          >
+            ‹ {e.title}
+          </button>
+        ))}
+        {/* Page / room control — always shown (the current page name pill),
+            even with one page. Click = switch · double-click = rename ·
+            hover × = delete (with confirm) · + = add a page. */}
+        {pages.length >= 1 && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 2,
+              padding: 4,
+              borderRadius: appleVibe.radius.pill,
+              background: "var(--glass-float-bg)",
+              border: "1px solid var(--glass-border)",
+              boxShadow:
+                "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
+              backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+              WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+            }}
+          >
+            {pages.map((p) => {
+              const active = p.id === currentPageId;
+              const editing = editingId === p.id;
+              return (
+                <div
+                  key={p.id}
+                  style={{ position: "relative", display: "flex", alignItems: "center" }}
+                  onMouseEnter={() => setHoverId(p.id)}
+                  onMouseLeave={() => setHoverId((c) => (c === p.id ? null : c))}
+                >
+                  {editing ? (
+                    <input
+                      autoFocus
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitEdit(p.id);
+                        if (e.key === "Escape") setEditingId(null);
+                      }}
+                      onBlur={() => commitEdit(p.id)}
+                      style={{
+                        width: 140,
+                        padding: "5px 11px",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: appleVibe.text.primary,
+                        background: appleVibe.surface.chip,
+                        border: `1px solid ${appleVibe.accent.primary}`,
+                        borderRadius: appleVibe.radius.pill,
+                        outline: "none",
+                        fontFamily: appleVibe.font.stack,
+                      }}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={() => editor.setCurrentPage(p.id)}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setEditValue(p.name);
+                        setEditingId(p.id);
+                      }}
+                      title={`${p.name} — double-click to rename`}
+                      style={{
+                        maxWidth: 170,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        padding: "5px 13px",
+                        fontSize: 12,
+                        fontWeight: active ? 650 : 550,
+                        letterSpacing: "-0.01em",
+                        color: active
+                          ? appleVibe.text.onAccent
+                          : appleVibe.text.secondary,
+                        background: active ? appleVibe.accent.primary : "transparent",
+                        border: "1px solid transparent",
+                        borderRadius: appleVibe.radius.pill,
+                        boxShadow: active
+                          ? "inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 12px -6px rgba(11,18,40,0.4)"
+                          : "none",
+                        cursor: "pointer",
+                        transition: "background 140ms ease, color 140ms ease",
+                      }}
+                    >
+                      {p.name}
+                    </button>
+                  )}
+                  {!editing && pages.length > 1 && hoverId === p.id && (
+                    <button
+                      type="button"
+                      title="Delete page"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmId(p.id);
+                      }}
+                      style={{
+                        position: "absolute",
+                        top: -7,
+                        right: -5,
+                        width: 16,
+                        height: 16,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: 999,
+                        border: "1px solid var(--glass-border)",
+                        background: "white",
+                        color: appleVibe.text.tertiary,
+                        fontSize: 11,
+                        lineHeight: 1,
+                        cursor: "pointer",
+                        boxShadow: "0 4px 12px -4px rgba(11,18,40,0.3)",
+                      }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            {/* + add a new page */}
+            <button
+              type="button"
+              title="Add a page"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => editor.createPage({ name: "New page" })}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 26,
+                height: 26,
+                marginLeft: 1,
+                borderRadius: appleVibe.radius.pill,
+                border: "none",
+                background: "transparent",
+                color: appleVibe.text.secondary,
+                fontSize: 17,
+                fontWeight: 400,
+                lineHeight: 1,
+                cursor: "pointer",
+              }}
+            >
+              +
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Delete confirmation — clean white, no icons. */}
+      {confirmId && (
         <div
+          onPointerDown={() => setConfirmId(null)}
           style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 200,
+            // TopPanel slot is pointer-events:none — opt this overlay back in so
+            // the Cancel/Delete buttons actually receive clicks.
+            pointerEvents: "auto",
+            background: "rgba(11,18,40,0.22)",
             display: "flex",
             alignItems: "center",
-            gap: 2,
-            padding: 4,
-            borderRadius: appleVibe.radius.pill,
-            background: "var(--glass-float-bg)",
-            border: "1px solid var(--glass-border)",
-            boxShadow:
-              "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
-            backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-            WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+            justifyContent: "center",
           }}
         >
-          {pages.map((p) => {
-            const active = p.id === currentPageId;
-            return (
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            style={{
+              width: "min(380px, calc(100vw - 32px))",
+              background: "white",
+              borderRadius: 16,
+              padding: "20px 20px 16px",
+              boxShadow: "0 30px 70px -24px rgba(11,18,40,0.4)",
+              fontFamily: appleVibe.font.stack,
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 700, color: appleVibe.text.primary }}>
+              Delete this page?
+            </div>
+            <div
+              style={{
+                marginTop: 6,
+                fontSize: 13,
+                lineHeight: 1.45,
+                color: appleVibe.text.secondary,
+              }}
+            >
+              “{confirmName}” and everything on it will be permanently removed.
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
               <button
-                key={p.id}
                 type="button"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => editor.setCurrentPage(p.id)}
-                title={p.name}
+                onClick={() => setConfirmId(null)}
                 style={{
-                  maxWidth: 170,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  padding: "5px 13px",
-                  fontSize: 12,
-                  fontWeight: active ? 650 : 550,
-                  letterSpacing: "-0.01em",
-                  color: active
-                    ? appleVibe.text.onAccent
-                    : appleVibe.text.secondary,
-                  background: active ? appleVibe.accent.primary : "transparent",
-                  border: "1px solid transparent",
-                  borderRadius: appleVibe.radius.pill,
-                  boxShadow: active
-                    ? "inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 12px -6px rgba(11,18,40,0.4)"
-                    : "none",
+                  padding: "8px 16px",
+                  borderRadius: 999,
+                  border: "1px solid rgba(15,23,42,0.12)",
+                  background: "white",
+                  color: appleVibe.text.primary,
+                  fontSize: 13,
+                  fontWeight: 600,
                   cursor: "pointer",
-                  transition: "background 140ms ease, color 140ms ease",
+                  fontFamily: appleVibe.font.stack,
                 }}
               >
-                {p.name}
+                Cancel
               </button>
-            );
-          })}
+              <button
+                type="button"
+                onClick={() => deletePage(confirmId)}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: 999,
+                  border: "1px solid #DC2626",
+                  background: "#DC2626",
+                  color: "white",
+                  fontSize: 13,
+                  fontWeight: 650,
+                  cursor: "pointer",
+                  fontFamily: appleVibe.font.stack,
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
 const BOARD_COMPONENTS: TLComponents = {
   StylePanel: CollapsibleStylePanel,
   TopPanel: PageTabs,
+  // The custom PageTabs (top-center) replaces tldraw's default page menu — drop
+  // the duplicate "Page 1 ▾" from the top-left cluster.
+  PageMenu: null,
   // Custom flow-builder connectors (bezier + handles) for the sharpening
   // graph — replaces the default tldraw arrows. Derived live from card
   // positions; see canvas-interactions/sharpening-connectors.tsx.
@@ -402,6 +646,8 @@ const CUSTOM_SHAPE_UTILS = [
   ObjectiveImageCardShapeUtil,
   ChatboxCardShapeUtil,
   ObjectiveCardShapeUtil,
+  VoiceNoteCardShapeUtil,
+  JournalCardShapeUtil,
 ];
 
 export function WhiteboardBase({
@@ -469,12 +715,20 @@ export function WhiteboardBase({
   // Server-backed persistence (canvases table, scope='objective') with a
   // localStorage mirror — replaces tldraw's local-only persistenceKey so
   // the board survives reload AND syncs across devices.
-  useObjectiveBoardPersistence(editor, spaceId, () => {
+  const { status: saveStatus } = useObjectiveBoardPersistence(editor, spaceId, () => {
     // Restore settled — now safe to drop in any cross-page queued
     // artifacts (e.g. sent from the lab) without a late restore wiping them.
     setRestoreSettled(true);
     const ed = editorRef.current;
     if (!ed) return;
+    // Older boards persisted real tldraw arrows for the sharpening graph;
+    // the bezier overlay now draws those, so the persisted arrows show as a
+    // straight-line duplicate under each curve. Sweep them once the board is
+    // restored (deploy doesn't re-run on a returning visit).
+    clearLegacySharpeningArrows(ed);
+    // Self-heal a board that wrongly carries a chatbox card ON TOP of a
+    // promoted objective (stale draft id seeded intake onto a finished board).
+    clearStaleChatboxCards(ed);
     for (const d of drainPendingArtifacts(spaceId)) createArtifactCard(ed, d);
     for (const d of drainPendingSubsystemKgs(spaceId))
       createSubsystemKgCard(ed, d);
@@ -971,6 +1225,7 @@ export function WhiteboardBase({
             depth: s.depth,
             questionCount: s.complexity,
             webSearch: s.webSearch,
+            spaceId,
           },
         );
         return;
@@ -989,6 +1244,7 @@ export function WhiteboardBase({
           roomId: d.roomId ?? undefined,
         },
         d.action,
+        { spaceId },
       );
     }
 
@@ -1016,6 +1272,24 @@ export function WhiteboardBase({
       deployImageCardOnBoard(
         editor,
         (e as CustomEvent<ImageCardDetail>).detail,
+      );
+    }
+
+    function onDeployVoiceNote(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      deployVoiceNoteOnBoard(
+        editor,
+        (e as CustomEvent<VoiceNoteCardDetail>).detail,
+      );
+    }
+
+    function onDeployJournal(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      deployJournalOnBoard(
+        editor,
+        (e as CustomEvent<JournalCardDetail>).detail,
       );
     }
 
@@ -1059,6 +1333,8 @@ export function WhiteboardBase({
     window.addEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpening);
     window.addEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguity);
     window.addEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCard);
+    window.addEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNote);
+    window.addEventListener(DEPLOY_JOURNAL_EVENT, onDeployJournal);
     window.addEventListener(SEED_CHATBOX_EVENT, onSeedChatbox);
     window.addEventListener(SEED_OBJECTIVE_EVENT, onSeedObjective);
     window.addEventListener(PROMOTE_TO_OBJECTIVE_EVENT, onPromoteToObjective);
@@ -1071,6 +1347,8 @@ export function WhiteboardBase({
       window.removeEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpening);
       window.removeEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguity);
       window.removeEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCard);
+      window.removeEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNote);
+      window.removeEventListener(DEPLOY_JOURNAL_EVENT, onDeployJournal);
       window.removeEventListener(SEED_CHATBOX_EVENT, onSeedChatbox);
       window.removeEventListener(SEED_OBJECTIVE_EVENT, onSeedObjective);
       window.removeEventListener(PROMOTE_TO_OBJECTIVE_EVENT, onPromoteToObjective);
@@ -1122,7 +1400,7 @@ export function WhiteboardBase({
   }, []);
 
   return (
-    <div className="absolute inset-0">
+    <div className="absolute inset-0 oc-board">
       <Tldraw
         shapeUtils={CUSTOM_SHAPE_UTILS}
         components={BOARD_COMPONENTS}
@@ -1130,6 +1408,58 @@ export function WhiteboardBase({
         inferDarkMode={false}
         hideUi={!showUi}
       />
+      {/* Autosave status pill (top-left, beside Home) — green = saved, amber =
+          saving, red = save failed. Gives the user explicit save feedback. */}
+      {editor && showUi && (
+        <div
+          style={{
+            // Beside the Home pill (top:54, left:16, ~84px wide) so the autosave
+            // status sits with the chrome rather than orphaned in the menu zone.
+            position: "absolute",
+            top: 56,
+            left: 110,
+            zIndex: 69,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "5px 11px",
+            borderRadius: 999,
+            pointerEvents: "none",
+            fontFamily: appleVibe.font.stack,
+            fontSize: 11,
+            fontWeight: 600,
+            color:
+              saveStatus === "error"
+                ? "#DC2626"
+                : appleVibe.text.secondary,
+            background: "var(--glass-float-bg)",
+            border: "1px solid var(--glass-border)",
+            backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+            WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+            boxShadow:
+              "inset 0 1px 0 var(--glass-highlight), 0 8px 22px -14px rgba(11,18,40,0.28)",
+          }}
+        >
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: 999,
+              background:
+                saveStatus === "error"
+                  ? "#DC2626"
+                  : saveStatus === "saving"
+                    ? "#F59E0B"
+                    : "#16A34A",
+            }}
+          />
+          {saveStatus === "saving"
+            ? "Saving…"
+            : saveStatus === "error"
+              ? "Save failed"
+              : "Saved"}
+        </div>
+      )}
       {/* Contextual AI action — only while the board chrome is showing and
           we're NOT unfurling (the selection toolbar is for the normal board). */}
       {editor && showUi && (
@@ -1640,50 +1970,8 @@ function PrototypeEventBridge({
   return null;
 }
 
-// Quiet, zen trigger for the default decomposition. Dispatches the request
-// (the board's listener does the fetch + deploy); clears its busy state when
-// the run settles. Fixed bottom-left so it never collides with the toolbar.
-function DecomposeCardsButton() {
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    const done = () => setBusy(false);
-    window.addEventListener(DECOMPOSE_DONE_EVENT, done);
-    return () => window.removeEventListener(DECOMPOSE_DONE_EVENT, done);
-  }, []);
-  return (
-    <button
-      type="button"
-      disabled={busy}
-      onClick={() => {
-        if (busy) return;
-        setBusy(true);
-        requestDecomposeIntoCards();
-      }}
-      title="Break the objective into Feature & Variable cards"
-      style={{
-        position: "fixed",
-        left: 16,
-        bottom: 16,
-        zIndex: 60,
-        padding: "8px 15px",
-        borderRadius: appleVibe.radius.pill,
-        background: appleVibe.surface.card,
-        border: `1px solid ${appleVibe.stroke.soft}`,
-        boxShadow: appleVibe.shadow.chip,
-        color: busy ? appleVibe.text.tertiary : appleVibe.text.primary,
-        fontFamily: appleVibe.font.stack,
-        fontSize: 12.5,
-        fontWeight: 600,
-        letterSpacing: "-0.01em",
-        cursor: busy ? "default" : "pointer",
-        pointerEvents: "all",
-        transition: "color 160ms ease-out",
-      }}
-    >
-      {busy ? "Decomposing…" : "Decompose"}
-    </button>
-  );
-}
+// DecomposeCardsButton (the bottom-left float) was removed — the objective
+// decompose now lives in the Powerups rail (requestDecomposeIntoCards).
 
 function BoardOverlay({
   editor,
@@ -1699,13 +1987,34 @@ function BoardOverlay({
   // Default true so the hint never flashes before the localStorage read;
   // the effect flips it false for users who haven't dismissed it.
   const [hintDismissed, setHintDismissed] = useState(true);
-  // Pin the AI scanner open so live recommendations persist while you work
-  // (scans the selected card, or the whole board when nothing is selected).
-  const [pinned, setPinned] = useState(false);
+  // The scanner surfaces on card select; the "Ask AI" pin toggle was removed,
+  // so this stays false (no whole-board scan branch). Kept as state so the
+  // scanner-host render condition below reads cleanly.
+  const [pinned] = useState(false);
   // SpecForge — the full causal-spec chain running off the selected idea.
   // Non-null while the chain runs; drives the floating progress chip + the
   // scanner's "Forge full spec" button busy state.
   const [forging, setForging] = useState<SpecForgeProgress | null>(null);
+
+  // The Powerups rail's Forge button dispatches FORGE_REQUEST_EVENT — run the
+  // SpecForge chain on the current selection (aggregated). handleForge is a
+  // hoisted declaration below, so referencing it here is fine.
+  useEffect(() => {
+    function onForgeReq() {
+      const targets = editor
+        .getSelectedShapes()
+        .map(shapeToScanTarget)
+        .filter((t): t is OperationTarget => !!t);
+      if (targets.length === 0) return;
+      handleForge({
+        text: targets.map((t) => t.text).join("\n\n"),
+        shapeId: targets[0].shapeId,
+      });
+    }
+    window.addEventListener(FORGE_REQUEST_EVENT, onForgeReq);
+    return () => window.removeEventListener(FORGE_REQUEST_EVENT, onForgeReq);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor]);
   // Deep Synthesize (pro Claude + web search) — busy flag + the staged
   // label shown in its progress chip while the long run is in flight.
   const [deepBusy, setDeepBusy] = useState(false);
@@ -1713,6 +2022,8 @@ function BoardOverlay({
   // SpecForge → Tech Spec stage (auto-runs after the forge unfurl completes).
   const [techSpecBusy, setTechSpecBusy] = useState(false);
   const [techSpecStage, setTechSpecStage] = useState("Writing the tech spec…");
+  // "Custom" synthesizing op (the user's own instruction over the selection).
+  const [customBusy, setCustomBusy] = useState(false);
 
   // Run the SpecForge chain for the selected idea — streams decision cards
   // below the source. Guarded so a second click can't double-run.
@@ -1804,6 +2115,24 @@ function BoardOverlay({
         const t = shapeToScanTarget(s);
         if (t) deepEntries.push({ id: s.id, kind: s.type, text: t.text });
       }
+      // Converge/Diverge popup — beside the selection (single OR lasso) whenever
+      // ≥1 scannable card is selected and none is mid-edit. Anchor = the
+      // selection's bounding box in screen coords; target = the aggregate.
+      const editingId = editor.getEditingShapeId();
+      const cdActive =
+        deepEntries.length >= 1 && selected.every((s) => s.id !== editingId);
+      let cdAnchor: { left: number; right: number; midY: number } | null = null;
+      if (cdActive && bounds) {
+        const l = editor.pageToScreen({ x: bounds.minX, y: bounds.midY });
+        const r = editor.pageToScreen({ x: bounds.maxX, y: bounds.midY });
+        cdAnchor = { left: l.x, right: r.x, midY: r.y };
+      }
+      const cdTarget: OperationTarget | null = cdActive
+        ? {
+            text: deepEntries.map((e) => e.text).join("\n\n"),
+            shapeId: deepEntries[0].id,
+          }
+        : null;
       return {
         ids: cards.map((c) => c.id),
         payloads: cards.map(cardPayload),
@@ -1819,6 +2148,8 @@ function BoardOverlay({
         ).length,
         insightCount: shapes.filter((s) => s.type === "insight-card").length,
         single,
+        cdAnchor,
+        cdTarget,
         boardScanText,
         deepIds: deepEntries.map((e) => e.id),
         deepPayloads: deepEntries.map((e) => ({ kind: e.kind, text: e.text })),
@@ -1894,6 +2225,36 @@ function BoardOverlay({
     }
   }
 
+  // Spec on a SELECTION: forge a full spec from the combined selection text
+  // (reuses the single-idea SpecForge → tech-spec pipeline via handleForge).
+  function handleSpec() {
+    const text = view.deepPayloads.map((p) => p.text).join("\n\n").slice(0, 6000);
+    if (!text.trim()) return;
+    handleForge({ text, shapeId: view.deepIds[0] });
+  }
+
+  // Custom op on a SELECTION: run the user's own instruction over the
+  // combined selection text → result cards below the first selected shape.
+  async function handleCustom(prompt: string) {
+    if (customBusy) return;
+    const text = view.deepPayloads.map((p) => p.text).join("\n\n").slice(0, 6000);
+    if (!text.trim() || !prompt.trim()) return;
+    setCustomBusy(true);
+    try {
+      const s = getAiSettings();
+      await executeCardOperation(
+        editor,
+        { text, shapeId: view.deepIds[0] },
+        "custom",
+        { prompt, temperature: s.temperature, spaceId },
+      );
+    } catch (err) {
+      console.warn("[board] custom op failed:", err);
+    } finally {
+      setCustomBusy(false);
+    }
+  }
+
   // Deep Synthesize: pro Claude (Opus) reads the whole idea selection
   // (post-its + text + cards), searches the web, and forks a hub +
   // cross-link map onto the board. Request/response, so the staged labels
@@ -1966,12 +2327,48 @@ function BoardOverlay({
 
   return (
     <>
-      {/* The ‹ diverge / converge › buttons run the default "pipeline" engine
-          (questions → answers → distilled nodes). The dev A/B toggle for
-          pipeline-vs-regroup is intentionally not surfaced on the board — it
-          read as a mystery control next to the page tabs. Flip the engine in
-          code via setDirectionEngine if A/B testing is needed again. */}
-      <DecomposeCardsButton />
+      {/* Return to home (/app). Top-left, sits over the hover-revealed tldraw
+          menu cluster. */}
+      <button
+        type="button"
+        title="Back to home"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => window.location.assign("/app")}
+        style={{
+          // Below the (hover-revealed) tldraw top-left menu zone so the menu
+          // never covers this button when it appears.
+          position: "absolute",
+          top: 54,
+          left: 16,
+          zIndex: 70,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "7px 12px",
+          borderRadius: appleVibe.radius.pill,
+          border: "1px solid var(--glass-border)",
+          cursor: "pointer",
+          fontFamily: appleVibe.font.stack,
+          fontSize: 11.5,
+          fontWeight: 650,
+          color: appleVibe.text.secondary,
+          background: "var(--glass-float-bg)",
+          backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+          WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+          boxShadow:
+            "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
+        }}
+      >
+        <Home style={{ width: 13, height: 13 }} strokeWidth={2.2} />
+        Home
+      </button>
+      {/* Room pill — the always-visible current-objective indicator + ＋ to
+          start a new one. Grouped just right of Home (top-left nav cluster). */}
+      <div style={{ position: "absolute", top: 12, left: 96, zIndex: 70 }}>
+        <RoomPill editor={editor} />
+      </div>
+      {/* Decompose (and every other op) now lives in the Powerups rail — no
+          stray bottom-left float. Converge/Diverge are the inline verbs. */}
       {/* Top-center AI thinking-settings cluster (depth · complexity · temp ·
           web search) — global knobs the ‹ › verbs + scanner ops read. */}
       <CanvasTopControls />
@@ -1979,6 +2376,21 @@ function BoardOverlay({
           right-edge pill; expandable to full screen. Reads the space glossary
           + focuses board cards. */}
       <LibraryLauncher spaceId={spaceId} editor={editor} />
+      {/* Powerups + Artifacts rail — the persistent right-edge home for every
+          AI op (run on the live selection) + the finished tech-specs/artifacts. */}
+      <PowerupRail spaceId={spaceId} editor={editor} />
+      {/* Object detail drawer — listens for OPEN_CARD_DETAIL_EVENT (oc-card
+          double-click + Library clicks) → metadata + object-graph modal. */}
+      <ObjectDetailMount spaceId={spaceId} editor={editor} />
+      {/* Left-edge Goal & alignment rail: ultimate goal + live ranking of
+          convergent/divergent board nodes (rank-nodes endpoint). */}
+      <GoalLauncher spaceId={spaceId} editor={editor} />
+      {/* Version history — left-edge pill → timestamped snapshots + restore;
+          auto-captures every few minutes while the board changes. */}
+      <BoardHistoryLauncher spaceId={spaceId} editor={editor} />
+      {/* Minimalist account settings — left-edge pill → who you're signed in
+          as + sign out. The old /app/settings page is retired (middleware). */}
+      <BoardSettingsLauncher />
       {showHint && <BoardHint onDismiss={dismissHint} />}
       {view.screen &&
         (count >= 2 ||
@@ -1999,36 +2411,34 @@ function BoardOverlay({
             onDeepRun={
               view.deepPayloads.length >= 2 ? handleDeepRun : undefined
             }
+            onSpec={view.deepPayloads.length >= 2 ? handleSpec : undefined}
+            specBusy={forging?.phase === "running" || techSpecBusy}
+            onCustom={view.deepPayloads.length >= 2 ? handleCustom : undefined}
+            customBusy={customBusy}
           />
         )}
 
-      {/* AI scanner — a sticky-note / text idea selected → recommend + run ops. */}
-      {(view.single || (pinned && view.boardScanText)) &&
+      {/* Converge / Diverge — the minimal verbs, beside the selection (single OR
+          lasso/multi-select). The full op list + Forge live in the Powerups
+          rail; these two stay inline as the primary move. */}
+      {view.cdAnchor &&
+        view.cdTarget &&
         (() => {
-          const target: OperationTarget = view.single?.target ?? {
-            text: view.boardScanText,
-          };
-          const sx =
-            view.single?.sx ??
-            (typeof window !== "undefined" ? window.innerWidth - 328 : 16);
-          const sy = view.single?.sy ?? 88;
+          const anchor = view.cdAnchor!;
+          const target = view.cdTarget!;
           return (
-            <AiScannerPanel
-              key={view.single?.target.shapeId ?? "board-scan"}
-              target={target}
-              x={sx}
-              y={sy}
+            <ConvergeDivergePopup
+              anchor={anchor}
               onRun={(opId, temperature) => {
                 const s = getAiSettings();
-                void executeCardOperation(editor, target, opId, {
+                return executeCardOperation(editor, target, opId, {
                   temperature,
                   depth: s.depth,
                   questionCount: s.complexity,
                   webSearch: s.webSearch,
+                  spaceId,
                 });
               }}
-              onForge={() => handleForge(target)}
-              forging={forging?.phase === "running"}
             />
           );
         })()}
@@ -2046,38 +2456,8 @@ function BoardOverlay({
         <DeepSynthProgressChip title="Tech spec" label={techSpecStage} />
       )}
 
-      {/* Persistent AI panel toggle — pin the scanner open so live
-          recommendations stay while you work (scans the selected card, or the
-          whole board when nothing is selected). */}
-      <button
-        type="button"
-        onClick={() => setPinned((p) => !p)}
-        title={pinned ? "Hide AI suggestions" : "Scan the board with AI"}
-        style={{
-          position: "absolute",
-          left: 16,
-          bottom: 16,
-          zIndex: 65,
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 7,
-          padding: "9px 14px",
-          borderRadius: 999,
-          border: `1px solid ${appleVibe.stroke.soft}`,
-          background: pinned
-            ? appleVibe.accent.primary
-            : appleVibe.surface.card,
-          color: pinned ? appleVibe.text.onAccent : appleVibe.text.primary,
-          boxShadow: appleVibe.shadow.chip,
-          cursor: "pointer",
-          fontSize: 13,
-          fontWeight: 600,
-          fontFamily: appleVibe.font.stack,
-        }}
-      >
-        <Sparkles style={{ width: 15, height: 15 }} strokeWidth={2.2} />
-        {pinned ? "AI on" : "Ask AI"}
-      </button>
+      {/* The "Ask AI" pin toggle was removed to declutter the board chrome —
+          the scanner now surfaces on card select (view.single) only. */}
 
       {/* Converge entry — opens Focus Mode to mark what's decided. */}
       {focus.phase === "closed" && view.nodes.length > 0 && (

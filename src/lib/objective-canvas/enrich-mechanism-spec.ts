@@ -67,7 +67,7 @@
 // already-large expand call from getting slower / more failure-prone.
 // Feature-only: pains + outcomes don't get a mechanism spec.
 
-import { llmGenerate, llmJSON } from "@/lib/llm";
+import { llmGenerate, llmJSON, BEST_FAST_CLAUDE_MODEL } from "@/lib/llm";
 import {
   composeDesignArtifactWithClaude,
   fallbackDesignArtifactFromSpec,
@@ -1492,7 +1492,7 @@ export async function enrichMechanismSpec(
 
 // ─── Claude design_intent refinement (v3, Anthropic-side) ────────
 
-const CLAUDE_DESIGN_REFINER_MODEL = "claude-3-5-sonnet-20241022";
+const CLAUDE_DESIGN_REFINER_MODEL = BEST_FAST_CLAUDE_MODEL;
 
 /** Build the refiner prompt — a focused critique-and-rewrite pass
  *  over the OpenAI draft. Claude reads the mechanism's behavioral

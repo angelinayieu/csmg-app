@@ -64,6 +64,44 @@ autopilot), so you'll also want **C** for them to be reachable.
 **D. Keep both** — minimal by default but a visible "Open full canvas" button:
 link to `?full=1` from the minimal surface or the objective card.
 
+---
+
+## Deprecation & strategic focus — hide the old path, focus the new object layer (2026-06-03)
+
+**Decision (locked):** the **old build is being retired**, not just lazy-loaded. Two things and *everything downstream of them* are hidden + de-prioritized:
+
+1. **Room generation** — the sub-objective "room" pipeline that produces `entities` + `edges` (`POST /api/brainstorm/room/generate` and friends).
+2. **The complex operation intake** — the heavy multi-stage decompose pipeline (`POST /api/pipeline/decompose`, `decompose-why-chain`, `research`, `expand`, …).
+
+The product now focuses on the **new object layer**: `library_objects` / **oc-cards** (Variable + Feature), the **converge / diverge** verbs, the minimal / whiteboard-native intake, and the on-canvas chrome (AI-settings bar, selection synth ops, goal sidebar). New-model reference: **`OBJECT_FLOW_ARCHITECTURE.md`** (Phase 0 = `library_objects`).
+
+### Already hidden (by the minimal-mode default above)
+Room gen is gated by `spaces.pipeline_mode === "autopilot"` (`src/lib/feature-flags/room-generation.ts`); the **default is `"review_each"` → room gen OFF**. The minimal intake never auto-calls `decompose` (it's user-initiated). So by default a user never triggers either path. The §"What was turned off" table covers the canvas load, the intake kickoffs, the chrome, and the collapsed shell.
+
+### Downstream surfaces of the old path (hidden ⇒ unreachable in the default flow)
+| Surface | File | Status in default (minimal) flow |
+|---|---|---|
+| Sub-objective room view (4 lanes + correlations) | `src/components/objective/sub-objective-room-view.tsx`, route `…/sub/[subId]/page.tsx` | Reachable only via `open_room` + that route; empty without room gen |
+| Room altitude / causal map | `src/components/objective/causal-map/altitudes/RoomAltitudeMap.tsx` | entities/edges-backed → empty |
+| Lane / category cards | `src/components/objective/category-card.tsx` | room-gen output |
+| Entity detail drawer | `src/components/canvas/drawers/entity-detail-drawer.tsx` + `ItemDetailDrawer` | entity-backed |
+| Cross-room signals strip | `src/components/objective/cross-room-signals-strip.tsx` | aggregates entities |
+| Legacy Synergy / Studio shells | `/app?legacy=1`, `/app?studio=1` | already behind query-param escape hatches |
+
+### Dependency safety (why hiding the old does NOT break the new)
+- `library_objects.source_entity_id` is **nullable** — oc-cards/objects exist **without** any entity (`src/lib/objective-canvas/library-objects.ts`). New layer is self-standing.
+- **converge / diverge** are board-native (operate on card text → `executeCardOperation`); no entity/room queries.
+- Minimal/whiteboard-native intake creates an `objective_canvas` space in `review_each` mode; no rooms, no decompose.
+
+### ⚠️ Residual old-layer leak to seal — the Library rail
+The **Library rail** (`canvas-interactions/library-rail.tsx`) + its endpoint **`GET /api/spaces/[id]/graph`** read the **`entities`** table (OLD layer) and open the entity-based `ItemDetailDrawer`. It's mounted in the default board chrome, so under the new direction it will show an **empty** glossary/graph (no room gen) and points at the wrong layer.
+**Plan:** re-point the Library to **`library_objects`** (list via the existing `…/library/objects` read path) and open the **object** detail surface used by the oc-cards (`OPEN_CARD_DETAIL_EVENT {objectId}`). NOTE: that object drawer is currently **WIP / unwired** (the only references to `OPEN_CARD_DETAIL_EVENT` are in `oc-card-shape.tsx` — nothing listens yet), so this re-point is gated on the object-flow drawer landing. Until then the Library reads the old layer.
+
+### What is NOT removed (reversible)
+Nothing is deleted — the old routes/components remain on disk and are reachable via `?full=1` / `?legacy=1` / `?studio=1` and `pipeline_mode = "autopilot"`. This is a **hide + de-prioritize**, kept reversible per the escape hatches below.
+
+---
+
 ## Why intake was slow (the original bug)
 
 `/app/objective/[spaceId]/page.tsx` is a server component that, on every load,

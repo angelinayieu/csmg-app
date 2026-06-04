@@ -13,17 +13,26 @@
 
 export interface SaveableCard {
   /** Maps to library_objects.object_type. */
-  objectType: "feature" | "insight" | "mechanism" | "deliverable";
+  objectType: "feature" | "variable" | "insight" | "mechanism" | "deliverable";
   title: string;
+  /** One-line summary → library_objects.summary (the card subtitle). */
+  summary?: string | null;
   /** The source entity (feature/pain/outcome) when the card is entity-backed. */
   sourceEntityId?: string | null;
   /** The source room (sub-objective) when known. */
   sourceSubObjectiveId?: string | null;
+  /** Blob-local unique id. REQUIRED for non-entity cards so distinct cards
+   *  don't collide on the (space, type, null, null) natural key. */
+  sourceRef?: string | null;
 }
 
 export interface SaveResult {
   saved: number;
   failed: number;
+  /** The created/updated library_objects id per input card, in order (null on
+   *  failure). Lets callers thread the objectId back onto the board shape so it
+   *  opens the object detail drawer. */
+  objectIds: (string | null)[];
 }
 
 /**
@@ -37,6 +46,7 @@ export async function saveCardsToLibrary(
 ): Promise<SaveResult> {
   let saved = 0;
   let failed = 0;
+  const objectIds: (string | null)[] = [];
   for (const card of cards) {
     try {
       const res = await fetch(
@@ -48,16 +58,25 @@ export async function saveCardsToLibrary(
             action: "upsert",
             objectType: card.objectType,
             title: card.title,
+            summary: card.summary ?? null,
             sourceEntityId: card.sourceEntityId ?? null,
             sourceSubObjectiveId: card.sourceSubObjectiveId ?? null,
+            sourceRef: card.sourceRef ?? null,
           }),
         },
       );
-      if (res.ok) saved++;
-      else failed++;
+      if (res.ok) {
+        saved++;
+        const j = (await res.json().catch(() => null)) as { id?: string } | null;
+        objectIds.push(typeof j?.id === "string" ? j.id : null);
+      } else {
+        failed++;
+        objectIds.push(null);
+      }
     } catch {
       failed++;
+      objectIds.push(null);
     }
   }
-  return { saved, failed };
+  return { saved, failed, objectIds };
 }

@@ -214,6 +214,7 @@ export default function Starburst3D() {
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
     const tmp = new THREE.Vector3();
+    const tmpCenter = new THREE.Vector3();
 
     let dragging = false;
     let moved = false;
@@ -361,8 +362,12 @@ export default function Starburst3D() {
 
       renderer.render(scene, cam);
 
-      // Pills track the (now world-positioned) end nodes. Done after render
-      // so the world matrices are current this frame.
+      // Pills track the (now world-positioned) end nodes, then drift a touch
+      // further OUT along the ray (radially from the burst center) so the
+      // label floats clear of the line tip instead of sitting on it.
+      tmpCenter.set(0, 0, 0).project(cam);
+      const cx = (tmpCenter.x * 0.5 + 0.5) * w;
+      const cy = (-tmpCenter.y * 0.5 + 0.5) * h;
       for (const ep of endpoints) {
         const pill = pillRefs.current[ep.pillIdx];
         if (!pill) continue;
@@ -370,8 +375,17 @@ export default function Starburst3D() {
           ep.sphere.getWorldPosition(tmp).project(cam);
           const sx = (tmp.x * 0.5 + 0.5) * w;
           const sy = (-tmp.y * 0.5 + 0.5) * h;
-          pill.style.left = `${sx}px`;
-          pill.style.top = `${sy}px`;
+          const dx = sx - cx;
+          const dy = sy - cy;
+          const dlen = Math.hypot(dx, dy) || 1;
+          // Float the label outward along its radial. Endpoints that project
+          // near the hub (rays angled toward the camera — the "middle" pill)
+          // get pushed to a guaranteed minimum clearance so they never sit on
+          // the center; side labels (already far out) just drift a touch.
+          const fullDist = Math.max(dlen + 26, 116);
+          const dist = dlen + (fullDist - dlen) * ep.drift;
+          pill.style.left = `${cx + (dx / dlen) * dist}px`;
+          pill.style.top = `${cy + (dy / dlen) * dist}px`;
           pill.style.opacity = `${Math.min(1, ep.drift * 1.2)}`;
           pill.style.transform = `translate(-50%, -50%) scale(${0.86 + 0.14 * ep.drift})`;
         } else if (pill.style.opacity !== "0") {
@@ -425,7 +439,7 @@ export default function Starburst3D() {
       className="relative mx-auto select-none"
       style={{
         width: "100%",
-        maxWidth: 420,
+        maxWidth: 480,
         aspectRatio: "4 / 3",
         touchAction: "none",
       }}

@@ -832,6 +832,16 @@ body[data-canvas-unfurl-active="true"] .chrome-dimmable {
   }
 }
 
+/* ── Objective board: REMOVE the default tldraw top-left tab/menu cluster ──
+ * The custom PageTabs (top-center) is the single page UI, and the
+ * Home/Goal/History rail handles navigation — so the duplicate top-left bar is
+ * dropped entirely. Removing it (display:none) also lets the centered TopPanel
+ * align to the true viewport center (the left zone's width no longer offsets
+ * it). Scoped to .oc-board so other tldraw instances keep their full UI. */
+.oc-board .tlui-layout__top__left {
+  display: none !important;
+}
+
 /* ── Strategy hero card — canvas-side expand ──
  * When the user clicks the strategy hero card to expand it, the
  * CanvasStrategyExpandResponder sets data-canvas-strategy-expanded="true"

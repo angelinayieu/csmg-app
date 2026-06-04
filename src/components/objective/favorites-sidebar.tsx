@@ -12,7 +12,9 @@ import { useValue, type Editor, type TLShape, type TLShapeId } from "tldraw";
 import { Heart } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
-function labelFor(shape: TLShape): string {
+/** Human label for any board shape — shared with the objective node's contents
+ *  list so a card reads the same in both places. */
+export function labelFor(shape: TLShape): string {
   const p = shape.props as Record<string, unknown>;
   const title =
     (typeof p.title === "string" && p.title) ||
@@ -23,6 +25,19 @@ function labelFor(shape: TLShape): string {
   if (shape.type === "prompt-sharpening") return "Sharpening";
   if (shape.type === "objective-card") return "Objective";
   return shape.type.replace(/-card$/, "");
+}
+
+/** Center the camera on a shape and select it — the shared "go to this card"
+ *  gesture (favorites rail + objective-node contents). */
+export function panToShape(editor: Editor, id: TLShapeId): void {
+  const b = editor.getShapePageBounds(id);
+  if (b) {
+    editor.centerOnPoint(
+      { x: b.midX, y: b.midY },
+      { animation: { duration: 300 } },
+    );
+  }
+  editor.select(id);
 }
 
 export function FavoritesSidebar({ editor }: { editor: Editor }) {
@@ -37,17 +52,6 @@ export function FavoritesSidebar({ editor }: { editor: Editor }) {
   );
 
   if (favorites.length === 0) return null;
-
-  function panTo(id: TLShapeId) {
-    const b = editor.getShapePageBounds(id);
-    if (b) {
-      editor.centerOnPoint(
-        { x: b.midX, y: b.midY },
-        { animation: { duration: 300 } },
-      );
-    }
-    editor.select(id);
-  }
 
   return (
     <div
@@ -79,7 +83,7 @@ export function FavoritesSidebar({ editor }: { editor: Editor }) {
           <button
             key={f.id}
             type="button"
-            onClick={() => panTo(f.id)}
+            onClick={() => panToShape(editor, f.id)}
             className="truncate rounded-lg px-2.5 py-1.5 text-left text-[12px] font-medium transition-colors hover:bg-black/[0.04]"
             style={{ color: appleVibe.text.secondary }}
             title={f.label}

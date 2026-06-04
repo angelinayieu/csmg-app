@@ -36,8 +36,9 @@ export const MODEL_DEFAULTS = {
     // override via the explicit `model` param at the call site.
     reasoning: "claude-opus-4-20250514",
     // Sonnet as a cheaper fallback for mid-tier reasoning where Opus
-    // would be overkill.
-    fast: "claude-3-5-sonnet-20241022",
+    // would be overkill. Mirror of BEST_FAST_CLAUDE_MODEL — kept a literal
+    // here so MODEL_DEFAULTS stays free of cross-const init ordering.
+    fast: "claude-sonnet-4-6",
   },
 } as const;
 
@@ -57,6 +58,14 @@ export const MODEL_DEFAULTS = {
 // slider (decompose / variations / questions / plan / layers / data-flow).
 export const BEST_CLAUDE_MODEL = "claude-opus-4-8";
 export const BEST_TUNABLE_CLAUDE_MODEL = "claude-opus-4-1-20250805";
+
+// BEST_FAST_CLAUDE_MODEL — the current fast/mid-tier Sonnet, for utility
+// surfaces where Opus would be overkill (vision extraction, web-search
+// summarization, design-artifact / design-refiner passes). Supersedes the
+// retired "claude-3-5-sonnet-20241022", which now 404s (not_found_error) and
+// silently soft-failed every feature still pointing at it. Supports both
+// `temperature` and vision. Bump this one line, not the ~5 call sites.
+export const BEST_FAST_CLAUDE_MODEL = "claude-sonnet-4-6";
 
 /** Whether a model accepts the `temperature` parameter. Opus 4.8+ fixed its
  *  sampling and rejects an explicit temperature; everything else still takes

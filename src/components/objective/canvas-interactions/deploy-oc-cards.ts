@@ -38,7 +38,11 @@ export interface DeployLink {
 }
 
 const CARD_W = 248;
-const CARD_H = 132;
+// Spawn height fits the card's clamped face (2-line name + 3-line body +
+// footer) so nothing is cropped on spawn, and the row pitch leaves slack for
+// the shape's useAutoFitHeight to grow a touch without overlapping the next
+// row. Keep in sync with OcCardShapeUtil.getDefaultProps.
+const CARD_H = 176;
 const GAP_Y = 26;
 const COL_GAP = 220;
 
@@ -56,9 +60,27 @@ export function deployOcCards(
   const idByObject = new Map<string, TLShapeId>();
   const created: TLShapeId[] = [];
 
+  // Anchor the cluster BELOW the objective + sharpening cards so it reads as
+  // a downstream layer instead of piling on top of them (the overlap bug).
+  const existingBottoms = editor
+    .getCurrentPageShapes()
+    .filter(
+      (s) =>
+        s.type === "objective-card" ||
+        s.type === "room-card" ||
+        s.type === "prompt-sharpening",
+    )
+    .map((s) => editor.getShapePageBounds(s.id)?.maxY)
+    .filter((v): v is number => typeof v === "number");
+  const startY =
+    existingBottoms.length > 0
+      ? Math.max(...existingBottoms) + 96
+      : vp.center.y;
+
   const placeColumn = (list: DeployCard[], x: number) => {
-    const totalH = list.length * CARD_H + Math.max(0, list.length - 1) * GAP_Y;
-    let y = vp.center.y - totalH / 2;
+    // Both columns top-align at startY (below the upstream cards) so the
+    // feature→variable links read cleanly in their own downstream band.
+    let y = startY;
     for (const c of list) {
       const id = createShapeId();
       idByObject.set(c.objectId, id);
@@ -94,7 +116,18 @@ export function deployOcCards(
     const arrow: TLShapePartial<TLArrowShape> = {
       id: arrowId,
       type: "arrow",
-      props: { color: "grey", size: "s", dash: "dashed", arrowheadEnd: "arrow" },
+      props: {
+        color: "grey",
+        size: "s",
+        dash: "dashed",
+        // Clean connector — no arrowheads + a soft curve, matching the
+        // sharpening connectors. Bound feature right-edge → variable
+        // left-edge so links read as a tidy left→right flow, not a
+        // center-to-center criss-cross.
+        arrowheadStart: "none",
+        arrowheadEnd: "none",
+        bend: 26,
+      },
       meta: { ocLink: true },
     };
     editor.createShapes([arrow]);
@@ -105,9 +138,9 @@ export function deployOcCards(
         type: "arrow",
         props: {
           terminal: "start",
-          normalizedAnchor: { x: 0.5, y: 0.5 },
+          normalizedAnchor: { x: 1, y: 0.5 },
           isExact: false,
-          isPrecise: false,
+          isPrecise: true,
         },
         meta: {},
       },
@@ -117,9 +150,9 @@ export function deployOcCards(
         type: "arrow",
         props: {
           terminal: "end",
-          normalizedAnchor: { x: 0.5, y: 0.5 },
+          normalizedAnchor: { x: 0, y: 0.5 },
           isExact: false,
-          isPrecise: false,
+          isPrecise: true,
         },
         meta: {},
       },

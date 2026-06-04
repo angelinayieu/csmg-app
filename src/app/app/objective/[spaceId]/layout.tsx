@@ -40,6 +40,7 @@ import {
 import { ObjectiveCanvasShell } from "@/components/objective/objective-canvas-shell";
 import { PromptSharpeningMount } from "@/components/objective/prompt-sharpening-mount";
 import { ObjectiveImageMount } from "@/components/objective/objective-image-mount";
+import { VoiceRecordFab } from "@/components/objective/voice/voice-record-fab";
 import { AnnotationsVisibilityToggle } from "@/components/objective/annotations-visibility-toggle";
 import { HomeTabNav } from "@/components/app/home-tab-nav";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -238,6 +239,11 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
       {minimal && !isBrief && <PromptSharpeningMount spaceId={spaceId} />}
       {/* Analyzed pasted images → cards on the board (minimal mode only). */}
       {minimal && !isBrief && <ObjectiveImageMount spaceId={spaceId} />}
+
+      {/* Voice journal — the record FAB (bottom-center) opens the recorder
+          panel; committing drops a voice-note card + re-synthesizes the
+          journal. Board-only (minimal), when the board is showing. */}
+      {minimal && !isBrief && <VoiceRecordFab spaceId={spaceId} />}
 
       {/* Collapsed pill — visible whenever the notebook is closed.
           Render WITHOUT the hydration gate so it's visible on first

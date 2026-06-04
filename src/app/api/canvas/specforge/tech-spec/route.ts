@@ -11,7 +11,7 @@
 
 import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
-import { llmGenerate } from "@/lib/llm";
+import { llmGenerate, BEST_FAST_CLAUDE_MODEL } from "@/lib/llm";
 import { extractJSON } from "@/lib/web-search";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 import {
@@ -22,7 +22,7 @@ import {
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const VISION_MODEL = "claude-3-5-sonnet-20241022";
+const VISION_MODEL = BEST_FAST_CLAUDE_MODEL;
 const ALLOWED_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
 type AllowedMime = (typeof ALLOWED_MIME)[number];
 

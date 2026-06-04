@@ -18,6 +18,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
+import { Trash2, Loader2 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { SpaceCardBrief } from "@/lib/objective-canvas/summarize-space-card";
 
@@ -110,8 +111,38 @@ function useProgressiveBriefs(
 export function LibraryGrid({ spaces }: { spaces: LibrarySpace[] }) {
   const router = useRouter();
   const briefs = useProgressiveBriefs(spaces);
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
+  const [busyId, setBusyId] = useState<string | null>(null);
 
-  if (spaces.length === 0) {
+  async function handleRemove(id: string) {
+    if (busyId) return;
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm("Remove this whiteboard from your library?")
+    )
+      return;
+    setBusyId(id);
+    try {
+      // Soft-remove via archive (PATCH archived:true) rather than a hard
+      // DELETE — it's reversible and never fails on a space that has linked
+      // rows (entities / credit ledger have non-cascading FKs). The library
+      // query already filters archived=false, so the card stays gone.
+      const res = await fetch(`/api/spaces/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ archived: true }),
+      });
+      if (res.ok) setRemoved((prev) => new Set(prev).add(id));
+    } catch {
+      /* transient — leave the card in place */
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const visible = spaces.filter((s) => !removed.has(s.id));
+
+  if (visible.length === 0) {
     return (
       <p
         className="text-[13px] font-light"
@@ -124,7 +155,7 @@ export function LibraryGrid({ spaces }: { spaces: LibrarySpace[] }) {
 
   return (
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-      {spaces.map((space) => {
+      {visible.map((space) => {
         const brief = briefs[space.id] ?? null;
         const href =
           space.space_kind === "objective_canvas"
@@ -137,13 +168,13 @@ export function LibraryGrid({ spaces }: { spaces: LibrarySpace[] }) {
             ? brief.points
             : bulletsFrom(space.description);
         return (
+          <div key={space.id} className="group relative">
           <motion.button
-            key={space.id}
             type="button"
             onClick={() => router.push(href)}
             whileHover={{ y: -3, boxShadow: appleVibe.shadow.cardHover }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="group flex flex-col items-start rounded-3xl p-5 text-left"
+            className="flex w-full flex-col items-start rounded-3xl p-5 text-left"
             style={{
               background: appleVibe.surface.card,
               border: `1px solid ${appleVibe.stroke.soft}`,
@@ -191,6 +222,34 @@ export function LibraryGrid({ spaces }: { spaces: LibrarySpace[] }) {
               </span>
             )}
           </motion.button>
+
+          {/* Remove (archive) — hover-revealed so it never competes with the
+              card content; stops propagation so it doesn't open the canvas. */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleRemove(space.id);
+            }}
+            disabled={busyId === space.id}
+            title="Remove from library"
+            aria-label="Remove from library"
+            className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-full opacity-0 transition-opacity duration-150 focus:opacity-100 group-hover:opacity-100"
+            style={{
+              background: appleVibe.surface.card,
+              border: `1px solid ${appleVibe.stroke.soft}`,
+              boxShadow: appleVibe.shadow.chip,
+              color: appleVibe.text.tertiary,
+              cursor: busyId === space.id ? "default" : "pointer",
+            }}
+          >
+            {busyId === space.id ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5" />
+            )}
+          </button>
+          </div>
         );
       })}
     </div>

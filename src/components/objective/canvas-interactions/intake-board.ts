@@ -20,11 +20,42 @@ function centerOf(editor: Editor): { x: number; y: number } {
   return { x: vp.center.x, y: vp.center.y };
 }
 
+/** A board is EITHER intake (a chatbox card) OR a promoted objective (an
+ *  objective card, or the minimal-mode "__obj" room card) — never both. Once
+ *  the objective exists, the space is promoted and there is nothing left to
+ *  intake. */
+function hasObjective(editor: Editor): boolean {
+  return editor.getCurrentPageShapes().some(
+    (s) =>
+      s.type === "objective-card" ||
+      (s.type === "room-card" &&
+        (s as { props?: { roomId?: string } }).props?.roomId === "__obj"),
+  );
+}
+
+/** Self-heal a board that wrongly carries BOTH a chatbox card and a promoted
+ *  objective (e.g. a stale draft id seeded a chatbox onto an already-promoted
+ *  board). Delete the stray chatbox so the objective stands alone. No-op on a
+ *  legit draft (objective not yet present) so mid-intake typing is preserved.
+ *  Exported so the board can sweep once on restore — deploy doesn't re-run on
+ *  a returning visit. */
+export function clearStaleChatboxCards(editor: Editor): void {
+  if (!hasObjective(editor)) return;
+  const ids = editor
+    .getCurrentPageShapes()
+    .filter((s) => s.type === "chatbox-card")
+    .map((s) => s.id);
+  if (ids.length > 0) editor.deleteShapes(ids);
+}
+
 /** Seed the chatbox card centered on the board (draft spaces). Idempotent. */
 export function deployChatboxOnBoard(
   editor: Editor,
   detail: { spaceId: string; seedText: string },
 ): void {
+  // Promoted board → there's no intake to do; never drop a chatbox on top of
+  // a finished objective (the cause of "a typing card over my objective").
+  if (hasObjective(editor)) return;
   if (editor.getCurrentPageShapes().some((s) => s.type === "chatbox-card")) {
     return;
   }

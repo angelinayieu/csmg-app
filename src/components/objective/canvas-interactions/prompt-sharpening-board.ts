@@ -18,8 +18,12 @@ const CARD_H = 204;
 
 // Connectors are no longer tldraw arrows — a custom bezier overlay
 // (sharpening-connectors.tsx) draws them, derived live from the card
-// positions. On older boards, delete any legacy arrow shapes we created.
-function clearLegacyArrows(editor: Editor): void {
+// positions. On older boards we created real arrows (meta.sharpeningArrow)
+// for BOTH objective→sharpening and sharpening→fork; those now show as a
+// straight line UNDER the new curve. Delete any that linger. Exported so the
+// board can sweep them once on restore — a returning visit never re-runs
+// deploy, so the sweep can't live only here.
+export function clearLegacySharpeningArrows(editor: Editor): void {
   const ids = editor
     .getCurrentPageShapes()
     .filter(
@@ -51,7 +55,7 @@ export function deployPromptSharpeningOnBoard(
   editor: Editor,
   d: SharpeningCardDetail,
 ): void {
-  clearLegacyArrows(editor);
+  clearLegacySharpeningArrows(editor);
 
   // If a card already exists (the optimistic "Sharpening…" placeholder, or a
   // returning visit), fill it IN PLACE — preserve its position + expanded
@@ -61,6 +65,11 @@ export function deployPromptSharpeningOnBoard(
     .getCurrentPageShapes()
     .find((s) => s.type === "prompt-sharpening");
   if (existing) {
+    // Filling a (collapsed) placeholder → snap h back to the collapsed base
+    // so the card's auto-fit sizes it to the real content instead of leaving
+    // the taller loading-view height. Preserve an expanded card's height.
+    const wasExpanded =
+      (existing as PromptSharpeningCardShape).props.expanded === true;
     editor.updateShape<PromptSharpeningCardShape>({
       id: existing.id,
       type: "prompt-sharpening",
@@ -72,6 +81,7 @@ export function deployPromptSharpeningOnBoard(
         heatmapJson: d.heatmapJson,
         rankedJson: d.rankedJson,
         color: d.color || SHARPEN_COLOR,
+        ...(wasExpanded ? {} : { h: CARD_H }),
       },
     });
     return;
@@ -100,7 +110,7 @@ export function deployPromptSharpeningOnBoard(
       chips: d.chips,
       heatmapJson: d.heatmapJson,
       rankedJson: d.rankedJson,
-      color: d.color || "#7C3AED",
+      color: d.color || SHARPEN_COLOR,
     },
   });
 
@@ -133,7 +143,8 @@ export function forkAmbiguityOnBoard(
     ).length;
   const baseX = srcBounds ? srcBounds.maxX + 64 : vp.center.x;
   const baseY = srcBounds ? srcBounds.minY : vp.center.y;
-  const x = baseX;
+  // Fan into a grid (5 rows per column) so a batch "address all" never stacks.
+  const x = baseX + Math.floor(forkCount / 5) * (W + 24);
   const y = baseY + (forkCount % 5) * (H + 18);
 
   const id = createShapeId();

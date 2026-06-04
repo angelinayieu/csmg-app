@@ -45,12 +45,22 @@ export async function GET(_req: Request, ctx: Ctx) {
   );
 }
 
-export async function POST(_req: Request, ctx: Ctx) {
+export async function POST(req: Request, ctx: Ctx) {
   const { user, supabase, error } = await safeAuth();
   if (error) return error;
   const { spaceId } = await ctx.params;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
+
+  // Optional objective override — the "New objective" power-up sends fresh text
+  // to (re)set + refine. No body → regenerate the stored objective.
+  let override = "";
+  try {
+    const body = (await req.json()) as { objective?: unknown };
+    if (typeof body?.objective === "string") override = body.objective.trim();
+  } catch {
+    /* no/invalid body — fall back to the stored objective */
+  }
 
   const { data: space } = await db
     .from("spaces")
@@ -62,7 +72,11 @@ export async function POST(_req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
 
-  const objective = String(space.input_text || space.description || "");
+  // Persist a supplied objective so the board + future regen use it.
+  if (override) {
+    await db.from("spaces").update({ input_text: override }).eq("id", spaceId);
+  }
+  const objective = override || String(space.input_text || space.description || "");
   const artifact = await generatePromptSharpeningForSpace(
     db,
     spaceId,

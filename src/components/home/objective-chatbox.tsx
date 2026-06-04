@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   Paperclip,
+  Mic,
   Plus,
   X,
   FileText,
@@ -30,6 +31,7 @@ import {
 import { AnimatePresence, motion } from "framer-motion";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { openDrivePicker } from "@/components/home/drive-picker";
+import { useSpeech } from "@/hooks/synergy/use-speech";
 
 export interface SyncedTab {
   id: string;
@@ -102,6 +104,12 @@ export function ObjectiveChatbox({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
   const navigatedRef = useRef(false);
+
+  // Intake dictation — speak your objective; finalized chunks append to the
+  // field (reuses the shared Web-Speech hook). Chrome/Edge only.
+  const speech = useSpeech((t) =>
+    setObjective((o) => (o ? `${o} ${t}` : t).slice(0, 4000)),
+  );
 
   // Signal the host when composition starts/stops (objective non-empty).
   // Whiteboard-native intake: the FIRST keystroke lands the user on the real
@@ -515,6 +523,23 @@ export function ObjectiveChatbox({
             >
               <Paperclip className="h-4 w-4" strokeWidth={1.9} />
             </ToolbarIconButton>
+
+            {speech.supported && (
+              <ToolbarIconButton
+                label={speech.listening ? "Stop dictation" : "Dictate"}
+                onClick={() =>
+                  speech.listening ? speech.stop() : speech.start()
+                }
+              >
+                <Mic
+                  className={
+                    speech.listening ? "h-4 w-4 animate-pulse" : "h-4 w-4"
+                  }
+                  strokeWidth={1.9}
+                  style={speech.listening ? { color: "#DC2626" } : undefined}
+                />
+              </ToolbarIconButton>
+            )}
 
             <SourceChip
               label="tabs"

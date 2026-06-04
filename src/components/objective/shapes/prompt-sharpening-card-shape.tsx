@@ -21,15 +21,37 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
-import { motion } from "framer-motion";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { forkAmbiguity, dispatchCardAction } from "@/components/objective/board-bus";
+import { useAutoFitHeight } from "@/components/objective/canvas-interactions/use-auto-fit-height";
 
 const COLLAPSED_H = 204;
 const EXPANDED_H = 452;
 const CARD_W = 348;
+
+// Named generation stages shown while the artifact is in flight. The card
+// fires ONE LLM call, so these are paced across the expected window — the
+// FINAL completion is real (it lands when the artifact does); the earlier
+// ticks pace the model's internal phases.
+const SHARPEN_STAGES = [
+  "Reading your objective",
+  "Mapping ambiguity zones",
+  "Sharpening the prompt",
+  "Ranking what matters",
+] as const;
+const STAGE_TIMES_MS = [1600, 4000, 6400, 8400];
+const GEN_EXPECTED_MS = 9000;
+
+/** Short chip label from a ranked ambiguity's type ("Output format
+ *  ambiguity" → "Output format"). */
+function chipLabelOf(r: { ambiguity_type?: string }): string {
+  const t = (r?.ambiguity_type ?? "").replace(/ambiguity/i, "").trim();
+  const label = t || "Ambiguity";
+  return label.length > 24 ? label.slice(0, 23) + "…" : label;
+}
 
 // The card's accent — blue (the Features-stage color), not violet. This is a
 // calm, product-forward refinement object; it shouldn't shout in purple.
@@ -167,6 +189,83 @@ function PromptSharpeningRenderer({
   // "Sharpening…" placeholder). Show a progress bar instead of the toggle.
   const loading = Object.keys(heatmap).length === 0;
 
+  // Self-heal: while loading, poll the status route and fill the card's OWN
+  // props when the artifact lands — independent of the deploy event, so the
+  // card can never stay stuck on the placeholder if a deploy raced or was
+  // missed. Nudges one regenerate if generation stalls (transient recovery).
+  const spaceId = shape.props.spaceId;
+  useEffect(() => {
+    if (!loading || !spaceId) return;
+    let cancelled = false;
+    let tries = 0;
+    let retried = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      if (cancelled) return;
+      tries += 1;
+      try {
+        const res = await fetch(`/api/objective/${spaceId}/prompt-sharpening`, {
+          cache: "no-store",
+        });
+        if (res.ok) {
+          const json = (await res.json()) as {
+            status?: string;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            artifact?: any;
+          };
+          if (json.status === "ready" && json.artifact) {
+            const a = json.artifact;
+            const rk = Array.isArray(a.ranked_ambiguities)
+              ? a.ranked_ambiguities
+              : [];
+            editor.updateShape<PromptSharpeningCardShape>({
+              id: shape.id,
+              type: "prompt-sharpening",
+              props: {
+                title: a.distilled_title ?? "",
+                sharpenedPrompt: a.sharpened_prompt ?? "",
+                chips: rk.slice(0, 3).map(chipLabelOf),
+                heatmapJson: JSON.stringify(a.ambiguity_heatmap ?? {}),
+                rankedJson: JSON.stringify(rk),
+                h: COLLAPSED_H,
+              },
+            });
+            return;
+          }
+        }
+      } catch {
+        /* transient — keep polling */
+      }
+      // Stalled past ~18s → nudge a regenerate once, then keep polling.
+      if (!retried && tries === 12) {
+        retried = true;
+        void fetch(`/api/objective/${spaceId}/prompt-sharpening`, {
+          method: "POST",
+        }).catch(() => {});
+      }
+      if (!cancelled && tries < 60) timer = setTimeout(poll, 1500);
+    }
+    timer = setTimeout(poll, 800);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [loading, spaceId, shape.id, editor]);
+
+  // No-crop on spawn: grow the card to fit its content (the loading view's
+  // title + activity + stage list, or long sharpened text). Disabled while
+  // expanded — that state has a fixed height with an internal scroll.
+  const contentRef = useRef<HTMLDivElement>(null);
+  useAutoFitHeight(
+    editor,
+    shape.id,
+    "prompt-sharpening",
+    shape.props.h,
+    contentRef,
+    [loading, title, sharpenedPrompt, chips.length, expanded],
+    !expanded,
+  );
+
   function toggle(e: React.MouseEvent) {
     e.stopPropagation();
     const next = !expanded;
@@ -183,7 +282,7 @@ function PromptSharpeningRenderer({
     forkAmbiguity({ sourceId: shape.id, headline, body, color });
   }
 
-  function runOp(action: "questions" | "make_plan", e: React.MouseEvent) {
+  function runOp(action: "diverge" | "converge", e: React.MouseEvent) {
     e.stopPropagation();
     dispatchCardAction({
       action,
@@ -193,11 +292,36 @@ function PromptSharpeningRenderer({
     });
   }
 
+  // Fork EVERY ambiguity at once → one insight-card each to address. Uses the
+  // ranked (high-impact) set, falling back to high/medium heatmap zones.
+  function forkAll(e: React.MouseEvent) {
+    e.stopPropagation();
+    const rankedItems = parseRanked(shape.props.rankedJson);
+    const heat = parseHeatmap(shape.props.heatmapJson);
+    const items: { headline: string; body: string }[] = rankedItems.length
+      ? rankedItems.map((r) => ({
+          headline: (r.ambiguity || r.ambiguity_type || "Ambiguity").trim(),
+          body: r.question_to_resolve || "",
+        }))
+      : Object.keys(ZONE_LABEL)
+          .map((k) => ({ k, z: heat[k] ?? {} }))
+          .filter(({ z }) => z.severity === "high" || z.severity === "medium")
+          .map(({ k, z }) => ({
+            headline: (z.ambiguity || ZONE_LABEL[k]).trim(),
+            body: z.question_to_resolve || "",
+          }));
+    for (const it of items) {
+      if (it.headline)
+        forkAmbiguity({ sourceId: shape.id, headline: it.headline, body: it.body, color });
+    }
+  }
+
   return (
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
     >
       <div
+        ref={contentRef}
         style={{
           width: "100%",
           height: "100%",
@@ -265,35 +389,43 @@ function PromptSharpeningRenderer({
             marginTop: 9,
             fontSize: 15.5,
             fontWeight: 700,
-            lineHeight: 1.18,
+            // Roomier line-height + a hair of bottom padding so descenders
+            // (p, g, y) are never clipped. While loading the title isn't
+            // clamped (it's a fixed short string); the real distilled title
+            // clamps to 2 lines.
+            lineHeight: 1.32,
             color: appleVibe.text.primary,
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
+            display: loading ? "block" : "-webkit-box",
+            WebkitLineClamp: loading ? undefined : 2,
             WebkitBoxOrient: "vertical",
-            overflow: "hidden",
+            overflow: loading ? "visible" : "hidden",
+            paddingBottom: 1,
           }}
         >
-          {title || "Untitled objective"}
+          {loading ? "Sharpening your prompt" : title || "Untitled objective"}
         </div>
 
-        {/* Sharpened prompt */}
-        <div
-          style={{
-            marginTop: 6,
-            fontSize: 11.5,
-            fontWeight: 450,
-            lineHeight: 1.42,
-            color: appleVibe.text.secondary,
-            display: "-webkit-box",
-            WebkitLineClamp: expanded ? 3 : 3,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }}
-        >
-          {sharpenedPrompt}
-        </div>
+        {/* Sharpened prompt — hidden while generating; the activity view below
+            carries the in-progress state. */}
+        {!loading && (
+          <div
+            style={{
+              marginTop: 6,
+              fontSize: 11.5,
+              fontWeight: 450,
+              lineHeight: 1.42,
+              color: appleVibe.text.secondary,
+              display: "-webkit-box",
+              WebkitLineClamp: expanded ? 3 : 3,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {sharpenedPrompt}
+          </div>
+        )}
 
-        {loading && <ProgressBar color={color} />}
+        {loading && <GenerationActivity color={color} />}
 
         {/* Ambiguity chips (top ranked) */}
         {chips.length > 0 && (
@@ -433,25 +565,49 @@ function PromptSharpeningRenderer({
               })}
             </div>
 
-            {/* Explore / Distill — reuse existing canvas operations */}
+            {/* Diverge / Converge — the SAME verbs as the rest of the canvas
+                (replaces the old Explore/Distill). */}
             <div style={{ display: "flex", gap: 7, marginTop: 11 }}>
               <button
                 type="button"
                 onPointerDown={stopEventPropagation}
-                onClick={(e) => runOp("questions", e)}
+                onClick={(e) => runOp("diverge", e)}
                 style={actionBtn(color, true)}
+                title="Diverge — open up & generate"
               >
-                Explore
+                ‹ Diverge
               </button>
               <button
                 type="button"
                 onPointerDown={stopEventPropagation}
-                onClick={(e) => runOp("make_plan", e)}
+                onClick={(e) => runOp("converge", e)}
                 style={actionBtn(color, false)}
+                title="Converge — narrow & commit"
               >
-                Distill
+                Converge ›
               </button>
             </div>
+            {/* One button → fork EVERY ambiguity out as its own card to address. */}
+            <button
+              type="button"
+              onPointerDown={stopEventPropagation}
+              onClick={forkAll}
+              style={{
+                marginTop: 7,
+                width: "100%",
+                padding: "8px 10px",
+                borderRadius: 10,
+                border: `1px solid ${appleVibe.stroke.hairline}`,
+                background: appleVibe.surface.chip,
+                color: appleVibe.text.secondary,
+                fontSize: 11.5,
+                fontWeight: 650,
+                cursor: "pointer",
+                fontFamily: appleVibe.font.stack,
+              }}
+            >
+              Address all ambiguities
+            </button>
           </div>
         )}
       </div>
@@ -459,34 +615,176 @@ function PromptSharpeningRenderer({
   );
 }
 
-/** Indeterminate progress bar — shown while the artifact is still
- *  generating (the optimistic "Sharpening…" placeholder). */
-function ProgressBar({ color }: { color: string }) {
+/** Generation activity — shown while the artifact is still generating. A
+ *  determinate progress bar (eases 4% → ~94% over the expected window; never
+ *  claims 100% before done) PLUS a named-stage checklist so the user sees
+ *  WHAT is being generated, ticking off like a deploy pipeline. */
+function GenerationActivity({ color }: { color: string }) {
+  const [pct, setPct] = useState(4);
+  const [done, setDone] = useState(0);
+  useEffect(() => {
+    const start = Date.now();
+    const id = window.setInterval(() => {
+      const el = Date.now() - start;
+      const t = Math.min(1, el / GEN_EXPECTED_MS);
+      const eased = 1 - Math.pow(1 - t, 2.2); // ease-out: fast, then decelerate
+      setPct(Math.min(94, Math.round(4 + eased * 90)));
+      setDone(STAGE_TIMES_MS.filter((st) => el >= st).length);
+    }, 150);
+    return () => window.clearInterval(id);
+  }, []);
+
   return (
-    <div
-      style={{
-        position: "relative",
-        height: 4,
-        borderRadius: 999,
-        background: `${color}1A`,
-        overflow: "hidden",
-        marginTop: 14,
-      }}
-    >
-      <motion.div
+    <div style={{ marginTop: 12 }}>
+      {/* Progress bar + live % */}
+      <div
         style={{
-          position: "absolute",
-          top: 0,
-          bottom: 0,
-          width: "42%",
-          borderRadius: 999,
-          background: color,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          marginBottom: 6,
         }}
-        initial={{ left: "-42%" }}
-        animate={{ left: ["-42%", "100%"] }}
-        transition={{ duration: 1.15, repeat: Infinity, ease: "easeInOut" }}
-      />
+      >
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+            color: appleVibe.text.tertiary,
+          }}
+        >
+          Generating
+        </span>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            color,
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {pct}%
+        </span>
+      </div>
+      <div
+        style={{
+          height: 4,
+          borderRadius: 999,
+          background: `${color}1A`,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${pct}%`,
+            borderRadius: 999,
+            background: color,
+            transition: "width 0.2s linear",
+          }}
+        />
+      </div>
+
+      {/* Stage checklist — what's being generated, ticking off */}
+      <div
+        style={{
+          marginTop: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        {SHARPEN_STAGES.map((label, i) => {
+          const state = i < done ? "done" : i === done ? "active" : "pending";
+          return (
+            <div
+              key={label}
+              style={{ display: "flex", alignItems: "center", gap: 9 }}
+            >
+              <StageIcon state={state} color={color} />
+              <span
+                style={{
+                  fontSize: 11.5,
+                  fontWeight: state === "done" ? 600 : 500,
+                  color:
+                    state === "done"
+                      ? appleVibe.text.primary
+                      : state === "active"
+                        ? appleVibe.text.secondary
+                        : appleVibe.text.faint,
+                  transition: "color 0.25s ease",
+                }}
+              >
+                {label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
+  );
+}
+
+/** Stage glyph — filled check (done), spinning dashed ring (active), static
+ *  dotted ring (pending). Matches the deploy-pipeline reference. */
+function StageIcon({
+  state,
+  color,
+}: {
+  state: "done" | "active" | "pending";
+  color: string;
+}) {
+  if (state === "done") {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" style={{ flexShrink: 0 }}>
+        <circle cx="8" cy="8" r="8" fill={color} />
+        <path
+          d="M4.6 8.2 L7 10.4 L11.4 5.6"
+          fill="none"
+          stroke="white"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+  if (state === "active") {
+    return (
+      <svg
+        className="animate-spin"
+        width="16"
+        height="16"
+        viewBox="0 0 16 16"
+        style={{ flexShrink: 0 }}
+      >
+        <circle
+          cx="8"
+          cy="8"
+          r="6.5"
+          fill="none"
+          stroke={color}
+          strokeWidth="1.6"
+          strokeDasharray="3 3"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" style={{ flexShrink: 0 }}>
+      <circle
+        cx="8"
+        cy="8"
+        r="6.5"
+        fill="none"
+        stroke={appleVibe.stroke.medium}
+        strokeWidth="1.6"
+        strokeDasharray="2 3"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 
