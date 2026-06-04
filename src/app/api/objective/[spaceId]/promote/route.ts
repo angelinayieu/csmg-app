@@ -7,7 +7,7 @@
 //
 // Body: { objective, attachedFileIds? }
 
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
 import { patchObjectiveCanvasState } from "@/lib/objective-canvas/clarifying-state";
 import { generatePromptSharpeningForSpace } from "@/lib/objective-canvas/generate-prompt-sharpening";
@@ -112,8 +112,15 @@ export async function POST(req: Request, ctx: Ctx) {
       .is("space_id", null);
   }
 
-  // The Prompt Sharpening Card is the minimal-flow analysis.
-  void generatePromptSharpeningForSpace(db, spaceId, user.id, objective);
+  // The Prompt Sharpening Card is the minimal-flow analysis. Run it via after()
+  // — NOT a bare `void` — so it reliably completes. A fire-and-forget `void`
+  // call was being killed when the serverless function tore down after the
+  // response, so the artifact never persisted and the board card sat at its 94%
+  // progress cap until the ~4-min poll gave up. after() keeps the function
+  // alive for the post-response work (maxDuration=120 above covers it).
+  after(async () => {
+    await generatePromptSharpeningForSpace(db, spaceId, user.id, objective);
+  });
 
   return NextResponse.json({ ok: true });
 }

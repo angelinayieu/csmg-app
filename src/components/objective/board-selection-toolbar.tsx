@@ -17,6 +17,7 @@ import {
   BookmarkPlus,
   Globe,
   Wand2,
+  AppWindow,
   Pencil,
   Send,
   X,
@@ -37,6 +38,8 @@ export function BoardSelectionToolbar({
   onDeepRun,
   onSpec,
   specBusy = false,
+  onPrototype,
+  prototypeBusy = false,
   onCustom,
   customBusy = false,
 }: {
@@ -63,6 +66,9 @@ export function BoardSelectionToolbar({
   /** Forge a full spec from the whole selection (synthesize → SpecForge). */
   onSpec?: () => void;
   specBusy?: boolean;
+  /** Forge -> tech-spec -> auto-build a prototype from the whole selection. */
+  onPrototype?: () => void;
+  prototypeBusy?: boolean;
   /** Run the user's own instruction over the selection. */
   onCustom?: (prompt: string) => void;
   customBusy?: boolean;
@@ -72,7 +78,7 @@ export function BoardSelectionToolbar({
   const Icon = isConnect ? GitMerge : Sparkle;
   const hint = isConnect ? "name the relationship" : `weave ${count} together`;
   // Any AI action running locks the buttons; each shows its own spinner.
-  const anyBusy = busy || deepBusy || specBusy || customBusy;
+  const anyBusy = busy || deepBusy || specBusy || prototypeBusy || customBusy;
 
   const [customOpen, setCustomOpen] = useState(false);
   const [customText, setCustomText] = useState("");
@@ -218,6 +224,25 @@ export function BoardSelectionToolbar({
             <Wand2 className="h-3.5 w-3.5" strokeWidth={2.4} />
           )}
           {specBusy ? "Forging…" : "Spec"}
+        </button>
+      )}
+
+      {/* Forge -> tech-spec -> auto-build a prototype from the WHOLE selection. */}
+      {onPrototype && (
+        <button
+          type="button"
+          onClick={onPrototype}
+          disabled={anyBusy}
+          title="Build a prototype from this selection (forge -> spec -> prototype)"
+          className="flex items-center gap-2 rounded-full transition-all duration-150 ease-out hover:scale-[1.03] active:scale-95"
+          style={quietGlass}
+        >
+          {prototypeBusy ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2.4} />
+          ) : (
+            <AppWindow className="h-3.5 w-3.5" strokeWidth={2.4} />
+          )}
+          {prototypeBusy ? "Building..." : "Prototype"}
         </button>
       )}
 

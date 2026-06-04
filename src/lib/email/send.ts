@@ -46,7 +46,8 @@ async function getClient(): Promise<any> {
   if (resolveAttempted && !cachedClient) return null;
   resolveAttempted = true;
   try {
-    // @ts-expect-error -- optional dependency; install with `npm i resend`
+    // @ts-ignore -- optional dependency; install with `npm i resend` (may or
+    // may not be present, so @ts-ignore not @ts-expect-error)
     const mod = await import("resend");
     cachedClient = new mod.Resend(process.env.RESEND_API_KEY);
     return cachedClient;

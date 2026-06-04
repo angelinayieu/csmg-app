@@ -27,6 +27,10 @@ import type {
   MvpVariationsResult,
   EvaluationResult,
   RecommendationResult,
+  FeatureCardsResult,
+  FeatureCard,
+  ValidationResult,
+  ValidationExperiment,
 } from "./types";
 
 /** Constraint priority — drives narrowing strictness. */
@@ -328,10 +332,79 @@ export function extractConstraintsFromEngineResult(
       return out;
     }
 
+    case "feature_cards": {
+      const r = result as FeatureCardsResult;
+      const features = arr<FeatureCard>(r.features);
+      // Must-have features become BUILDABILITY constraints — the spec
+      // can't ship without them. Cap at 3 so the strip stays compact.
+      const mustHave = features
+        .filter((f) => String(f?.build_priority) === "must_have")
+        .slice(0, 3);
+      for (const f of mustHave) {
+        const name = clean(f?.name);
+        const micro = clean(f?.micro_objective);
+        if (name) {
+          push({
+            type: "buildability",
+            priority: "critical",
+            text: `Must include feature: ${name}`,
+            why: micro || "named as must_have by the Feature Card System",
+          });
+        }
+      }
+      // Each must-have feature's evaluation metric becomes an EVALUATION
+      // constraint — gives Validation Lab + downstream spec something concrete.
+      for (const f of mustHave) {
+        const name = clean(f?.name);
+        const metric = clean(f?.evaluation_metric);
+        if (name && metric) {
+          push({
+            type: "evaluation",
+            priority: "high",
+            text: `Must measure: ${metric} (for feature ${name})`,
+            why: "feature card's own success metric",
+          });
+        }
+      }
+      return out;
+    }
+
+    case "validation": {
+      const r = result as ValidationResult;
+      // Each top-ranked experiment imposes an EVIDENCE constraint: the build
+      // can't ship unprovably-wrong on its assumption. Top 2 by priority_rank,
+      // skipping any without a tested assumption (would be theatrical anyway).
+      const ranked = arr<ValidationExperiment>(r.experiments)
+        .slice()
+        .sort(
+          (a, b) =>
+            (Number(a?.priority_rank) || 99) -
+            (Number(b?.priority_rank) || 99),
+        );
+      for (const e of ranked.slice(0, 2)) {
+        const assumption = clean(e?.assumption_tested);
+        const decision = clean(e?.decision_that_result_will_change);
+        if (assumption) {
+          push({
+            type: "evidence",
+            priority: "high",
+            text: `Must validate: ${assumption}`,
+            why: decision
+              ? `result will change: ${decision}`
+              : "named as a top experiment by the Validation Lab",
+          });
+        }
+      }
+      return out;
+    }
+
     case "solution_families":
+    case "question_expansion":
     case "recommendation":
-      // Generator-only / final selector — they consume constraints, don't
-      // create new ones the spec recognizes.
+    case "deepening":
+      // Generator-only / advisory / final selector / meta-summary — they
+      // consume constraints or describe the run; they don't create new ones
+      // the spec recognizes.
       return out;
   }
 }

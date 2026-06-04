@@ -195,6 +195,15 @@ async function describeImages(
   }
 }
 
+/** Resolve null if a promise doesn't settle within `ms` (rejections also → null).
+ *  Lets a best-effort pre-pass be time-boxed so it can NEVER stall the main op. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([
+    p.catch(() => null),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+}
+
 /** Web-grounding pre-pass: a light live search (≤4) on Sonnet (the tool-capable
  *  model the other web routes use) → short factual findings folded into the idea
  *  text. Soft-fails to "" — grounding is enrichment, never a blocker. */
@@ -202,17 +211,23 @@ async function webGround(idea: string): Promise<string> {
   if (!idea.trim()) return "";
   try {
     const anthropic = getAnthropicClient();
-    const resp = await anthropic.messages.create({
-      model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6",
-      max_tokens: 900,
-      system:
-        "Search the web for current, factual context relevant to the user's idea, " +
-        "then return 4-8 short factual findings (one per line, no preamble, no " +
-        "numbering) that would help someone reason about it — facts, prior art, " +
-        "constraints, notable data points.",
-      messages: [{ role: "user", content: `Idea: ${idea}` }],
-      tools: getResearchTools("light", 4),
-    });
+    // Time-box the live search — a slow web_search must NEVER stall the verb;
+    // if grounding doesn't land in ~12s, the pass proceeds without it ("").
+    const resp = await withTimeout(
+      anthropic.messages.create({
+        model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6",
+        max_tokens: 900,
+        system:
+          "Search the web for current, factual context relevant to the user's idea, " +
+          "then return 4-8 short factual findings (one per line, no preamble, no " +
+          "numbering) that would help someone reason about it — facts, prior art, " +
+          "constraints, notable data points.",
+        messages: [{ role: "user", content: `Idea: ${idea}` }],
+        tools: getResearchTools("light", 4),
+      }),
+      12000,
+    );
+    if (!resp) return "";
     return parseResearchResponse(
       resp.content as unknown as Parameters<typeof parseResearchResponse>[0],
     ).jsonOutput.trim();

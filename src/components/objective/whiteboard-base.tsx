@@ -105,7 +105,7 @@ import { CollapsibleStylePanel } from "./canvas-interactions/collapsible-style-p
 import type { TLComponents, TLPageId } from "tldraw";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 import { useFocusMode } from "@/components/synergy/focus-mode/use-focus-mode";
-import { ListChecks, Wand2, Loader2, Check, Globe } from "lucide-react";
+import { ListChecks, Wand2, Loader2, Check, Globe, AlertTriangle } from "lucide-react";
 import { BoardHint } from "./board-hint";
 import { FavoritesSidebar } from "./favorites-sidebar";
 import { useObjectiveBoardPersistence } from "./use-objective-board-persistence";
@@ -1981,17 +1981,27 @@ function BoardOverlay({
   // label shown in its progress chip while the long run is in flight.
   const [deepBusy, setDeepBusy] = useState(false);
   const [deepStage, setDeepStage] = useState("Reading your selection…");
+  // Transient failure surface — so a failed run reads as "couldn't synthesize"
+  // instead of the panel silently vanishing with no map ("nothing happened").
+  const [deepError, setDeepError] = useState<string | null>(null);
   // SpecForge → Tech Spec stage (auto-runs after the forge unfurl completes).
   const [techSpecBusy, setTechSpecBusy] = useState(false);
   const [techSpecStage, setTechSpecStage] = useState("Writing the tech spec…");
   // "Custom" synthesizing op (the user's own instruction over the selection).
   const [customBusy, setCustomBusy] = useState(false);
+  // Which forge verb is running, so only the clicked toolbar button spins:
+  // "spec" (Spec) vs "prototype" (Prototype = forge → spec → auto-build).
+  const [forgeKind, setForgeKind] = useState<"spec" | "prototype" | null>(null);
 
   // Run the SpecForge chain for the selected idea — streams decision cards
   // below the source. Guarded so a second click can't double-run.
-  function handleForge(target: OperationTarget) {
+  function handleForge(
+    target: OperationTarget,
+    opts?: { autoPrototype?: boolean },
+  ) {
     if ((forging && forging.phase === "running") || techSpecBusy) return;
     if (!target.text.trim()) return;
+    setForgeKind(opts?.autoPrototype ? "prototype" : "spec");
     setForging({ phase: "running", done: 0, total: 9, label: "Starting…" });
     void (async () => {
       // 1) Run the SpecForge unfurl (existing 9 engines).
@@ -2001,25 +2011,36 @@ function BoardOverlay({
       } catch (err) {
         console.warn("[board] specforge failed:", err);
         setForging(null);
+        setForgeKind(null);
         return;
       }
       setForging(null);
-      if (!forge?.createdAny) return;
+      if (!forge?.createdAny) {
+        setForgeKind(null);
+        return;
+      }
 
       // 2) Auto-generate the tech-spec page (incl. UI plan), ingesting any
-      //    inspiration images pasted on the board. Prototype stays a tap.
+      //    inspiration images. With autoPrototype, the pipeline skips the spec
+      //    page and jumps straight to building the prototype off the spec.
       setTechSpecBusy(true);
-      setTechSpecStage("Writing the tech spec…");
+      setTechSpecStage(
+        opts?.autoPrototype
+          ? "Writing the spec → prototype…"
+          : "Writing the tech spec…",
+      );
       try {
         await runForgePipeline(editor, spaceId, forge, {
           anchorShapeId: target.shapeId,
           inspirationImages: collectInspirationImages(editor),
           onProgress: setTechSpecStage,
+          autoPrototype: opts?.autoPrototype,
         });
       } catch (err) {
         console.warn("[board] tech spec failed:", err);
       } finally {
         setTechSpecBusy(false);
+        setForgeKind(null);
       }
     })();
   }
@@ -2195,6 +2216,14 @@ function BoardOverlay({
     handleForge({ text, shapeId: view.deepIds[0] });
   }
 
+  // Prototype on a SELECTION: forge -> tech-spec -> auto-build the prototype
+  // in one shot (reuses handleForge with autoPrototype; skips the spec page).
+  function handlePrototype() {
+    const text = view.deepPayloads.map((p) => p.text).join("\n\n").slice(0, 6000);
+    if (!text.trim()) return;
+    handleForge({ text, shapeId: view.deepIds[0] }, { autoPrototype: true });
+  }
+
   // Custom op on a SELECTION: run the user's own instruction over the
   // combined selection text → result cards below the first selected shape.
   async function handleCustom(prompt: string) {
@@ -2225,6 +2254,7 @@ function BoardOverlay({
     if (busy || deepBusy || view.deepPayloads.length < 2) return;
     const sourceIds = view.deepIds;
     const payloads = view.deepPayloads;
+    setDeepError(null);
     setDeepBusy(true);
     setDeepStage("Reading your selection…");
     const t1 = window.setTimeout(
@@ -2253,7 +2283,10 @@ function BoardOverlay({
       });
     } catch (err) {
       console.warn("[board] deep synthesize failed:", err);
-      // Soft-fail — nothing destructive; the user can retry.
+      // Surface it — a silent soft-fail reads as "nothing happened". The chip
+      // auto-clears after a few seconds; the selection is untouched, so retry.
+      setDeepError("Couldn't synthesize — please try again.");
+      window.setTimeout(() => setDeepError(null), 5000);
     } finally {
       window.clearTimeout(t1);
       window.clearTimeout(t2);
@@ -2372,7 +2405,11 @@ function BoardOverlay({
               view.deepPayloads.length >= 2 ? handleDeepRun : undefined
             }
             onSpec={view.deepPayloads.length >= 2 ? handleSpec : undefined}
-            specBusy={forging?.phase === "running" || techSpecBusy}
+            specBusy={forgeKind === "spec"}
+            onPrototype={
+              view.deepPayloads.length >= 2 ? handlePrototype : undefined
+            }
+            prototypeBusy={forgeKind === "prototype"}
             onCustom={view.deepPayloads.length >= 2 ? handleCustom : undefined}
             customBusy={customBusy}
           />
@@ -2410,10 +2447,16 @@ function BoardOverlay({
       {/* Deep Synthesize progress — calm glass chip while pro Claude reads
           the selection, searches the web, and weaves the cross-link map. */}
       {deepBusy && <DeepSynthProgressChip label={deepStage} />}
+      {deepError && !deepBusy && <DeepSynthErrorChip message={deepError} />}
 
       {/* Tech-spec progress — the SpecForge → Tech Spec hand-off chip. */}
       {techSpecBusy && (
-        <DeepSynthProgressChip title="Tech spec" label={techSpecStage} />
+        <DeepSynthProgressChip
+          title="Tech spec"
+          label={techSpecStage}
+          stages={TECH_SPEC_STAGES}
+          expectedMs={30000}
+        />
       )}
 
       {/* The "Ask AI" pin toggle was removed to declutter the board chrome —
@@ -2564,59 +2607,202 @@ function SpecForgeProgressChip({ progress }: { progress: SpecForgeProgress }) {
   );
 }
 
-/** Calm glass chip shown while Deep Synthesize (pro Claude + web search)
- *  runs. The label is staged client-side since the route is request/
- *  response; the map forks in below when it resolves. */
-function DeepSynthProgressChip({
-  title = "Deep Synthesize",
-  label,
-}: {
-  title?: string;
-  label: string;
-}) {
+/** The Deep Synthesize / Tech-Spec stage timeline (time-driven, since the
+ *  routes are request/response — no SSE). Each entry lights up once elapsed
+ *  passes its `atMs`. */
+const DEEP_SYNTH_STAGES = [
+  { label: "Reading your selection", atMs: 0 },
+  { label: "Searching the web", atMs: 2600 },
+  { label: "Weaving cross-links", atMs: 13000 },
+  { label: "Composing the map", atMs: 21000 },
+];
+
+/** Stage timeline for the Tech-Spec hand-off (reuses the same panel). */
+const TECH_SPEC_STAGES = [
+  { label: "Reading the idea", atMs: 0 },
+  { label: "Tracing the mechanism", atMs: 3000 },
+  { label: "Designing the build", atMs: 11000 },
+  { label: "Writing the spec", atMs: 19000 },
+];
+
+/** One stage row: filled-check (done) · spinning ring (active) · dotted ring
+ *  (pending). Mirrors the sharpening card's GenerationActivity treatment. */
+function DeepStageIcon({ state }: { state: "done" | "active" | "pending" }) {
+  if (state === "done") {
+    return (
+      <span
+        style={{
+          display: "inline-flex",
+          width: 16,
+          height: 16,
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: 999,
+          background: appleVibe.accent.primary,
+          color: "white",
+          flexShrink: 0,
+        }}
+      >
+        <Check style={{ width: 10, height: 10 }} strokeWidth={3} />
+      </span>
+    );
+  }
+  if (state === "active") {
+    return (
+      <Loader2
+        className="animate-spin"
+        style={{ width: 16, height: 16, color: appleVibe.accent.primary, flexShrink: 0 }}
+        strokeWidth={2.4}
+      />
+    );
+  }
+  return (
+    <span
+      style={{
+        width: 16,
+        height: 16,
+        borderRadius: 999,
+        border: `1.5px dotted ${appleVibe.stroke.soft}`,
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+/** Brief, centered glass error toast when a Deep Synthesize run fails — so the
+ *  failure is visible instead of the panel silently vanishing ("nothing
+ *  happened"). Host auto-clears it after a few seconds; the selection is kept. */
+function DeepSynthErrorChip({ message }: { message: string }) {
   return (
     <div
       style={{
         position: "absolute",
         left: "50%",
-        bottom: 24,
-        transform: "translateX(-50%)",
-        zIndex: 80,
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+        zIndex: 88,
         display: "inline-flex",
         alignItems: "center",
-        gap: 11,
-        padding: "9px 15px",
-        borderRadius: 999,
+        gap: 10,
+        padding: "12px 16px",
+        borderRadius: 16,
         background: "var(--glass-float-bg)",
-        backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-        WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+        backdropFilter: "blur(var(--blur-float)) saturate(1.8)",
+        WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.8)",
         border: "1px solid var(--glass-border)",
         boxShadow:
-          "inset 0 1px 0 var(--glass-highlight), 0 18px 40px -18px rgba(11,18,40,0.34)",
+          "inset 0 1px 0 var(--glass-highlight), 0 30px 70px -26px rgba(11,18,40,0.46)",
         fontFamily: appleVibe.font.stack,
       }}
     >
       <span
         style={{
           display: "inline-flex",
-          width: 22,
-          height: 22,
+          width: 24,
+          height: 24,
           alignItems: "center",
           justifyContent: "center",
           borderRadius: 999,
-          background: appleVibe.accent.primary,
-          color: "white",
+          background: "rgba(220,38,38,0.12)",
+          color: "#DC2626",
+          flexShrink: 0,
         }}
       >
-        <Globe style={{ width: 12.5, height: 12.5 }} strokeWidth={2.2} />
+        <AlertTriangle style={{ width: 14, height: 14 }} strokeWidth={2.3} />
       </span>
       <span
-        style={{ display: "flex", flexDirection: "column", lineHeight: 1.2 }}
+        style={{
+          fontSize: 12.5,
+          fontWeight: 600,
+          letterSpacing: "-0.01em",
+          color: appleVibe.text.primary,
+        }}
       >
+        {message}
+      </span>
+    </div>
+  );
+}
+
+/** Prominent, centered glass progress panel shown while Deep Synthesize (pro
+ *  Claude + web search) — or the Tech-Spec hand-off — runs. Self-timed: an
+ *  eased progress bar climbs to ~96% over `expectedMs` and the stage checklist
+ *  advances on the same clock, so the user always sees that work is underway
+ *  (the bottom chip it replaced was easy to miss). The map/cards fork in when
+ *  the request resolves and the host unmounts this. */
+function DeepSynthProgressChip({
+  title = "Deep Synthesize",
+  label,
+  stages = DEEP_SYNTH_STAGES,
+  expectedMs = 26000,
+}: {
+  title?: string;
+  label: string;
+  stages?: { label: string; atMs: number }[];
+  expectedMs?: number;
+}) {
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef<number | null>(null);
+  useEffect(() => {
+    const clock = () =>
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+    startRef.current = clock();
+    const id = window.setInterval(() => {
+      setElapsed(clock() - (startRef.current ?? clock()));
+    }, 120);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Eased, decelerating fill → never reaches 100% until the host unmounts.
+  const frac = Math.min(1, elapsed / expectedMs);
+  const pct = Math.min(96, Math.round(4 + (1 - Math.pow(1 - frac, 2.2)) * 92));
+  // Active stage = the last one whose threshold elapsed has passed.
+  let active = 0;
+  for (let i = 0; i < stages.length; i++) if (elapsed >= stages[i].atMs) active = i;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+        zIndex: 88,
+        width: 300,
+        padding: "16px 18px 14px",
+        borderRadius: 20,
+        background: "var(--glass-float-bg)",
+        backdropFilter: "blur(var(--blur-float)) saturate(1.8)",
+        WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.8)",
+        border: "1px solid var(--glass-border)",
+        boxShadow:
+          "inset 0 1px 0 var(--glass-highlight), 0 30px 70px -26px rgba(11,18,40,0.46)",
+        fontFamily: appleVibe.font.stack,
+      }}
+    >
+      {/* header — icon · title · live % */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <span
           style={{
-            fontSize: 12.5,
-            fontWeight: 650,
+            display: "inline-flex",
+            width: 26,
+            height: 26,
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 999,
+            background: appleVibe.accent.primary,
+            color: "white",
+            flexShrink: 0,
+          }}
+        >
+          <Globe style={{ width: 14, height: 14 }} strokeWidth={2.2} />
+        </span>
+        <span
+          style={{
+            flex: 1,
+            minWidth: 0,
+            fontSize: 13.5,
+            fontWeight: 700,
             letterSpacing: "-0.01em",
             color: appleVibe.text.primary,
           }}
@@ -2625,18 +2811,68 @@ function DeepSynthProgressChip({
         </span>
         <span
           style={{
-            fontSize: 11,
-            fontWeight: 500,
-            color: appleVibe.text.tertiary,
+            fontSize: 13,
+            fontWeight: 700,
+            fontVariantNumeric: "tabular-nums",
+            color: appleVibe.accent.primary,
           }}
         >
-          {label}
+          {pct}%
         </span>
-      </span>
-      <Loader2
-        className="animate-spin"
-        style={{ width: 13, height: 13, color: appleVibe.text.faint }}
-      />
+      </div>
+
+      {/* progress bar */}
+      <div
+        style={{
+          position: "relative",
+          height: 4,
+          marginTop: 12,
+          borderRadius: 999,
+          background: "rgba(15,23,42,0.08)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: `${pct}%`,
+            borderRadius: 999,
+            background: appleVibe.accent.primary,
+            transition: "width 260ms cubic-bezier(0.22,1,0.36,1)",
+          }}
+        />
+      </div>
+
+      {/* stage checklist */}
+      <div style={{ marginTop: 13, display: "flex", flexDirection: "column", gap: 9 }}>
+        {stages.map((s, i) => {
+          const state = i < active ? "done" : i === active ? "active" : "pending";
+          return (
+            <div
+              key={s.label}
+              style={{ display: "flex", alignItems: "center", gap: 9 }}
+            >
+              <DeepStageIcon state={state} />
+              <span
+                style={{
+                  fontSize: 12.5,
+                  fontWeight: state === "pending" ? 500 : 600,
+                  color:
+                    state === "pending"
+                      ? appleVibe.text.faint
+                      : state === "active"
+                        ? appleVibe.text.primary
+                        : appleVibe.text.tertiary,
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                {state === "active" ? label || s.label : s.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

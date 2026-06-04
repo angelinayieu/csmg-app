@@ -31,7 +31,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 
   const { data: space } = await db
     .from("spaces")
-    .select("user_id, synthesis_data")
+    .select("user_id, synthesis_data, input_text, description")
     .eq("id", spaceId)
     .maybeSingle();
   if (!space) return NextResponse.json({ error: "Space not found" }, { status: 404 });
@@ -40,8 +40,16 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
 
   const artifact = readArtifact(space.synthesis_data);
+  // objectivePresent lets the board distinguish "still pre-submit, nothing to
+  // generate yet" from "objective set but no artifact" — the latter means the
+  // post-response generation hasn't landed, so the board can drive it.
+  const objectivePresent = !!String(
+    space.input_text || space.description || "",
+  ).trim();
   return NextResponse.json(
-    artifact ? { status: "ready", artifact } : { status: "pending" },
+    artifact
+      ? { status: "ready", artifact }
+      : { status: "pending", objectivePresent },
   );
 }
 
@@ -77,12 +85,17 @@ export async function POST(req: Request, ctx: Ctx) {
     await db.from("spaces").update({ input_text: override }).eq("id", spaceId);
   }
   const objective = override || String(space.input_text || space.description || "");
+  // Force only when a NEW objective is supplied (the "new objective" power-up
+  // re-sharpens). A bare POST is idempotent generate-if-missing, so the board
+  // can use it as a reliable AWAITED drive (the open request keeps the function
+  // alive for the full generation) without wastefully regenerating an existing
+  // artifact.
   const artifact = await generatePromptSharpeningForSpace(
     db,
     spaceId,
     user.id,
     objective,
-    { force: true },
+    { force: override.length > 0 },
   );
   return NextResponse.json(
     artifact ? { status: "ready", artifact } : { status: "error" },

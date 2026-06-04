@@ -25,10 +25,6 @@ import type {
 } from "@/types/strategy";
 import { extractTwinProposalFromStrategy } from "./extract-twin-proposal";
 import { materializeMechanismsFromStrategy } from "./materialize-mechanisms";
-// B4 — research-template registry to resolve spaces.use_case_template_id
-// → template's preferred_mechanism_kinds. Filtering happens inside
-// materializeMechanismsFromStrategy when this Set is non-empty.
-import { getResearchTemplate } from "@/lib/templates/mind-body-cognition/seed";
 
 export interface WireTwinProposalArgs {
   spaceId: string;
@@ -56,34 +52,10 @@ export async function wireTwinProposalAndMechanisms(
 ): Promise<WireTwinProposalResult> {
   const { spaceId, userId, recommendation, proposals, strategyVersion, db } = args;
 
-  // B4 — resolve template's preferred_mechanism_kinds (if declared)
-  // so the materializer can drop strategy-suggested kinds that don't
-  // fit this template's domain (e.g. "game" + "ml_personalization"
-  // get filtered out for clinical-research templates). Spaces without
-  // a template OR templates without preferences fall through to the
-  // legacy "all 7 kinds allowed" behavior — full backward compat.
-  let preferredKinds: ReadonlySet<MechanismHint> | null = null;
-  try {
-    const { data: spaceRow } = await db
-      .from("spaces")
-      .select("use_case_template_id")
-      .eq("id", spaceId)
-      .maybeSingle();
-    const templateSlug = (
-      spaceRow as { use_case_template_id?: unknown } | null
-    )?.use_case_template_id;
-    if (typeof templateSlug === "string" && templateSlug.length > 0) {
-      const tpl = getResearchTemplate(templateSlug);
-      if (tpl?.preferred_mechanism_kinds?.length) {
-        preferredKinds = new Set(tpl.preferred_mechanism_kinds);
-      }
-    }
-  } catch (err) {
-    console.warn(
-      "[wire-twin-proposal] template-kind lookup failed (non-fatal):",
-      err,
-    );
-  }
+  // B4 (retired) — the research-template registry was removed with the old
+  // build. With no template preferences to resolve, fall through to the legacy
+  // "all kinds allowed" behavior (preferredKinds = null) — full backward compat.
+  const preferredKinds: ReadonlySet<MechanismHint> | null = null;
 
   // ── 1. mechanisms ────────────────────────────────────────────────────
   let mechanismIdsByProposal = new Map<string, string[]>();

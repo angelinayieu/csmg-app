@@ -27,6 +27,9 @@ import {
   Thermometer,
   FileCode2,
   MapPin,
+  AppWindow,
+  Pencil,
+  Send,
   X,
 } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
@@ -50,6 +53,7 @@ import {
 } from "@/lib/objective-canvas/ai-settings";
 import { OPEN_CARD_DETAIL_EVENT } from "./object-detail-drawer";
 import { deploySharpeningCard } from "@/components/objective/board-bus";
+import type { ObjectiveCardShape } from "@/components/objective/shapes/objective-card-shape";
 import { pushRightPanel } from "@/lib/objective-canvas/right-panel-signal";
 import {
   requestDecomposeIntoCards,
@@ -59,6 +63,10 @@ import {
 /** Fired by the rail's Forge button → WhiteboardBase runs the SpecForge chain
  *  on the current selection (handleForge lives there, with editor + state). */
 export const FORGE_REQUEST_EVENT = "objective-board:forge-request";
+// Mirror tech-spec-card-shape.tsx event names — kept local so this rail doesn't
+// pull the shape util into its bundle (and can't form an import cycle).
+const BUILD_PROTOTYPE_EVENT = "objective-board:build-prototype";
+const OPEN_TECH_SPEC_EVENT = "objective-board:open-tech-spec";
 
 const OP_ICON: Record<string, typeof Split> = {
   decompose: Split,
@@ -201,10 +209,47 @@ export function PowerupRail({
   const [showNewObj, setShowNewObj] = useState(false);
   const [newObjText, setNewObjText] = useState("");
   const [refining, setRefining] = useState(false);
+  // Create-or-refresh the OBJECTIVE card on the board — the SAME card intake
+  // produces. One objective per board, so update it in place if present; the
+  // sharpening card then lands below it (deploySharpeningCard anchors to it).
+  function placeObjectiveCard(text: string) {
+    const shortTitle =
+      text.length > 64 ? text.slice(0, 63).trimEnd() + "…" : text;
+    const existing = editor
+      .getCurrentPageShapes()
+      .find((s) => s.type === "objective-card");
+    if (existing) {
+      editor.updateShape<ObjectiveCardShape>({
+        id: existing.id,
+        type: "objective-card",
+        props: { spaceId, title: shortTitle, objective: text },
+      });
+      return;
+    }
+    const vp = editor.getViewportPageBounds();
+    editor.createShape<ObjectiveCardShape>({
+      type: "objective-card",
+      x: vp.center.x - 170,
+      y: vp.center.y - 240,
+      props: {
+        w: 340,
+        h: 168,
+        spaceId,
+        title: shortTitle,
+        objective: text,
+        color: appleVibe.stage.objective,
+      },
+    });
+  }
   async function refineNewObjective() {
     const text = newObjText.trim();
     if (!text || refining) return;
     setRefining(true);
+    // Drop the objective card immediately (like intake) + collapse the
+    // composer; the sharpening card fills in below it as the agent runs.
+    placeObjectiveCard(text);
+    setShowNewObj(false);
+    setNewObjText("");
     try {
       const res = await fetch(`/api/objective/${spaceId}/prompt-sharpening`, {
         method: "POST",
@@ -236,7 +281,7 @@ export function PowerupRail({
   }
 
   const [running, setRunning] = useState<string | null>(null);
-  function runOp(opId: string) {
+  function runOp(opId: string, prompt?: string) {
     if (sel.count === 0 || running) return;
     const target: OperationTarget = { text: sel.text, shapeId: sel.anchorId };
     setRunning(opId);
@@ -245,11 +290,61 @@ export function PowerupRail({
       depth: settings.depth,
       questionCount: settings.complexity,
       webSearch: settings.webSearch,
+      prompt,
       spaceId,
     }).finally(() => setRunning((c) => (c === opId ? null : c)));
   }
 
+  // Custom instruction — run the user's own prompt over the selection.
+  const [showCustom, setShowCustom] = useState(false);
+  const [customText, setCustomText] = useState("");
+  function runCustom() {
+    const p = customText.trim();
+    if (!p || sel.count === 0 || running) return;
+    runOp("custom", p);
+    setCustomText("");
+    setShowCustom(false);
+  }
+
+  // Build prototype — turn the Forge's Tech Spec into a live screen app. Acts on
+  // the selected tech-spec card, else the most recent one on the board (fires
+  // the same event the card's own "Build prototype" button does).
+  function buildPrototype() {
+    const cards = editor
+      .getCurrentPageShapes()
+      .filter((s) => s.type === "tech-spec-card");
+    if (!cards.length) return;
+    const selected = new Set(editor.getSelectedShapeIds());
+    const card = cards.find((c) => selected.has(c.id)) ?? cards[cards.length - 1];
+    const p = card.props as { specJson?: string; markdown?: string; title?: string };
+    window.dispatchEvent(
+      new CustomEvent(BUILD_PROTOTYPE_EVENT, {
+        detail: {
+          specJson: p.specJson ?? "",
+          markdown: p.markdown ?? "",
+          title: p.title ?? "Tech spec",
+          shapeId: card.id,
+        },
+      }),
+    );
+  }
+
   function openArtifact(id: TLShapeId) {
+    const shape = editor.getShape(id);
+    // A tech-spec card → open its full spec panel; otherwise just reveal it.
+    if (shape?.type === "tech-spec-card") {
+      const p = shape.props as { specJson?: string; markdown?: string; title?: string };
+      window.dispatchEvent(
+        new CustomEvent(OPEN_TECH_SPEC_EVENT, {
+          detail: {
+            specJson: p.specJson ?? "",
+            markdown: p.markdown ?? "",
+            title: p.title ?? "Tech spec",
+            shapeId: id,
+          },
+        }),
+      );
+    }
     panToShape(editor, id);
   }
   function openIncluded(id: string) {
@@ -274,6 +369,7 @@ export function PowerupRail({
   }
 
   const hasSel = sel.count > 0;
+  const hasTechSpec = boardArtifacts.some((a) => a.kind === "Tech spec");
 
   return (
     <div onPointerDown={(e) => e.stopPropagation()} style={rail}>
@@ -327,6 +423,23 @@ export function PowerupRail({
             <span style={forgeTitle}>Forge full spec</span>
             <span style={forgeSub}>Idea → root cause → MVPs → first build</span>
           </span>
+        </button>
+
+        {/* Build prototype — the Forge's Tech Spec → a live, clickable screen
+            app. Needs a spec on the board first (run Forge above). */}
+        <button
+          type="button"
+          disabled={!hasTechSpec}
+          title={
+            hasTechSpec
+              ? "Build a clickable prototype from your Tech Spec"
+              : "Forge a spec first — then build the prototype"
+          }
+          onClick={buildPrototype}
+          style={{ ...secondaryBtn, marginTop: 8, opacity: hasTechSpec ? 1 : 0.5 }}
+        >
+          <AppWindow style={{ width: 14, height: 14 }} strokeWidth={2.2} />
+          Build prototype
         </button>
 
         {/* Objective-level decompose — break the whole objective into Feature
@@ -445,7 +558,74 @@ export function PowerupRail({
               </button>
             );
           })}
+          {/* Custom instruction — the user's own prompt on the selection. */}
+          <button
+            type="button"
+            disabled={!hasSel || !!running}
+            onClick={() => setShowCustom((v) => !v)}
+            style={{ ...opRow, opacity: hasSel ? 1 : 0.5 }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = appleVibe.surface.chipHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <span style={opIconWrap}>
+              {running === "custom" ? (
+                <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
+              ) : (
+                <Pencil style={{ width: 13, height: 13 }} strokeWidth={2} />
+              )}
+            </span>
+            <span style={{ minWidth: 0, flex: 1 }}>
+              <span style={opLabel}>Custom instruction</span>
+              <span style={opIntent}>Run your own prompt on this</span>
+            </span>
+          </button>
         </div>
+
+        {showCustom && (
+          <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+            <input
+              autoFocus
+              value={customText}
+              onChange={(e) => setCustomText(e.target.value)}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") runCustom();
+              }}
+              placeholder="Tell the AI what to do with the selection…"
+              style={{
+                flex: 1,
+                minWidth: 0,
+                padding: "8px 10px",
+                borderRadius: appleVibe.radius.sm,
+                border: "1px solid var(--glass-border)",
+                background: appleVibe.surface.chip,
+                fontSize: 12.5,
+                color: appleVibe.text.primary,
+                fontFamily: appleVibe.font.stack,
+                outline: "none",
+              }}
+            />
+            <button
+              type="button"
+              disabled={!customText.trim() || !hasSel || !!running}
+              onClick={runCustom}
+              title="Run"
+              style={{
+                display: "inline-grid",
+                placeItems: "center",
+                width: 36,
+                flexShrink: 0,
+                borderRadius: appleVibe.radius.sm,
+                border: "none",
+                cursor: customText.trim() ? "pointer" : "default",
+                background: customText.trim() ? appleVibe.accent.primary : appleVibe.surface.chip,
+                color: customText.trim() ? appleVibe.text.onAccent : appleVibe.text.tertiary,
+              }}
+            >
+              <Send style={{ width: 14, height: 14 }} strokeWidth={2.4} />
+            </button>
+          </div>
+        )}
 
         {/* AI settings — plain language so anyone can tune them. */}
         <div style={{ ...sectionLabel, marginTop: 16, display: "flex", alignItems: "center", gap: 6 }}>

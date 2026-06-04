@@ -13,12 +13,22 @@ import type {
   ProblemTreeResult,
   DesiredResultResult,
   CrossAnalysisResult,
+  QuestionExpansionResult,
+  ExpandedQuestion,
   ConvergenceResult,
   DifferentiationResult,
   SolutionFamiliesResult,
   MvpVariationsResult,
   EvaluationResult,
   RecommendationResult,
+  FeatureCardsResult,
+  FeatureCard,
+  ValidationResult,
+  ValidationExperiment,
+  ValidationAssumption,
+  DeepeningResult,
+  DeepeningBaseline,
+  DeepeningUncertainty,
 } from "./types";
 
 export type QualitySeverity = "critical" | "high" | "medium" | "low";
@@ -184,6 +194,96 @@ export function evaluateSpecForgeQuality(
       return finalize(engine, issues, repaired, arr(r.convergence_inputs).map(clean).filter(Boolean).slice(0, 3));
     }
 
+    case "question_expansion": {
+      const r = result as QuestionExpansionResult;
+      const questions = arr<ExpandedQuestion>(r.questions);
+      const total = questions.length;
+      const anyHasTrigger = questions.some(
+        (q) => Array.isArray(q?.change_triggers) && q.change_triggers.length > 0,
+      );
+      const genericQuestions = questions.filter((q) => {
+        const refLayer = clean(q?.references?.layer);
+        const refNode = clean(q?.references?.node);
+        const why = clean(q?.why_it_matters);
+        const impact = clean(q?.expected_decision_impact);
+        return !refLayer || !refNode || why.length < 30 || !impact;
+      }).length;
+      const layersCovered = new Set(
+        questions
+          .map((q) => clean(q?.layer))
+          .filter(Boolean) as string[],
+      );
+      const coversCoreLayer = ["user", "problem", "result", "differentiation"].some(
+        (layer) => layersCovered.has(layer),
+      );
+      const missingAnswerFormat = questions.some(
+        (q) => !clean(q?.expected_answer_format),
+      );
+
+      add(
+        issues,
+        total === 0,
+        "critical",
+        "downstream usefulness",
+        "no questions generated",
+        "return 6–10 decision-changing questions tied to upstream nodes",
+      );
+      add(
+        issues,
+        total > 0 && !anyHasTrigger,
+        "critical",
+        "decision impact",
+        "no question carries a change_trigger",
+        "tag every question with ≥1 change_trigger (mvp_direction, target_user, root_constraint, desired_result, differentiation_thesis, feature_mechanism, evaluation_criteria, hidden_assumption)",
+      );
+      add(
+        issues,
+        total > 0 && genericQuestions > 0,
+        "high",
+        "non-genericness",
+        `${genericQuestions} generic question${genericQuestions === 1 ? "" : "s"} (no node reference, weak why_it_matters, or missing impact)`,
+        "tie every question to a specific upstream node, write a ≥30-char why_it_matters, and set expected_decision_impact",
+      );
+      add(
+        issues,
+        total > 0 && total < 6,
+        "medium",
+        "downstream usefulness",
+        `only ${total} question${total === 1 ? "" : "s"} — fewer than 6`,
+        "expand to 6–10 ranked questions",
+      );
+      add(
+        issues,
+        total > 0 && !coversCoreLayer,
+        "medium",
+        "traceability",
+        "no question covers user / problem / result / differentiation",
+        "ensure questions span the core upstream layers, not just one",
+      );
+      add(
+        issues,
+        total > 0 && missingAnswerFormat,
+        "low",
+        "downstream usefulness",
+        "some questions are missing expected_answer_format",
+        "describe the shape of a useful answer for every question",
+      );
+      add(
+        issues,
+        !Number.isFinite(Number(r.confidence)),
+        "low",
+        "evidence honesty",
+        "missing confidence",
+        "state confidence 0–100 honestly",
+      );
+      return finalize(
+        engine,
+        issues,
+        repaired,
+        arr<string>(r.top_critical_questions).map(clean).filter(Boolean).slice(0, 3),
+      );
+    }
+
     case "convergence": {
       const r = result as ConvergenceResult;
       add(issues, !clean(r.distilled_product_thesis), "critical", "downstream usefulness", "missing product thesis", "select the strongest thesis instead of listing interpretations");
@@ -305,6 +405,163 @@ export function evaluateSpecForgeQuality(
         "name at least two critical constraints the recommended build attacks or satisfies",
       );
       return finalize(engine, issues, repaired, arr(r.assumptions_to_test).map(clean).filter(Boolean).slice(0, 3));
+    }
+
+    case "feature_cards": {
+      const r = result as FeatureCardsResult;
+      const features = arr<FeatureCard>(r.features);
+      add(issues, !features.length, "critical", "downstream usefulness", "no feature cards produced", "decompose the selected MVP into 3–5 traceable features");
+      add(issues, features.length === 1, "high", "downstream usefulness", "only one feature card", "a single-feature MVP is rarely a feature SET — produce at least 3");
+
+      const missingTrace = features.filter((f) => !clean(f?.root_cause_attacked)).length;
+      add(issues, missingTrace > 0, "high", "causal alignment", `${missingTrace} feature${missingTrace === 1 ? "" : "s"} lack root_cause_attacked`, "cite the problem_tree node each feature attacks — generic 'user pain' fails");
+
+      const missingMicro = features.filter((f) => !clean(f?.micro_objective)).length;
+      add(issues, missingMicro > 0, "high", "causal alignment", `${missingMicro} feature${missingMicro === 1 ? "" : "s"} lack a micro_objective`, "name the user behavior change each feature unlocks");
+
+      const missingMech = features.filter((f) => !clean(f?.mechanism_summary)).length;
+      add(issues, missingMech > 0, "high", "evidence honesty", `${missingMech} feature${missingMech === 1 ? "" : "s"} lack a mechanism_summary`, "give each feature a 1–2 sentence mechanism summary");
+
+      const mustHave = features.filter((f) => String(f?.build_priority) === "must_have");
+      add(issues, !mustHave.length, "high", "downstream usefulness", "no must_have features", "a build with no must_have feature has no spine — mark at least one must_have");
+
+      const totalRejected = features
+        .map((f) => arr<string>(f?.rejected_alternatives).map(clean).filter(Boolean).length)
+        .reduce((a, b) => a + b, 0);
+      add(issues, totalRejected < 2, "medium", "evidence honesty", "no rejected mechanism alternatives across the set", "name at least 2 rejected mechanisms across all features to show causal rigor");
+
+      const mustHaveMissingMetric = mustHave.filter((f) => !clean(f?.evaluation_metric)).length;
+      add(issues, mustHaveMissingMetric > 0, "medium", "evidence honesty", `${mustHaveMissingMetric} must_have feature${mustHaveMissingMetric === 1 ? "" : "s"} lack an evaluation_metric`, "every must_have feature needs a measurable signal that it's working");
+
+      // Generic-feature-name guard (catches "Dashboard", "Settings", etc.)
+      const generic = features.filter((f) => {
+        const name = clean(f?.name).toLowerCase();
+        return /^(dashboard|settings|profile|home|onboarding|help|admin)$/.test(name);
+      }).length;
+      add(issues, generic > 0, "medium", "downstream usefulness", `${generic} feature${generic === 1 ? "" : "s"} are generic CRUD names`, "rename generic features after the mechanism they actually run, not the screen they live on");
+
+      add(issues, !clean(r.selected_mvp), "high", "constraint satisfaction", "selected_mvp not echoed from recommendation", "echo recommendation.recommendation verbatim into selected_mvp");
+      add(issues, arr<string>(r.first_user_flow).filter(Boolean).length < 2, "medium", "downstream usefulness", "first_user_flow is empty or under-decomposed", "list the 2–4 features that together enable the first user task");
+
+      add(issues, features.length < 3, "medium", "downstream usefulness", "fewer than 3 features", "a first build is usually 3–5 features — consider decomposing further");
+      add(issues, !Number.isFinite(Number(r.confidence)), "medium", "evidence honesty", "missing confidence", "state confidence 0–100 honestly on this decomposition");
+
+      const ctx = mustHave.slice(0, 3).map((f) => clean(f.name)).filter(Boolean);
+      return finalize(engine, issues, repaired, ctx);
+    }
+
+    case "validation": {
+      const r = result as ValidationResult;
+      const assumptions = arr<ValidationAssumption>(r.critical_assumptions);
+      const experiments = arr<ValidationExperiment>(r.experiments);
+      add(issues, !experiments.length, "critical", "downstream usefulness", "no experiments produced", "design at least 2 ranked experiments tied to the riskiest assumptions");
+      add(issues, !assumptions.length, "critical", "evidence honesty", "no critical assumptions surfaced", "lift 3–5 assumptions from recommendation.assumptions_to_test and evaluation.assumptions_that_could_reverse_decision");
+
+      // Per-experiment structural quality (spec §13 quality gates).
+      const missingHypothesis = experiments.filter((e) => !clean(e?.hypothesis)).length;
+      const missingSuccess = experiments.filter((e) => !arr<string>(e?.success_criteria).map(clean).filter(Boolean).length).length;
+      const missingFailure = experiments.filter((e) => !arr<string>(e?.failure_criteria).map(clean).filter(Boolean).length).length;
+      const missingDecision = experiments.filter((e) => !clean(e?.decision_that_result_will_change)).length;
+      const missingAssumption = experiments.filter((e) => !clean(e?.assumption_tested)).length;
+      add(issues, missingHypothesis > 0, "high", "evidence honesty", `${missingHypothesis} experiment(s) missing hypothesis`, "every experiment needs a 'We believe X. If we Y, then Z, because W.' hypothesis");
+      add(issues, missingSuccess > 0, "high", "evidence honesty", `${missingSuccess} experiment(s) missing success criteria`, "each experiment needs 1–3 concrete success criteria");
+      add(issues, missingFailure > 0, "high", "evidence honesty", `${missingFailure} experiment(s) missing failure criteria`, "each experiment needs 1–2 concrete failure criteria");
+      add(issues, missingDecision > 0, "critical", "downstream usefulness", `${missingDecision} experiment(s) won't change a decision`, "an experiment that changes no decision is theatrical — replace it with one that does");
+      add(issues, missingAssumption > 0, "high", "evidence honesty", `${missingAssumption} experiment(s) don't name the assumption tested`, "name the exact assumption each experiment tests");
+
+      // Spec §12 hard rule: don't test downstream features before upstream
+      // user/problem/result. Heuristic — if any feature_mechanism / data_point
+      // experiment is ranked before any target_user / problem / desired_result
+      // experiment, flag it.
+      const ordered = experiments
+        .slice()
+        .sort((a, b) => (Number(a?.priority_rank) || 99) - (Number(b?.priority_rank) || 99));
+      const upstreamCats = new Set(["target_user", "problem", "desired_result", "differentiation"]);
+      let earliestUpstream = Infinity;
+      let earliestDownstream = Infinity;
+      for (let i = 0; i < ordered.length; i++) {
+        const exp = ordered[i];
+        const matchedAssumption = assumptions.find(
+          (a) => clean(a?.text) && clean(exp?.assumption_tested).includes(clean(a.text).slice(0, 20)),
+        );
+        const cat = clean(matchedAssumption?.category);
+        if (upstreamCats.has(cat) && i < earliestUpstream) earliestUpstream = i;
+        if ((cat === "feature_mechanism" || cat === "data_point") && i < earliestDownstream) earliestDownstream = i;
+      }
+      add(
+        issues,
+        earliestDownstream < earliestUpstream && earliestUpstream !== Infinity,
+        "high",
+        "constraint satisfaction",
+        "downstream-feature experiment ranked before upstream user/problem test",
+        "reorder: test target-user urgency, root problem, and desired-result value FIRST per spec §12",
+      );
+
+      add(issues, !clean(r.hard_prioritization_notes), "medium", "buildability", "missing prioritization rationale", "state the user→problem→result→differentiation→MVP→feature ordering rule");
+      add(issues, arr<string>(r.model_update_rules).length < 2, "medium", "downstream usefulness", "few model update rules", "name 2–4 rules for how experiment results would update the reasoning model");
+      add(issues, !Number.isFinite(Number(r.confidence)), "medium", "evidence honesty", "missing validation confidence", "state honest 0–100 confidence in the plan's coverage of riskiest assumptions");
+
+      // Constraints passed downstream: each top experiment becomes an
+      // evidence-required constraint on the build.
+      const evidenceConstraints = ordered
+        .slice(0, 2)
+        .map((e) => `Evidence required: ${clean(e?.assumption_tested) || clean(e?.name)}`)
+        .filter((s) => s.split(": ")[1]);
+      return finalize(engine, issues, repaired, evidenceConstraints);
+    }
+
+    case "deepening": {
+      const r = result as DeepeningResult;
+      const baselines = arr<DeepeningBaseline>(r.baselines);
+      const uncertainties = arr<DeepeningUncertainty>(r.uncertainties_remaining);
+      const next = r.next_recommended_iteration;
+      const conf = Number(r.confidence);
+      const confOk = Number.isFinite(conf);
+
+      add(issues, !clean(r.summary), "high", "downstream usefulness", "missing iteration summary", "write a one-sentence narrative of what this iteration produced");
+      add(issues, baselines.length < 6, "high", "downstream usefulness", `only ${baselines.length} baselines (spec requires 6–10)`, "capture baselines across target_user, problem_causal, desired_result, differentiation, mvp_direction, validation_evidence at minimum");
+      add(issues, !clean(r.value_added), "high", "evidence honesty", "missing value_added narrative", "name what concrete decision-support value this run added using the spec §7 vocabulary");
+      add(issues, !next || !clean(next.action), "critical", "downstream usefulness", "missing next_recommended_iteration.action", "name ONE concrete next refinement — the whole iteration timeline depends on this");
+      add(issues, !next || !clean(next.why_highest_leverage), "high", "evidence honesty", "next iteration lacks rationale", "cite which baseline is shallow or which uncertainty has the largest impact_on_recommendation");
+      add(issues, !next || !clean(next.expected_value_category), "medium", "downstream usefulness", "next iteration missing expected_value_category", "name the expected value category from spec §7 (depth_increased, uncertainty_reduced, etc.)");
+      add(issues, uncertainties.length < 3, "medium", "uncertainty visibility", `only ${uncertainties.length} uncertainties_remaining`, "name 3–5 scalar uncertainties (not questions) with impact_on_recommendation");
+
+      // Calibration: spec says confidence cannot exceed 70 if validation_evidence
+      // baseline is still shallow. This is the spec's anti-overconfidence guard.
+      const valEvBaseline = baselines.find((b) => clean(b?.dimension) === "validation_evidence");
+      const shallowValEv = valEvBaseline && clean(valEvBaseline.depth) === "shallow";
+      add(
+        issues,
+        Boolean(shallowValEv && confOk && conf > 70),
+        "high",
+        "evidence honesty",
+        `confidence ${Math.round(conf)} exceeds 70 with shallow validation_evidence`,
+        "cap confidence at 70 until validation evidence has been gathered",
+      );
+      add(issues, !confOk, "medium", "evidence honesty", "missing iteration confidence", "state an honest 0–100 model-readiness confidence");
+
+      // Discipline: deepening must reference real dimensions from the spec
+      // vocabulary, not freeform strings. Catches generic non-causal output.
+      const allowedDims = new Set<string>([
+        "target_user", "problem_causal", "desired_result", "differentiation",
+        "mvp_direction", "feature_mechanism", "data_model", "evaluation_rigor",
+        "validation_evidence", "build_readiness",
+      ]);
+      const offDimBaselines = baselines.filter(
+        (b) => clean(b?.dimension) && !allowedDims.has(clean(b.dimension)),
+      ).length;
+      add(
+        issues,
+        offDimBaselines > 0,
+        "medium",
+        "downstream usefulness",
+        `${offDimBaselines} baseline(s) use off-vocabulary dimensions`,
+        "use only the spec §8 deepening dimensions (target_user, problem_causal, …, build_readiness)",
+      );
+
+      // Deepening doesn't pass new constraints downstream — its output is the
+      // iteration snapshot itself. Quality strip stays empty.
+      return finalize(engine, issues, repaired, []);
     }
   }
 }

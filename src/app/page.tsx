@@ -108,7 +108,11 @@ export default async function LandingPage({
         name: V2_LABEL_OVERRIDES[t.id] ?? t.name,
         tagline: t.tagline,
         category: t.category,
-        accent: t.accent_color,
+        // Black & white: feed the card ink instead of the per-template color.
+        // Every card visual (glyph, chips, Generates icons, banner, CTA) reads
+        // this one value, so this single line makes the whole card monochrome.
+        // Revert to `t.accent_color` to bring the per-template colors back.
+        accent: "#0B0B0C",
       };
     }).filter((c): c is LandingCard => c !== null);
     return <LandingV2 cards={cards} />;

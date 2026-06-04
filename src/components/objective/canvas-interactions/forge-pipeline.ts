@@ -11,6 +11,7 @@ import { createShapeId, type Editor, type TLShapeId } from "tldraw";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
 import {
   OPEN_TECH_SPEC_EVENT,
+  BUILD_PROTOTYPE_EVENT,
   type OpenTechSpecDetail,
   type TechSpecCardShape,
 } from "../shapes/tech-spec-card-shape";
@@ -25,6 +26,10 @@ interface PipelineOptions {
   anchorShapeId?: string;
   inspirationImages?: InspirationImage[];
   onProgress?: (label: string) => void;
+  /** Prototype-on-selection: after the tech spec lands, go straight to
+   *  building the prototype (fire BUILD_PROTOTYPE_EVENT) instead of
+   *  auto-opening the full-screen spec page. */
+  autoPrototype?: boolean;
 }
 
 const CARD_W = 308;
@@ -116,17 +121,25 @@ export async function runForgePipeline(
     { animation: { duration: 320 } },
   );
 
-  // Auto-open the full-screen spec page (the "page at the end").
-  window.dispatchEvent(
-    new CustomEvent<OpenTechSpecDetail>(OPEN_TECH_SPEC_EVENT, {
-      detail: {
-        specJson,
-        markdown: data.markdown,
-        title: data.spec.title,
-        shapeId: cardId,
-      },
-    }),
-  );
+  const detail: OpenTechSpecDetail = {
+    specJson,
+    markdown: data.markdown,
+    title: data.spec.title,
+    shapeId: cardId,
+  };
 
-  opts.onProgress?.("Tech spec ready");
+  if (opts.autoPrototype) {
+    // Prototype-on-selection: the tech-spec card stays on the board (openable
+    // later); jump straight to building the prototype off this spec.
+    opts.onProgress?.("Building prototype…");
+    window.dispatchEvent(
+      new CustomEvent<OpenTechSpecDetail>(BUILD_PROTOTYPE_EVENT, { detail }),
+    );
+  } else {
+    // Auto-open the full-screen spec page (the "page at the end").
+    window.dispatchEvent(
+      new CustomEvent<OpenTechSpecDetail>(OPEN_TECH_SPEC_EVENT, { detail }),
+    );
+    opts.onProgress?.("Tech spec ready");
+  }
 }

@@ -437,6 +437,13 @@ async function anthropicStructured(opts: {
       ],
       tool_choice: { type: "tool", name: toolName },
       messages: [{ role: "user", content: opts.user }],
+    }, {
+      // Bound each attempt so a stalled connection can't hang for the SDK's
+      // ~10-min default (which, multiplied by withRetry's 4 retries, let an
+      // intake generation outlive the board card's ~4-min poll → stuck at 94%).
+      // withRetry provides the outer retry policy, so cap SDK retries at 1.
+      timeout: 60_000,
+      maxRetries: 1,
     });
     const toolUse = resp.content.find(
       (b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use",

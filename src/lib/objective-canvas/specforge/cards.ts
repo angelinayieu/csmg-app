@@ -13,6 +13,8 @@ import type {
   DesiredResultResult,
   CrossAnalysisResult,
   CrossAnalysisFit,
+  QuestionExpansionResult,
+  ExpandedQuestion,
   ConvergenceResult,
   DifferentiationResult,
   SolutionFamiliesResult,
@@ -20,6 +22,13 @@ import type {
   EvaluationResult,
   EvaluationCandidate,
   RecommendationResult,
+  FeatureCardsResult,
+  FeatureCard,
+  ValidationResult,
+  ValidationExperiment,
+  DeepeningResult,
+  DeepeningBaseline,
+  DeepeningUncertainty,
 } from "./types";
 
 /** Join a few bullet strings into the shape's "\n"-delimited body. */
@@ -215,6 +224,41 @@ export function resultToCards(
       ];
     }
 
+    case "question_expansion": {
+      const r = result as QuestionExpansionResult;
+      const all = Array.isArray(r.questions) ? r.questions : [];
+      const impactWeight = (q: ExpandedQuestion): number =>
+        q?.expected_decision_impact === "high"
+          ? 3
+          : q?.expected_decision_impact === "medium"
+            ? 2
+            : q?.expected_decision_impact === "low"
+              ? 1
+              : 0;
+      const ranked = all
+        .filter((q): q is ExpandedQuestion => !!q && !!clean(q.question))
+        .slice()
+        .sort((a, b) => impactWeight(b) - impactWeight(a));
+      if (!ranked.length) return [];
+      const top = ranked[0];
+      const next = ranked.slice(1, 5);
+      return [
+        {
+          stage: "questions",
+          eyebrow: "Questions",
+          title: clean(top.question),
+          subtitle: clean(top.why_it_matters) || undefined,
+          body: bullets(
+            next.map((q) =>
+              [clean(q.layer), clean(q.question)].filter(Boolean).join(" — "),
+            ),
+            4,
+          ),
+          layout: "spine",
+        },
+      ];
+    }
+
     case "convergence": {
       const r = result as ConvergenceResult;
       const thesis = clean(r.distilled_product_thesis);
@@ -402,6 +446,159 @@ export function resultToCards(
       ];
     }
 
+    case "feature_cards": {
+      const r = result as FeatureCardsResult;
+      const all: FeatureCard[] = Array.isArray(r.features)
+        ? r.features.filter(
+            (f) => f && clean(f.name) && clean(f.function),
+          )
+        : [];
+      if (!all.length) return [];
+      // Sort by build priority so must_have surfaces first, delay sinks.
+      const order: Record<string, number> = {
+        must_have: 0,
+        should_have: 1,
+        nice_to_have: 2,
+        delay: 3,
+      };
+      const sorted = all
+        .slice()
+        .sort(
+          (a, b) =>
+            (order[String(a.build_priority)] ?? 9) -
+            (order[String(b.build_priority)] ?? 9),
+        );
+      const top = sorted.slice(0, 5);
+      const priorityLabel: Record<string, string> = {
+        must_have: "Must",
+        should_have: "Should",
+        nice_to_have: "Nice",
+        delay: "Delay",
+      };
+      return top.map((f, i): SpecForgeCard => {
+        const tag = priorityLabel[String(f.build_priority)] ?? "Build";
+        const root = clean(f.root_cause_attacked);
+        const micro = clean(f.micro_objective);
+        const mech = clean(f.mechanism_summary);
+        const rej = (f.rejected_alternatives ?? []).map(clean).filter(Boolean)[0];
+        const risk = (f.risks ?? []).map(clean).filter(Boolean)[0];
+        return {
+          stage: "features",
+          eyebrow: `Feature · ${tag}${i === 0 ? " · first" : ""}`,
+          title: clean(f.name),
+          subtitle: clean(f.function),
+          body: bullets([
+            root && `Attacks: ${root}`,
+            micro && `Unlocks: ${micro}`,
+            mech && `Mechanism: ${mech}`,
+            rej && `Rejected: ${rej}`,
+            risk && `Risk: ${risk}`,
+            clean(f.evaluation_metric) && `Metric: ${clean(f.evaluation_metric)}`,
+          ]),
+          layout: "diverge",
+        };
+      });
+    }
+
+    case "validation": {
+      const r = result as ValidationResult;
+      const exps: ValidationExperiment[] = Array.isArray(r.experiments)
+        ? r.experiments
+            .filter((e) => e && clean(e.name) && clean(e.hypothesis))
+            .sort(
+              (a, b) =>
+                (Number(a.priority_rank) || 99) -
+                (Number(b.priority_rank) || 99),
+            )
+        : [];
+      if (!exps.length) return [];
+      const top = exps[0];
+      const second = exps[1];
+      const succ0 = (top.success_criteria ?? [])
+        .map(clean)
+        .filter(Boolean)[0];
+      const fail0 = (top.failure_criteria ?? [])
+        .map(clean)
+        .filter(Boolean)[0];
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      return [
+        {
+          stage: "validation",
+          eyebrow: `Validation plan · ${exps.length} test${exps.length === 1 ? "" : "s"}`,
+          title: `Test 1: ${clean(top.name)}`,
+          subtitle: clean(top.assumption_tested) || undefined,
+          body: bullets([
+            clean(top.hypothesis),
+            succ0 && `Pass if: ${succ0}`,
+            fail0 && `Fail if: ${fail0}`,
+            second && `Then: ${clean(second.name)}`,
+            `Effort ${clean(top.effort_level) || "?"} · gain ${clean(top.confidence_gain) || "?"}` +
+              (conf !== null ? ` · plan confidence ${conf}` : ""),
+          ]),
+          layout: "spine",
+        },
+      ];
+    }
+
+    case "deepening": {
+      const r = result as DeepeningResult;
+      const baselines: DeepeningBaseline[] = Array.isArray(r.baselines)
+        ? r.baselines.filter((b) => b && clean(b.dimension) && clean(b.value))
+        : [];
+      const shallow = baselines.filter((b) => clean(b.depth) === "shallow");
+      const deep = baselines.filter((b) => clean(b.depth) === "deep");
+      const uncertainties: DeepeningUncertainty[] = Array.isArray(
+        r.uncertainties_remaining,
+      )
+        ? r.uncertainties_remaining.filter(
+            (u) => u && clean(u.dimension) && clean(u.uncertainty),
+          )
+        : [];
+      const next = r.next_recommended_iteration;
+      const nextAction = next ? clean(next.action) : "";
+      const iter = Number.isFinite(Number(r.iteration_number))
+        ? Math.max(1, Math.round(Number(r.iteration_number)))
+        : 1;
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      const depthLine = baselines.length
+        ? `${baselines.length} dimensions · ${deep.length} deep · ${shallow.length} shallow`
+        : "";
+      if (!nextAction && !baselines.length) return [];
+      return [
+        {
+          stage: "deepening",
+          eyebrow: `Iteration v${iter}` +
+            (conf !== null ? ` · model confidence ${conf}` : ""),
+          title: nextAction
+            ? `Next: ${nextAction}`
+            : `Iteration v${iter} baseline recorded`,
+          subtitle: clean(r.summary) || undefined,
+          body: bullets([
+            clean(r.value_added) && `Added: ${clean(r.value_added)}`,
+            depthLine,
+            shallow.length
+              ? `Shallow: ${shallow
+                  .slice(0, 3)
+                  .map((b) => clean(b.dimension))
+                  .filter(Boolean)
+                  .join(" · ")}`
+              : "",
+            uncertainties.length
+              ? `Top uncertainty: ${clean(uncertainties[0].uncertainty)}`
+              : "",
+            next && clean(next.why_highest_leverage)
+              ? `Why: ${clean(next.why_highest_leverage)}`
+              : "",
+          ]),
+          layout: "spine",
+        },
+      ];
+    }
+
     default:
       return [];
   }
@@ -509,6 +706,41 @@ export function summarizeForContext(
         clean(r.highest_leverage_intervention_candidate) &&
           `Leverage candidate: ${clean(r.highest_leverage_intervention_candidate)}`,
         inputs && `Convergence inputs: ${inputs}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "question_expansion": {
+      const r = result as QuestionExpansionResult;
+      const all = Array.isArray(r.questions) ? r.questions : [];
+      const impactWeight = (q: ExpandedQuestion): number =>
+        q?.expected_decision_impact === "high"
+          ? 3
+          : q?.expected_decision_impact === "medium"
+            ? 2
+            : q?.expected_decision_impact === "low"
+              ? 1
+              : 0;
+      const ranked = all
+        .filter((q): q is ExpandedQuestion => !!q && !!clean(q.question))
+        .slice()
+        .sort((a, b) => impactWeight(b) - impactWeight(a))
+        .slice(0, 5);
+      const lines = ranked.map((q) => {
+        const triggers = Array.isArray(q.change_triggers)
+          ? q.change_triggers.map(clean).filter(Boolean).slice(0, 2).join("+")
+          : "";
+        const ref = q.references?.node ? ` [${clean(q.references.node)}]` : "";
+        return `Q (${clean(q.layer)}/${clean(q.expected_decision_impact) || "?"}): ${clean(q.question)}${ref}${triggers ? ` → ${triggers}` : ""}`;
+      });
+      const top = Array.isArray(r.top_critical_questions)
+        ? r.top_critical_questions.map(clean).filter(Boolean).slice(0, 3).join(" | ")
+        : "";
+      const action = clean(r.recommended_next_action);
+      return [
+        ...lines,
+        top && `Top critical: ${top}`,
+        action && `Next action: ${action}`,
       ]
         .filter(Boolean)
         .join("\n");
@@ -624,6 +856,148 @@ export function summarizeForContext(
         flips && `Decision reverses if: ${flips}`,
         constraints && `Constraints to pass downstream: ${constraints}`,
         clean(r.confidence_level) && `Rubric confidence: ${clean(r.confidence_level)}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "feature_cards": {
+      const r = result as FeatureCardsResult;
+      const feats: FeatureCard[] = Array.isArray(r.features) ? r.features : [];
+      const order: Record<string, number> = {
+        must_have: 0,
+        should_have: 1,
+        nice_to_have: 2,
+        delay: 3,
+      };
+      const sorted = feats
+        .slice()
+        .sort(
+          (a, b) =>
+            (order[String(a.build_priority)] ?? 9) -
+            (order[String(b.build_priority)] ?? 9),
+        );
+      const must = sorted
+        .filter((f) => String(f.build_priority) === "must_have")
+        .map((f) => clean(f.name))
+        .filter(Boolean);
+      const featuresLine = sorted
+        .slice(0, 5)
+        .map(
+          (f) =>
+            `${clean(f.name)}[${String(f.build_priority || "?")}] → ${clean(f.micro_objective)}`,
+        )
+        .filter((s) => !s.startsWith("[?]"))
+        .join(" | ");
+      const risksLine = sorted
+        .slice(0, 3)
+        .map((f) => {
+          const risk = (f.risks ?? []).map(clean).filter(Boolean)[0];
+          return risk ? `${clean(f.name)}: ${risk}` : "";
+        })
+        .filter(Boolean)
+        .join("; ");
+      const flow = (Array.isArray(r.first_user_flow) ? r.first_user_flow : [])
+        .map(clean)
+        .filter(Boolean)
+        .join(" → ");
+      const delayed = (Array.isArray(r.delayed_features) ? r.delayed_features : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join("; ");
+      const gaps = (Array.isArray(r.open_gaps) ? r.open_gaps : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 2)
+        .join("; ");
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      return [
+        clean(r.selected_mvp) && `Decomposing MVP: ${clean(r.selected_mvp)}`,
+        must.length && `Must-have features: ${must.join(", ")}`,
+        featuresLine && `All features: ${featuresLine}`,
+        risksLine && `Top feature risks: ${risksLine}`,
+        flow && `First user flow: ${flow}`,
+        delayed && `Delayed: ${delayed}`,
+        gaps && `Open gaps: ${gaps}`,
+        conf !== null && `Feature plan confidence: ${conf}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "validation": {
+      const r = result as ValidationResult;
+      const exps: ValidationExperiment[] = Array.isArray(r.experiments)
+        ? r.experiments
+        : [];
+      const ranked = exps
+        .slice()
+        .sort(
+          (a, b) =>
+            (Number(a.priority_rank) || 99) -
+            (Number(b.priority_rank) || 99),
+        )
+        .slice(0, 3)
+        .map(
+          (e) =>
+            `${clean(e.name) || "(unnamed)"} (${clean(e.experiment_type) || "?"}) → ${clean(e.assumption_tested)}`,
+        )
+        .filter((s) => s.split(" → ")[1])
+        .join("; ");
+      const assumptions = (Array.isArray(r.critical_assumptions)
+        ? r.critical_assumptions
+        : [])
+        .map((a) => clean(a?.text))
+        .filter(Boolean)
+        .slice(0, 3)
+        .join("; ");
+      const rules = (Array.isArray(r.model_update_rules)
+        ? r.model_update_rules
+        : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join("; ");
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      return [
+        assumptions && `Critical assumptions: ${assumptions}`,
+        ranked && `Top experiments: ${ranked}`,
+        clean(r.hard_prioritization_notes) &&
+          `Prioritization: ${clean(r.hard_prioritization_notes)}`,
+        rules && `Model update rules: ${rules}`,
+        conf !== null && `Validation confidence: ${conf}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "deepening": {
+      const r = result as DeepeningResult;
+      const iter = Number.isFinite(Number(r.iteration_number))
+        ? Math.max(1, Math.round(Number(r.iteration_number)))
+        : 1;
+      const next = r.next_recommended_iteration;
+      const baselines = (Array.isArray(r.baselines) ? r.baselines : [])
+        .map((b) =>
+          b && clean(b.dimension) && clean(b.value)
+            ? `${clean(b.dimension)}=${clean(b.value)}[${clean(b.depth) || "?"}]`
+            : "",
+        )
+        .filter(Boolean)
+        .slice(0, 5)
+        .join("; ");
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      return [
+        `Iteration v${iter}`,
+        clean(r.summary) && `Summary: ${clean(r.summary)}`,
+        clean(r.value_added) && `Value added: ${clean(r.value_added)}`,
+        baselines && `Baselines: ${baselines}`,
+        next && clean(next.action) && `Next iteration: ${clean(next.action)}`,
+        conf !== null && `Model confidence: ${conf}`,
       ]
         .filter(Boolean)
         .join("\n");

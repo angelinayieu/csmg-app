@@ -31,12 +31,57 @@ export function PromptSharpeningMount({ spaceId }: { spaceId: string }) {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let tries = 0;
+    let pendingWithObjective = 0;
+    let drove = false;
     // Poll until the artifact lands. The mount starts when the board loads —
-    // BEFORE the user submits — and an Opus generation can take 30–60s, so a
-    // short window would give up before it finishes, leaving the card stuck
-    // on "Sharpening…". ~4 min covers typing + a slow generation; it stops
-    // early the moment the artifact is ready.
+    // BEFORE the user submits — and generation can take 10–30s, so a short
+    // window would give up before it finishes, leaving the card stuck on
+    // "Sharpening…". ~4 min covers typing + a slow generation; it stops early
+    // the moment the artifact is ready.
     const MAX_TRIES = 120;
+
+    function deploy(a: any) {
+      if (dispatched.current) return;
+      dispatched.current = true;
+      const ranked: RankedItem[] = Array.isArray(a.ranked_ambiguities)
+        ? a.ranked_ambiguities
+        : [];
+      deploySharpeningCard({
+        spaceId,
+        title: a.distilled_title ?? "",
+        sharpenedPrompt: a.sharpened_prompt ?? "",
+        chips: ranked.slice(0, 3).map(chipLabel),
+        heatmapJson: JSON.stringify(a.ambiguity_heatmap ?? {}),
+        rankedJson: JSON.stringify(ranked),
+        // Color omitted → the board materializer applies SHARPEN_COLOR
+        // (single source of truth in prompt-sharpening-card-shape).
+      });
+    }
+
+    // One-shot DETERMINISTIC drive. The intake routes generate via after()
+    // (post-response), which the platform can still cut short; an AWAITED POST
+    // here keeps the function alive for the whole generation (its open request
+    // can't be torn down) and is idempotent server-side (force only on a new
+    // objective). Fires once, only after we've seen the objective is set but no
+    // artifact landed — so a stuck generation recovers in ~6s, not ~4 min.
+    async function drive() {
+      try {
+        const res = await fetch(`/api/objective/${spaceId}/prompt-sharpening`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        if (!cancelled && res.ok) {
+          const json = (await res.json()) as {
+            status?: string;
+            artifact?: any;
+          };
+          if (json.status === "ready" && json.artifact) deploy(json.artifact);
+        }
+      } catch {
+        /* the GET poll remains the fallback */
+      }
+    }
 
     async function tick() {
       if (cancelled || dispatched.current) return;
@@ -49,26 +94,21 @@ export function PromptSharpeningMount({ spaceId }: { spaceId: string }) {
         if (res.ok) {
           const json = (await res.json()) as {
             status?: string;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            objectivePresent?: boolean;
             artifact?: any;
           };
           if (json.status === "ready" && json.artifact) {
-            dispatched.current = true;
-            const a = json.artifact;
-            const ranked: RankedItem[] = Array.isArray(a.ranked_ambiguities)
-              ? a.ranked_ambiguities
-              : [];
-            deploySharpeningCard({
-              spaceId,
-              title: a.distilled_title ?? "",
-              sharpenedPrompt: a.sharpened_prompt ?? "",
-              chips: ranked.slice(0, 3).map(chipLabel),
-              heatmapJson: JSON.stringify(a.ambiguity_heatmap ?? {}),
-              rankedJson: JSON.stringify(ranked),
-              // Color omitted → the board materializer applies SHARPEN_COLOR
-              // (single source of truth in prompt-sharpening-card-shape).
-            });
+            deploy(json.artifact);
             return;
+          }
+          if (json.objectivePresent) {
+            pendingWithObjective += 1;
+            // ~3 polls (~6s) with an objective set but no artifact ⇒ the
+            // post-response generation didn't land — drive it once, awaited.
+            if (!drove && pendingWithObjective >= 3) {
+              drove = true;
+              void drive();
+            }
           }
         }
       } catch {

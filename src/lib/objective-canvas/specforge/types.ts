@@ -21,6 +21,7 @@ export type SpecForgeStage =
   | "result" // desired result stack (violet)
   | "depth" // depth selection controller (blue-cyan)
   | "analysis" // cross-analysis: user×problem×result fit + blockages (teal)
+  | "questions" // question expansion: decision-changing questions (amethyst)
   | "convergence" // root constraint · first-principles need · thesis (graphite)
   | "alternatives" // what exists today (amber)
   | "differentiation" // differentiation thesis (indigo)
@@ -28,6 +29,9 @@ export type SpecForgeStage =
   | "mvp" // top MVP variations (warm gold)
   | "evaluation" // narrowing rubric over MVPs (slate-blue)
   | "recommendation" // recommended first build (green)
+  | "features" // feature card system (forest-green)
+  | "validation" // experimentation / validation lab (rose-red)
+  | "deepening" // iteration timeline / situation-model deepening (deep purple)
   | "constraints" // accumulated constraint strip (warm amber)
   | "quality"; // causal quality critic / repair report (cyan)
 
@@ -46,6 +50,7 @@ export const STAGE_META: Record<SpecForgeStage, StageMeta> = {
   result: { label: "Desired result", color: "#8E7BEA" },
   depth: { label: "Depth selection", color: "#0E9BD8" },
   analysis: { label: "Cross-analysis", color: "#2BAA98" },
+  questions: { label: "Decision questions", color: "#A05FCC" },
   convergence: { label: "Convergence", color: "#566273" },
   alternatives: { label: "Alternatives today", color: "#D7993A" },
   differentiation: { label: "Differentiation", color: "#6366D6" },
@@ -53,6 +58,9 @@ export const STAGE_META: Record<SpecForgeStage, StageMeta> = {
   mvp: { label: "MVP variation", color: "#C8923A" },
   evaluation: { label: "Evaluation rubric", color: "#4F6B8C" },
   recommendation: { label: "Recommended first build", color: "#2FA968" },
+  features: { label: "Feature card", color: "#3C8B5A" },
+  validation: { label: "Validation plan", color: "#D9486F" },
+  deepening: { label: "Iteration deepening", color: "#7C4DFF" },
   constraints: { label: "Constraint accumulation", color: "#B5743B" },
   quality: { label: "Quality gate", color: "#0EA5A4" },
 };
@@ -64,12 +72,16 @@ export type SpecForgeEngineId =
   | "problem_tree"
   | "desired_result"
   | "cross_analysis"
+  | "question_expansion"
   | "convergence"
   | "differentiation"
   | "solution_families"
   | "mvp_variations"
   | "evaluation"
-  | "recommendation";
+  | "recommendation"
+  | "feature_cards"
+  | "validation"
+  | "deepening";
 
 /** The chain the runner executes, in causal order (converge → diverge →
  *  converge). Each engine receives the accumulated context of the ones before
@@ -82,12 +94,16 @@ export const SPECFORGE_CHAIN: SpecForgeEngineId[] = [
   "problem_tree",
   "desired_result",
   "cross_analysis",
+  "question_expansion",
   "convergence",
   "differentiation",
   "solution_families",
   "mvp_variations",
   "evaluation",
   "recommendation",
+  "feature_cards",
+  "validation",
+  "deepening",
 ];
 
 /** Human label per engine — used for progress copy ("Forging target user…"). */
@@ -97,12 +113,16 @@ export const ENGINE_LABEL: Record<SpecForgeEngineId, string> = {
   problem_tree: "Modeling the causal system",
   desired_result: "Layering the desired result",
   cross_analysis: "Interweaving user, problem, result",
+  question_expansion: "Surfacing decision-changing questions",
   convergence: "Converging on the product thesis",
   differentiation: "Comparing the alternatives",
   solution_families: "Generating solution families",
   mvp_variations: "Shaping MVP variations",
   evaluation: "Scoring against the rubric",
   recommendation: "Choosing the first build",
+  feature_cards: "Decomposing the build into features",
+  validation: "Designing the validation plan",
+  deepening: "Recording the iteration baseline",
 };
 
 // ── One unfurled card ──────────────────────────────────────────────
@@ -337,6 +357,71 @@ export interface CrossAnalysisResult {
   confidence: number; // 0..100
 }
 
+/** Question Expansion Engine: sits between cross_analysis and convergence.
+ *  Generates a small ranked list of questions whose answers would CHANGE a
+ *  downstream SpecForge decision (target user, root constraint, desired result,
+ *  differentiation, MVP direction, feature mechanism, evaluation criteria, or a
+ *  hidden assumption). Per spec §5: questions must be optimization tools, not
+ *  filler. Every question references a node from the upstream models and lists
+ *  ≥1 change_trigger. Output is advisory — convergence remains the deepest-
+ *  thesis selector. */
+export type QuestionLayer =
+  | "user"
+  | "problem"
+  | "result"
+  | "differentiation"
+  | "mvp"
+  | "mechanism"
+  | "evaluation"
+  | "validation"
+  | "constraint"
+  | "macro";
+
+export type QuestionChangeTrigger =
+  | "mvp_direction"
+  | "target_user"
+  | "root_constraint"
+  | "desired_result"
+  | "differentiation_thesis"
+  | "feature_mechanism"
+  | "evaluation_criteria"
+  | "hidden_assumption";
+
+export type QuestionImpact = "high" | "medium" | "low";
+
+export type QuestionAnswerSource =
+  | "user"
+  | "agent_reasoning"
+  | "research"
+  | "experiment";
+
+export interface QuestionReference {
+  /** Which upstream model this question hooks into. */
+  layer: QuestionLayer;
+  /** Concrete node name copied verbatim from that model (e.g., variable name,
+   *  user variant, success metric, weak link). */
+  node: string;
+}
+
+export interface ExpandedQuestion {
+  question: string;
+  layer: QuestionLayer;
+  references: QuestionReference;
+  change_triggers: QuestionChangeTrigger[];
+  why_it_matters: string;
+  expected_answer_format: string;
+  expected_decision_impact: QuestionImpact;
+  answer_source: QuestionAnswerSource;
+}
+
+export interface QuestionExpansionResult {
+  questions: ExpandedQuestion[];
+  top_critical_questions: string[];
+  hidden_low_value_questions: string[];
+  recommended_next_action: string;
+  confidence: number; // 0..100
+}
+
 export interface AlternativeItem {
   name: string;
   solves: string;
@@ -447,6 +532,180 @@ export interface RecommendationResult {
   next_best_action: string;
 }
 
+/** Feature Card System — per specforge_feature_card_system.md.
+ *  Sits between recommendation and validation. Expands the SINGLE recommended
+ *  first build into 3–5 traceable feature cards, each grounded in the upstream
+ *  causal chain (root_cause_attacked, micro_objective) with a mechanism summary,
+ *  inputs/outputs, a rejected alternative, and a build priority. Each must_have
+ *  card with a risk becomes a testable assumption for the Validation Lab.
+ *
+ *  Anti-duplication rules (enforced by the prompt + the quality critic):
+ *   - Does NOT pick the MVP (recommendation's job)
+ *   - Does NOT design experiments (validation's job)
+ *   - Does NOT deepen the mechanism flow (Feature Mechanism Generator's job)
+ *   - Does NOT decide data shape (Data Point Optimization's job)
+ *   - mechanism_summary is 1–2 sentences only — depth lives downstream */
+export type FeatureBuildPriority =
+  | "must_have"
+  | "should_have"
+  | "nice_to_have"
+  | "delay";
+
+export interface FeatureCard {
+  name: string;
+  function: string;
+  /** Citation back to problem_tree — keeps causal traceability honest. */
+  root_cause_attacked: string;
+  /** The user behavior change this feature unlocks. */
+  micro_objective: string;
+  /** 1–2 sentence mechanism summary. Deep flow lives in Feature Mechanism Generator. */
+  mechanism_summary: string;
+  inputs: string[];
+  outputs: string[];
+  /** One sentence: why this mechanism beat the rejected alternative. */
+  why_this_mechanism: string;
+  /** Rejected mechanism(s) with one-line reason. */
+  rejected_alternatives: string[];
+  /** Top risk / failure mode. */
+  risks: string[];
+  /** How we'll know the feature is working. */
+  evaluation_metric: string;
+  /** Suggested validation experiment type (validation lab will design it). */
+  validation_method: ValidationExperimentType;
+  build_priority: FeatureBuildPriority;
+}
+
+export interface FeatureCardsResult {
+  /** The MVP this set is decomposing — must echo recommendation.recommendation. */
+  selected_mvp: string;
+  features: FeatureCard[];
+  /** Sequence of features that must ship together to enable the first user flow. */
+  first_user_flow: string[];
+  /** Features delayed past v1, with one-line reason each. */
+  delayed_features: string[];
+  /** Notes on what could NOT be decomposed (will need clarification). */
+  open_gaps: string[];
+  confidence: number; // 0..100
+}
+
+/** Experimentation / Validation Lab — per specforge_experimentation_validation_lab.md.
+ *  Sits AFTER recommendation, BEFORE constraints. Consumes recommendation.
+ *  assumptions_to_test + evaluation.assumptions_that_could_reverse_decision +
+ *  question_expansion.questions to produce 2–4 concrete, ranked experiments
+ *  with hypothesis + success/failure criteria. Does NOT generate new questions
+ *  (question_expansion's job), NOT redo structural checks (quality_critic's
+ *  job), NOT override the recommendation (it tests it). */
+export type ValidationExperimentType =
+  | "interview"
+  | "usability"
+  | "concept"
+  | "concierge"
+  | "prototype"
+  | "ab"
+  | "fake_door"
+  | "analytics";
+
+export interface ValidationAssumption {
+  text: string;
+  decision_affected: string;
+  why_matters: string;
+  category:
+    | "target_user"
+    | "problem"
+    | "desired_result"
+    | "differentiation"
+    | "mvp_direction"
+    | "feature_mechanism"
+    | "data_point"
+    | "business";
+}
+
+export interface ValidationExperiment {
+  name: string;
+  experiment_type: ValidationExperimentType;
+  assumption_tested: string;
+  hypothesis: string;
+  method: string;
+  success_criteria: string[];
+  failure_criteria: string[];
+  metrics: string[];
+  effort_level: "low" | "medium" | "high";
+  confidence_gain: "low" | "medium" | "high";
+  decision_that_result_will_change: string;
+  priority_rank: number;
+}
+
+export interface ValidationResult {
+  critical_assumptions: ValidationAssumption[];
+  experiments: ValidationExperiment[];
+  hard_prioritization_notes: string;
+  model_update_rules: string[];
+  confidence: number; // 0..100
+}
+
+/** Iteration Timeline / Situation Model Deepening — runs last in the chain.
+ *  Per specforge_iteration_timeline_situation_model_deepening.md: this is the
+ *  meta-engine that snapshots the run as iteration #1 (or N), summarizes
+ *  baseline + value added, names what uncertainty remains (orthogonal to
+ *  question_expansion's questions — these are scalar uncertainties), and
+ *  recommends the SINGLE highest-leverage next refinement. Does NOT redo
+ *  experiments, questions, structural checks, or constraint extraction. */
+export type DeepeningDimension =
+  | "target_user"
+  | "problem_causal"
+  | "desired_result"
+  | "differentiation"
+  | "mvp_direction"
+  | "feature_mechanism"
+  | "data_model"
+  | "evaluation_rigor"
+  | "validation_evidence"
+  | "build_readiness";
+
+export interface DeepeningBaseline {
+  /** The dimension the baseline captures. */
+  dimension: DeepeningDimension;
+  /** Compact baseline value (e.g. "solo technical founders"). */
+  value: string;
+  /** Current depth/confidence on that dimension. */
+  depth: "shallow" | "medium" | "deep";
+}
+
+export interface DeepeningUncertainty {
+  /** The dimension that still carries uncertainty. */
+  dimension: DeepeningDimension;
+  /** What specifically is uncertain (not a question — a scalar). */
+  uncertainty: string;
+  /** Why it matters for the recommendation. */
+  impact_on_recommendation: string;
+}
+
+export interface DeepeningNextIteration {
+  /** Concrete action ("refine target user variant scoring"). */
+  action: string;
+  /** Which dimension this would deepen. */
+  dimension: DeepeningDimension;
+  /** Why this is the highest-leverage next step. */
+  why_highest_leverage: string;
+  /** Expected value: depth_increased / uncertainty_reduced / constraint_clarified /
+   *  recommendation_improved / weak_option_removed / mechanism_improved /
+   *  evidence_added / scope_simplified / differentiation_strengthened /
+   *  buildability_improved (per spec §7). */
+  expected_value_category: string;
+}
+
+export interface DeepeningResult {
+  iteration_number: number;
+  trigger: "initial_run" | "user_edit" | "repair" | "validation_result" | "re_evaluation" | "research_update" | "manual_rerun";
+  summary: string;
+  baselines: DeepeningBaseline[];
+  /** What this run concretely added (per spec §7 — narrative, not a list of nodes). */
+  value_added: string;
+  uncertainties_remaining: DeepeningUncertainty[];
+  next_recommended_iteration: DeepeningNextIteration;
+  confidence: number; // 0..100
+}
+
 /** Discriminated map id → result type, for the normalizer. */
 export interface EngineResultMap {
   power_up: PowerUpResult;
@@ -454,10 +713,14 @@ export interface EngineResultMap {
   problem_tree: ProblemTreeResult;
   desired_result: DesiredResultResult;
   cross_analysis: CrossAnalysisResult;
+  question_expansion: QuestionExpansionResult;
   convergence: ConvergenceResult;
   differentiation: DifferentiationResult;
   solution_families: SolutionFamiliesResult;
   mvp_variations: MvpVariationsResult;
   evaluation: EvaluationResult;
   recommendation: RecommendationResult;
+  feature_cards: FeatureCardsResult;
+  validation: ValidationResult;
+  deepening: DeepeningResult;
 }

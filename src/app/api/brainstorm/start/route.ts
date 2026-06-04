@@ -18,7 +18,7 @@
 // Returns { spaceId, goalId }. Caller redirects to
 // /app/objective/<spaceId>.
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { surfacePassToDb } from "@/lib/research/persist-bundle";
 import { generateInitialAnnotationsForSpace } from "@/lib/objective-canvas/generate-initial-annotations";
@@ -26,6 +26,9 @@ import { generatePromptSharpeningForSpace } from "@/lib/objective-canvas/generat
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// after() runs the prompt-sharpening generation post-response; give the
+// function room to finish that LLM call rather than being torn down early.
+export const maxDuration = 120;
 
 interface StartBody {
   objective?: string;
@@ -357,21 +360,31 @@ export async function POST(req: NextRequest) {
   // To restore them as the default, drop `sharpenOnly` from the chatbox
   // submit (see MINIMAL_INTAKE_MODE.md).
   if (!sharpenOnly) {
-    // Broad domain-context search — grounds clarifying + decompose.
-    void surfacePassToDb(db, spaceId, researchSeed + attachmentsContext);
-    // Concept-annotation lens for the working objective (underlines +
-    // the "extracted N concepts" trace). Idempotent; clarify/complete
-    // re-fires as a backstop.
-    void generateInitialAnnotationsForSpace(db, spaceId, user.id, "intake");
+    // Same teardown caveat as the sharpening call below — run these
+    // post-response DB-writing passes via after() so they aren't killed when
+    // the function returns (a bare `void` could be cut mid-flight). Broad
+    // domain-context search grounds clarifying + decompose; the annotation lens
+    // adds underlines + the "extracted N concepts" trace.
+    after(async () => {
+      await surfacePassToDb(db, spaceId, researchSeed + attachmentsContext);
+    });
+    after(async () => {
+      await generateInitialAnnotationsForSpace(db, spaceId, user.id, "intake");
+    });
   }
 
-  // ── 6. Kick off prompt sharpening (fire-and-forget) ────────────────
+  // ── 6. Kick off prompt sharpening (post-response, via after()) ─────
   // The first intake intelligence object: a mini diverge→converge pass
   // that lands a Prompt Sharpening Card on the board (distilled title,
   // sharpened prompt, ranked ambiguities, ambiguity heatmap) plus hidden
   // metadata for downstream Explore/Distill. Persists to synthesis_data;
   // the board's PromptSharpeningMount polls + materializes the card.
-  void generatePromptSharpeningForSpace(db, spaceId, user.id, objective);
+  // after() (NOT a bare `void`) so the serverless function stays alive for
+  // the LLM call — a fire-and-forget `void` was getting killed on teardown,
+  // leaving the card stuck at its 94% progress cap.
+  after(async () => {
+    await generatePromptSharpeningForSpace(db, spaceId, user.id, objective);
+  });
 
   return NextResponse.json({ spaceId, goalId, pipelineMode });
 }

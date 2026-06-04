@@ -3,136 +3,110 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Branch structures — compare</title>
+<title>Branch card — restrained</title>
 <style>
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 40px;
-    background:
-      radial-gradient(circle at 14% 16%, #ffe1c4, transparent 40%),
-      radial-gradient(circle at 86% 12%, #dcc9fb, transparent 40%),
-      radial-gradient(circle at 50% 98%, #c6f0e6, transparent 44%),
-      #e9edf4;
+    margin: 0; padding: 44px;
+    background: #F7F8FA;
     min-height: 100vh;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
     color: #0B0B0C;
   }
-  h1 { font-size: 24px; margin: 0 0 4px; }
-  p.sub { color: #475569; font-size: 14px; margin: 0 0 28px; }
-  .grid { display: grid; grid-template-columns: repeat(2, max-content); gap: 34px; }
+  h1 { font-size: 23px; margin: 0 0 4px; letter-spacing: -.01em; }
+  p.sub { color: #64748B; font-size: 14px; margin: 0 0 28px; }
+  .stack { display: flex; flex-direction: column; gap: 28px; align-items: flex-start; }
 
+  /* clean white card — hairline + soft shadow, no heavy glass, no rainbow */
   .card {
-    width: 326px; position: relative; overflow: hidden; border-radius: 28px;
-    background: rgba(255,255,255,0.58);
-    -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.7), inset 0 1px 0 rgba(255,255,255,0.95),
-      0 14px 28px -16px rgba(11,18,40,0.3), 0 40px 84px -28px rgba(11,18,40,0.5);
+    position: relative; overflow: hidden; border-radius: 22px;
+    background: #ffffff;
+    box-shadow: 0 0 0 1px rgba(15,23,42,0.06), 0 1px 2px rgba(11,18,40,0.04), 0 18px 40px -24px rgba(11,18,40,0.22);
   }
-  .sweep { position: absolute; inset: 0; pointer-events: none;
-    background: linear-gradient(125deg, rgba(255,255,255,0.42) 0%, transparent 34%, transparent 70%, rgba(255,255,255,0.15) 100%); }
-  .pad { position: relative; padding: 16px 20px 14px; }
-  .sbadge { display:inline-flex; align-items:baseline; gap:7px; margin-bottom:10px; }
-  .sbadge b { font-size: 12px; font-weight: 700; }
-  .sbadge span { font-size: 10.5px; color:#64748B; }
-  .title { font-size: 16px; font-weight: 600; line-height: 1.15; }
-  .tag { margin-top: 3px; font-size: 11.5px; color: #64748B; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pad { padding: 16px 20px 14px; }
+  .sbadge { font-size: 11px; font-weight: 600; color: #94A3B8; letter-spacing: .04em; margin-bottom: 10px; }
+  .title { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+  .tag { margin-top: 3px; font-size: 11.5px; color: #64748B; }
+  .col-h { font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: #94A3B8; }
 
-  .feed { margin-top: 11px; display: flex; align-items: center; gap: 6px; }
-  .feed .lbl { font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: #94A3B8; }
-  .fdot { width: 21px; height: 21px; border-radius: 7px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.7); }
-  .feednote { margin-top: 11px; font-size: 10px; font-weight: 600; letter-spacing:.04em; text-transform:uppercase; color:#94A3B8; }
+  /* neutral feed chip — ink, hairline, NO accent fill */
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:5px 11px 5px 8px; border-radius:999px;
+    font-size:11.5px; font-weight:500; color:#0B0B0C; white-space:nowrap;
+    background:#fff; box-shadow: inset 0 0 0 1px rgba(15,23,42,0.10); }
+  .chip .mk { width:5px; height:5px; border-radius:1.5px; background:#0B0B0C; flex:none; }
 
-  .diagram { position: relative; margin-top: 6px; }
+  .diagram { position: relative; }
   .diagram svg { position: absolute; inset: 0; }
-  .onode { position: absolute; display: flex; align-items: center; gap: 8px; transform: translateY(-50%); }
-  .odisc { width: 27px; height: 27px; border-radius: 9px; flex: none; box-shadow: inset 0 1px 0 rgba(255,255,255,0.7); position: relative; }
-  .odisc::after { content:""; position:absolute; inset: 9px; border-radius: 3px; background: currentColor; opacity:.9; }
-  .olabel { font-size: 12px; font-weight: 500; color: #1A1F2B; white-space: nowrap; }
+  .onode { position: absolute; display:flex; align-items:center; gap:9px; transform: translateY(-50%); }
+  .omk { width:7px; height:7px; border-radius:2px; background:#0B0B0C; flex:none; }
+  .olabel { font-size:12.5px; font-weight:500; color:#1A1F2B; white-space:nowrap; }
+  .inode { position:absolute; display:flex; align-items:center; gap:8px; transform: translateY(-50%); }
+  .imk { width:6px; height:6px; border-radius:2px; background:#0B0B0C; flex:none; }
+  .ilabel { font-size:12px; font-weight:500; color:#334155; white-space:nowrap; }
 
-  .foot { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    border-top: 1px solid rgba(255,255,255,0.55); padding-top: 12px; }
-  .team { display: flex; align-items: center; gap: 6px; min-width: 0; }
-  .logo { width: 18px; height: 18px; border-radius: 5px; background: #14181f; display:flex; align-items:center; justify-content:center; }
-  .logo svg { width: 11px; height: 11px; }
-  .teamname { font-size: 11px; font-weight: 600; letter-spacing: -.01em; color: #334155; white-space: nowrap; }
-  .use { font-size: 10px; font-weight: 600; white-space: nowrap; }
+  .foot { margin-top: 12px; display:flex; align-items:center; justify-content:space-between; gap:12px;
+    border-top: 1px solid rgba(15,23,42,0.07); padding-top: 12px; }
+  .team { display:flex; align-items:center; gap:6px; }
+  .logo { width:18px; height:18px; border-radius:5px; background:#14181f; display:flex; align-items:center; justify-content:center; }
+  .logo svg { width:11px; height:11px; }
+  .teamname { font-size:11px; font-weight:600; letter-spacing:-.01em; color:#334155; }
+  .use { font-size:10.5px; font-weight:600; color:#0B0B0C; }
 </style>
 </head>
 <body>
-  <h1>Branch structures — compare</h1>
-  <p class="sub">Same Research Project card, four ways the idea can branch into its deliverables. (Node markers simplified — real cards keep the custom icons.)</p>
-  <div class="grid" id="grid"></div>
+  <h1>Branch card — restrained</h1>
+  <p class="sub">Near-black ink on white, like the hero. Accent appears once — the idea hub. No rainbow, no all-over color.</p>
+  <div class="stack" id="stack"></div>
 
   <script>
-    const TPL = { name:"Research Project", tag:"Map your hypothesis, evidence, and next experiments", accent:"#5856d6",
-      outs:["Hypothesis Map","Evidence Matrix","Experiment Plan","Research Brief"], feed:5 };
+    const ACCENT = "#5856d6";
+    const INK = "#0B0B0C";
+    const TPL = {
+      name: "Research Project",
+      tag: "Map your hypothesis, evidence, and next experiments",
+      ins: ["Papers", "PDFs", "Datasets", "Notes", "Links"],
+      outs: ["Hypothesis Map", "Evidence Matrix", "Experiment Plan", "Research Brief"],
+    };
+    // idea hub = the single accent element
+    const hub = (x, y) => `<circle cx="${x}" cy="${y}" r="10" fill="${ACCENT}" fill-opacity="0.12"/><circle cx="${x}" cy="${y}" r="4.5" fill="${ACCENT}"/>`;
+    const chip = (l) => `<span class="chip"><span class="mk"></span>${l}</span>`;
+    const foot = () => `<div class="foot"><div class="team"><span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M5 4 L19 20 M19 4 L5 20"/></svg></span><span class="teamname">Intersice Team</span><svg style="width:13px;height:13px" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#0B0B0C"/><path d="M3.5 6.2 L5.1 7.8 L8.5 4.2" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><span class="use">Use template &rarr;</span></div>`;
 
-    const STRUCTURES = [
-      { key:"A", name:"Organic branches", desc:"root → curved branches" },
-      { key:"B", name:"Starburst spokes", desc:"straight radial spokes" },
-      { key:"C", name:"Feed → idea → out", desc:"inputs converge, then fan out" },
-      { key:"D", name:"Elbow tree", desc:"org-chart, right angles" },
-    ];
-
-    const A = TPL.accent, OUTS = TPL.outs, N = OUTS.length;
-    const grad = (k) => `<defs><linearGradient id="g${k}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${A}" stop-opacity="0.85"/><stop offset="1" stop-color="${A}" stop-opacity="0.4"/></linearGradient></defs>`;
-    const hub = (x,y) => `<circle cx="${x}" cy="${y}" r="11" fill="${A}" fill-opacity="0.16"/><circle cx="${x}" cy="${y}" r="5" fill="${A}"/>`;
-    const onode = (x,y,l) => `<div class="onode" style="left:${x}px; top:${y}px;"><span class="odisc" style="background:${A}29; color:${A};"></span><span class="olabel">${l}</span></div>`;
-    const feedRow = () => `<div class="feed"><span class="lbl">Feed</span>${Array.from({length:TPL.feed}).map(()=>`<span class="fdot" style="background:${A}24"></span>`).join("")}</div>`;
-
-    function diagram(key) {
-      let W = 286, H = 226, svg = "", nodes = "", feed = feedRow();
-      if (key === "A" || key === "B") {
-        const rootX = 38, rootY = 113, nodeX = 150;
-        const oy = OUTS.map((_, i) => 28 + i * (H - 56) / (N - 1));
-        const paths = oy.map((y) => key === "A"
-          ? `<path d="M ${rootX} ${rootY} C ${rootX+50} ${rootY}, ${nodeX-56} ${y}, ${nodeX-16} ${y}" fill="none" stroke="url(#gA)" stroke-width="2" stroke-linecap="round"/>`
-          : `<path d="M ${rootX} ${rootY} L ${nodeX-16} ${y}" fill="none" stroke="url(#gB)" stroke-width="2" stroke-linecap="round"/>`
-        ).join("");
-        svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${grad(key)}${paths}${hub(rootX,rootY)}</svg>`;
-        nodes = OUTS.map((l, i) => onode(nodeX - 16, oy[i], l)).join("");
-      } else if (key === "C") {
-        const inX = 14, hubX = 74, hubY = 113, nodeX = 166;
-        const M = TPL.feed;
-        const iy = Array.from({ length: M }).map((_, i) => 34 + i * ((H - 68) / (M - 1)));
-        const inLines = iy.map((y) => `<line x1="${inX}" y1="${y}" x2="${hubX}" y2="${hubY}" stroke="${A}" stroke-opacity="0.32" stroke-width="1.5"/>`).join("");
-        const inDots = iy.map((y) => `<circle cx="${inX}" cy="${y}" r="3.2" fill="${A}" fill-opacity="0.65"/>`).join("");
-        const oy = OUTS.map((_, i) => 28 + i * (H - 56) / (N - 1));
-        const paths = oy.map((y) => `<path d="M ${hubX} ${hubY} C ${hubX+42} ${hubY}, ${nodeX-54} ${y}, ${nodeX-16} ${y}" fill="none" stroke="url(#gC)" stroke-width="2" stroke-linecap="round"/>`).join("");
-        svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${grad("C")}${inLines}${inDots}${paths}${hub(hubX,hubY)}</svg>`;
-        nodes = OUTS.map((l, i) => onode(nodeX - 16, oy[i], l)).join("");
-        feed = `<div class="feednote">${M} inputs feed the idea →</div>`;
-      } else if (key === "D") {
-        const ideaX = 26, topY = 18, nodeX = 60;
-        const oy = OUTS.map((_, i) => 42 + i * 50);
-        H = oy[oy.length - 1] + 22;
-        const trunk = `<line x1="${ideaX}" y1="${topY+9}" x2="${ideaX}" y2="${oy[oy.length-1]}" stroke="url(#gD)" stroke-width="2" stroke-linecap="round"/>`;
-        const elbows = oy.map((y) => `<line x1="${ideaX}" y1="${y}" x2="${nodeX-16}" y2="${y}" stroke="url(#gD)" stroke-width="2" stroke-linecap="round"/>`).join("");
-        svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${grad("D")}${trunk}${elbows}${hub(ideaX,topY)}</svg>`;
-        nodes = OUTS.map((l, i) => onode(nodeX - 16, oy[i], l)).join("");
-      }
-      return { svg, nodes, W, H, feed };
+    // V1 · compact: neutral feed chips on top, ink branches to deliverables
+    function v1() {
+      const feed = TPL.ins.map(chip).join("");
+      const W = 290, rootX = 30, nodeX = 142, N = TPL.outs.length, H = 210;
+      const oy = TPL.outs.map((_, i) => 24 + i * (H - 48) / (N - 1));
+      const paths = oy.map((y) => `<path d="M ${rootX} ${H/2} C ${rootX+50} ${H/2}, ${nodeX-54} ${y}, ${nodeX-12} ${y}" fill="none" stroke="${INK}" stroke-opacity="0.82" stroke-width="1.6" stroke-linecap="round"/>`).join("");
+      const nodes = TPL.outs.map((l, i) => `<div class="onode" style="left:${nodeX-12}px; top:${oy[i]}px;"><span class="omk"></span><span class="olabel">${l}</span></div>`).join("");
+      return `<div class="card" style="width:328px;"><div class="pad">
+        <div class="sbadge">V1 · compact</div>
+        <div class="title">${TPL.name}</div><div class="tag">${TPL.tag}</div>
+        <div class="col-h" style="margin-top:13px;">Feed in</div>
+        <div style="margin-top:7px; display:flex; flex-wrap:wrap; gap:6px;">${feed}</div>
+        <div class="col-h" style="margin-top:14px;">Branches into</div>
+        <div class="diagram" style="margin-top:4px; width:${W}px; height:${H}px;"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${paths}${hub(rootX, H/2)}</svg>${nodes}</div>
+        ${foot()}</div></div>`;
     }
 
-    function card(s) {
-      const d = diagram(s.key);
-      return `<div class="card"><div class="sweep"></div><div class="pad">
-        <div class="sbadge"><b>${s.key} · ${s.name}</b><span>${s.desc}</span></div>
-        <div class="title">${TPL.name}</div>
-        <div class="tag">${TPL.tag}</div>
-        ${d.feed}
-        <div class="diagram" style="width:${d.W}px; height:${d.H}px;">${d.svg}${d.nodes}</div>
-        <div class="foot">
-          <div class="team">
-            <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M5 4 L19 20 M19 4 L5 20"/></svg></span>
-            <span class="teamname">Intersice Team</span>
-            <svg style="width:13px;height:13px" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#0B0B0C"/><path d="M3.5 6.2 L5.1 7.8 L8.5 4.2" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </div>
-          <span class="use" style="color:${A}">Use template &rarr;</span>
-        </div>
-      </div></div>`;
+    // V2 · full flow: ink inputs (left) → accent idea → ink outputs (right)
+    function v2() {
+      const W = 500, hubX = 232, H = 244, M = TPL.ins.length, N = TPL.outs.length;
+      const iy = TPL.ins.map((_, i) => 28 + i * (H - 56) / (M - 1));
+      const oy = TPL.outs.map((_, i) => 40 + i * (H - 80) / (N - 1));
+      const inL = iy.map((y) => `<path d="M 92 ${y} C 150 ${y}, 185 ${H/2}, ${hubX-10} ${H/2}" fill="none" stroke="${INK}" stroke-opacity="0.5" stroke-width="1.4" stroke-linecap="round"/>`).join("");
+      const outL = oy.map((y) => `<path d="M ${hubX+10} ${H/2} C ${hubX+56} ${H/2}, 290 ${y}, 320 ${y}" fill="none" stroke="${INK}" stroke-opacity="0.82" stroke-width="1.6" stroke-linecap="round"/>`).join("");
+      const inN = TPL.ins.map((l, i) => `<div class="inode" style="left:0; top:${iy[i]}px;"><span class="imk"></span><span class="ilabel">${l}</span></div>`).join("");
+      const outN = TPL.outs.map((l, i) => `<div class="onode" style="left:320px; top:${oy[i]}px;"><span class="omk"></span><span class="olabel">${l}</span></div>`).join("");
+      return `<div class="card" style="width:540px;"><div class="pad">
+        <div class="sbadge">V2 · full flow &nbsp;·&nbsp; feed in → idea → generates</div>
+        <div class="title">${TPL.name}</div><div class="tag">${TPL.tag}</div>
+        <div style="display:flex; justify-content:space-between; margin-top:10px;"><span class="col-h">Feed in</span><span class="col-h" style="margin-right:40px;">Generates</span></div>
+        <div class="diagram" style="margin-top:4px; width:${W}px; height:${H}px;"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${inL}${outL}${hub(hubX, H/2)}</svg>${inN}${outN}</div>
+        ${foot()}</div></div>`;
     }
-    document.getElementById("grid").innerHTML = STRUCTURES.map(card).join("");
+
+    document.getElementById("stack").innerHTML = v2() + v1();
   </script>
 </body>
 </html>

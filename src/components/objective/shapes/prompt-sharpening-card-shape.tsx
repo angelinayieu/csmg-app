@@ -22,7 +22,7 @@ import {
   resizeBox,
 } from "tldraw";
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, RotateCcw } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { forkAmbiguity, dispatchCardAction } from "@/components/objective/board-bus";
@@ -188,6 +188,12 @@ function PromptSharpeningRenderer({
   // No real heatmap yet → the artifact is still generating (the optimistic
   // "Sharpening…" placeholder). Show a progress bar instead of the toggle.
   const loading = Object.keys(heatmap).length === 0;
+  // Terminal-failure surface: if generation never lands (poll exhausted, or a
+  // credits/error response) flip to a "couldn't sharpen — retry" state instead
+  // of leaving the card stuck on the 94% bar forever. Retry re-triggers
+  // generation + resumes polling (retryTick re-runs the poll effect).
+  const [failed, setFailed] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
 
   // Self-heal: while loading, poll the status route and fill the card's OWN
   // props when the artifact lands — independent of the deploy event, so the
@@ -200,6 +206,23 @@ function PromptSharpeningRenderer({
     let tries = 0;
     let retried = false;
     let timer: ReturnType<typeof setTimeout>;
+
+    function applyArtifact(a: { [k: string]: unknown }) {
+      const rk = Array.isArray(a.ranked_ambiguities) ? a.ranked_ambiguities : [];
+      editor.updateShape<PromptSharpeningCardShape>({
+        id: shape.id,
+        type: "prompt-sharpening",
+        props: {
+          title: (a.distilled_title as string) ?? "",
+          sharpenedPrompt: (a.sharpened_prompt as string) ?? "",
+          chips: (rk as { ambiguity_type?: string }[]).slice(0, 3).map(chipLabelOf),
+          heatmapJson: JSON.stringify(a.ambiguity_heatmap ?? {}),
+          rankedJson: JSON.stringify(rk),
+          h: COLLAPSED_H,
+        },
+      });
+    }
+
     async function poll() {
       if (cancelled) return;
       tries += 1;
@@ -210,47 +233,64 @@ function PromptSharpeningRenderer({
         if (res.ok) {
           const json = (await res.json()) as {
             status?: string;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            artifact?: any;
+            artifact?: { [k: string]: unknown };
           };
           if (json.status === "ready" && json.artifact) {
-            const a = json.artifact;
-            const rk = Array.isArray(a.ranked_ambiguities)
-              ? a.ranked_ambiguities
-              : [];
-            editor.updateShape<PromptSharpeningCardShape>({
-              id: shape.id,
-              type: "prompt-sharpening",
-              props: {
-                title: a.distilled_title ?? "",
-                sharpenedPrompt: a.sharpened_prompt ?? "",
-                chips: rk.slice(0, 3).map(chipLabelOf),
-                heatmapJson: JSON.stringify(a.ambiguity_heatmap ?? {}),
-                rankedJson: JSON.stringify(rk),
-                h: COLLAPSED_H,
-              },
-            });
+            applyArtifact(json.artifact);
             return;
           }
         }
       } catch {
         /* transient — keep polling */
       }
-      // Stalled past ~18s → nudge a regenerate once, then keep polling.
+      // Stalled past ~18s → drive ONE awaited regenerate. Its open request keeps
+      // the function alive for the whole generation and its response is
+      // definitive: ready → fill; error/402 (credits) → surface a retry instead
+      // of spinning forever.
       if (!retried && tries === 12) {
         retried = true;
-        void fetch(`/api/objective/${spaceId}/prompt-sharpening`, {
-          method: "POST",
-        }).catch(() => {});
+        try {
+          const r = await fetch(`/api/objective/${spaceId}/prompt-sharpening`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}",
+          });
+          if (cancelled) return;
+          if (r.ok) {
+            const j = (await r.json()) as {
+              status?: string;
+              artifact?: { [k: string]: unknown };
+            };
+            if (j.status === "ready" && j.artifact) {
+              applyArtifact(j.artifact);
+              return;
+            }
+            if (j.status === "error") {
+              setFailed(true);
+              return;
+            }
+          } else if (r.status === 402) {
+            setFailed(true);
+            return;
+          }
+        } catch {
+          /* network — fall through and keep polling */
+        }
       }
-      if (!cancelled && tries < 60) timer = setTimeout(poll, 1500);
+      if (cancelled) return;
+      if (tries < 60) {
+        timer = setTimeout(poll, 1500);
+      } else {
+        // Exhausted (~90s) with nothing → stop the spinner, offer a retry.
+        setFailed(true);
+      }
     }
     timer = setTimeout(poll, 800);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [loading, spaceId, shape.id, editor]);
+  }, [loading, spaceId, shape.id, editor, retryTick]);
 
   // No-crop on spawn: grow the card to fit its content (the loading view's
   // title + activity + stage list, or long sharpened text). Disabled while
@@ -314,6 +354,19 @@ function PromptSharpeningRenderer({
       if (it.headline)
         forkAmbiguity({ sourceId: shape.id, headline: it.headline, body: it.body, color });
     }
+  }
+
+  // Retry after a failed generation: clear the failed state, re-trigger
+  // generation (idempotent bare POST), and re-run the poll effect (retryTick).
+  function retry(e: React.MouseEvent) {
+    e.stopPropagation();
+    setFailed(false);
+    setRetryTick((t) => t + 1);
+    void fetch(`/api/objective/${spaceId}/prompt-sharpening`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }).catch(() => {});
   }
 
   return (
@@ -402,7 +455,11 @@ function PromptSharpeningRenderer({
             paddingBottom: 1,
           }}
         >
-          {loading ? "Sharpening your prompt" : title || "Untitled objective"}
+          {loading
+            ? failed
+              ? "Couldn't sharpen the prompt"
+              : "Sharpening your prompt"
+            : title || "Untitled objective"}
         </div>
 
         {/* Sharpened prompt — hidden while generating; the activity view below
@@ -425,7 +482,12 @@ function PromptSharpeningRenderer({
           </div>
         )}
 
-        {loading && <GenerationActivity color={color} />}
+        {loading &&
+          (failed ? (
+            <GenerationFailed color={color} onRetry={retry} />
+          ) : (
+            <GenerationActivity color={color} />
+          ))}
 
         {/* Ambiguity chips (top ranked) */}
         {chips.length > 0 && (
@@ -612,6 +674,56 @@ function PromptSharpeningRenderer({
         )}
       </div>
     </HTMLContainer>
+  );
+}
+
+/** Terminal-failure view — replaces the progress bar when generation never
+ *  lands (poll exhausted, or a credits/error response). Gives the user a clear
+ *  reason + a Retry that re-triggers generation, instead of a card frozen at
+ *  94% with no way forward. */
+function GenerationFailed({
+  color,
+  onRetry,
+}: {
+  color: string;
+  onRetry: (e: React.MouseEvent) => void;
+}) {
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div
+        style={{
+          fontSize: 12,
+          lineHeight: 1.45,
+          color: appleVibe.text.secondary,
+        }}
+      >
+        Couldn&apos;t generate the sharpened prompt — the model may be busy or
+        out of credits.
+      </div>
+      <button
+        type="button"
+        onPointerDown={stopEventPropagation}
+        onClick={onRetry}
+        style={{
+          marginTop: 9,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "6px 12px",
+          borderRadius: 999,
+          border: `1px solid ${color}`,
+          background: color,
+          color: "white",
+          fontSize: 11.5,
+          fontWeight: 650,
+          cursor: "pointer",
+          fontFamily: appleVibe.font.stack,
+        }}
+      >
+        <RotateCcw style={{ width: 12, height: 12 }} strokeWidth={2.4} />
+        Retry
+      </button>
+    </div>
   );
 }
 
