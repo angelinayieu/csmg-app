@@ -1375,11 +1375,13 @@ export function WhiteboardBase({
       {editor && showUi && (
         <div
           style={{
-            // Beside the Home pill (top:54, left:16, ~84px wide) so the autosave
-            // status sits with the chrome rather than orphaned in the menu zone.
+            // Top-right of the board — out of the crowded left menu zone. Sits
+            // just left of the style palette (top-right corner) and above the
+            // Powerups launcher; tucks behind the Powerups panel when it's open
+            // (it's a passive, pointer-events:none status).
             position: "absolute",
-            top: 56,
-            left: 110,
+            top: 16,
+            right: 64,
             zIndex: 69,
             display: "inline-flex",
             alignItems: "center",

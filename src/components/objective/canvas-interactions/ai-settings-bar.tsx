@@ -217,7 +217,7 @@ export function AiSettingsBar() {
               rightHint="Deep"
             />
             <SliderRow
-              label="Questions for you"
+              label="Angles explored"
               valueText={`${s.complexity}`}
               value={s.complexity}
               min={COMPLEXITY_MIN}

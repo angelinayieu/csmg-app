@@ -117,6 +117,15 @@ export function PowerupRail({
 }) {
   const [open, setOpen] = useState(false);
 
+  // While the panel is open, push the top-right style palette left of it (the
+  // rail is 360px at right:12) so the palette can't cover the panel's close
+  // button. Reset to the corner when closed/unmounted.
+  useEffect(() => {
+    const el = document.documentElement;
+    el.style.setProperty("--oc-style-panel-right", open ? "388px" : "12px");
+    return () => el.style.setProperty("--oc-style-panel-right", "12px");
+  }, [open]);
+
   // Live selection — WHAT the powerups will run on (single or multi/lasso).
   const sel = useValue(
     "powerup-selection",
@@ -653,8 +662,8 @@ export function PowerupRail({
             onChange={(v) => setAiSetting("depth", Math.round(v))}
           />
           <Knob
-            label="Questions for you"
-            hint="How many things it double-checks before building."
+            label="Angles explored"
+            hint="How many questions the AI asks + answers itself to stretch each idea."
             value={settings.complexity}
             min={COMPLEXITY_MIN}
             max={COMPLEXITY_MAX}

@@ -199,7 +199,16 @@ export function deployOcCards(
 
   if (allCreated.length > 0) {
     editor.select(...allCreated);
-    editor.zoomToSelection({ animation: { duration: 300 } });
+    // Zoom with a generous inset so the cluster (esp. the left-edge swimlane
+    // labels) clears the floating board chrome — Home/Goal/History/Settings
+    // pills on the left, Library/Powerups on the right — instead of tucking
+    // under it.
+    const bounds = editor.getSelectionPageBounds();
+    if (bounds) {
+      editor.zoomToBounds(bounds, { inset: 130, animation: { duration: 300 } });
+    } else {
+      editor.zoomToSelection({ animation: { duration: 300 } });
+    }
     editor.selectNone();
   }
   return cardIds;

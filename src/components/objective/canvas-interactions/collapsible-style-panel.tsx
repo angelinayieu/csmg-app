@@ -28,7 +28,11 @@ export function CollapsibleStylePanel(props: TLUiStylePanelProps) {
         // var is unset) it falls back to a clean corner inset instead of the
         // old dead 52px gap that made the palette look like it was floating.
         marginTop: "var(--oc-style-panel-top, 14px)",
-        marginRight: 12,
+        // Slides left of the Powerups panel when it's open (the rail sets
+        // `--oc-style-panel-right`) so the palette never covers the panel's
+        // close button. Back to the corner (12px) when the panel is closed.
+        marginRight: "var(--oc-style-panel-right, 12px)",
+        transition: "margin-right 0.28s cubic-bezier(0.22,1,0.36,1)",
       }}
     >
       <button

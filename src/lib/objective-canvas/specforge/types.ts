@@ -30,6 +30,7 @@ export type SpecForgeStage =
   | "evaluation" // narrowing rubric over MVPs (slate-blue)
   | "recommendation" // recommended first build (green)
   | "features" // feature card system (forest-green)
+  | "mechanisms" // feature mechanism generator (sage-green)
   | "validation" // experimentation / validation lab (rose-red)
   | "deepening" // iteration timeline / situation-model deepening (deep purple)
   | "constraints" // accumulated constraint strip (warm amber)
@@ -59,6 +60,7 @@ export const STAGE_META: Record<SpecForgeStage, StageMeta> = {
   evaluation: { label: "Evaluation rubric", color: "#4F6B8C" },
   recommendation: { label: "Recommended first build", color: "#2FA968" },
   features: { label: "Feature card", color: "#3C8B5A" },
+  mechanisms: { label: "Feature mechanism", color: "#5A9E70" },
   validation: { label: "Validation plan", color: "#D9486F" },
   deepening: { label: "Iteration deepening", color: "#7C4DFF" },
   constraints: { label: "Constraint accumulation", color: "#B5743B" },
@@ -80,6 +82,7 @@ export type SpecForgeEngineId =
   | "evaluation"
   | "recommendation"
   | "feature_cards"
+  | "feature_mechanisms"
   | "validation"
   | "deepening";
 
@@ -102,6 +105,7 @@ export const SPECFORGE_CHAIN: SpecForgeEngineId[] = [
   "evaluation",
   "recommendation",
   "feature_cards",
+  "feature_mechanisms",
   "validation",
   "deepening",
 ];
@@ -121,6 +125,7 @@ export const ENGINE_LABEL: Record<SpecForgeEngineId, string> = {
   evaluation: "Scoring against the rubric",
   recommendation: "Choosing the first build",
   feature_cards: "Decomposing the build into features",
+  feature_mechanisms: "Designing the feature mechanisms",
   validation: "Designing the validation plan",
   deepening: "Recording the iteration baseline",
 };

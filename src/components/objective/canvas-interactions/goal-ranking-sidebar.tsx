@@ -98,11 +98,22 @@ function focusNode(editor: Editor, id: string) {
   }
 }
 
+/** Fired by the top-right nav bar to open this rail (the launcher's own left
+ *  pill is retired — the nav bar is the single trigger). */
+export const OPEN_BOARD_GOAL_EVENT = "board:open-goal";
+
 export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Editor }) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<RankData | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [descOpen, setDescOpen] = useState(false);
+
+  // Opened from the consolidated nav bar (top-right).
+  useEffect(() => {
+    const openIt = () => setOpen(true);
+    window.addEventListener(OPEN_BOARD_GOAL_EVENT, openIt);
+    return () => window.removeEventListener(OPEN_BOARD_GOAL_EVENT, openIt);
+  }, []);
 
   // Initial load on open (setData only in the .then callback — no synchronous
   // setState in the effect body).
@@ -130,20 +141,8 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
       .finally(() => setRefreshing(false));
   }
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        title="Goal & alignment — rank what's converging vs diverging"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={() => setOpen(true)}
-        style={launcherPill}
-      >
-        <Compass style={{ width: 14, height: 14 }} strokeWidth={2.2} />
-        Goal
-      </button>
-    );
-  }
+  // The left-edge launcher pill is retired — the top-right nav bar opens this.
+  if (!open) return null;
 
   const goal = data?.goal;
   const ranked = data?.ranked ?? [];

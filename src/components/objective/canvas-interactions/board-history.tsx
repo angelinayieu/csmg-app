@@ -52,6 +52,10 @@ function timeAgo(iso: string): string {
   return `${d}d ago`;
 }
 
+/** Fired by the top-right nav bar to open this panel (the launcher's own left
+ *  pill is retired — the nav bar is the single trigger). */
+export const OPEN_BOARD_HISTORY_EVENT = "board:open-history";
+
 export function BoardHistoryLauncher({
   spaceId,
   editor,
@@ -65,6 +69,13 @@ export function BoardHistoryLauncher({
   const [confirming, setConfirming] = useState(false);
   const dirtyRef = useRef(false);
   const [refreshTick, setRefreshTick] = useState(0);
+
+  // Opened from the consolidated nav bar (top-right).
+  useEffect(() => {
+    const openIt = () => setOpen(true);
+    window.addEventListener(OPEN_BOARD_HISTORY_EVENT, openIt);
+    return () => window.removeEventListener(OPEN_BOARD_HISTORY_EVENT, openIt);
+  }, []);
 
   // The version being PREVIEWED. Derived default = newest, so the preview shows
   // immediately on open without a setState-in-effect.
@@ -190,20 +201,8 @@ export function BoardHistoryLauncher({
     }
   }
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        title="Version history"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={() => setOpen(true)}
-        style={launcherPill}
-      >
-        <History style={{ width: 13, height: 13 }} strokeWidth={2.2} />
-        History
-      </button>
-    );
-  }
+  // The left-edge launcher pill is retired — the top-right nav bar opens this.
+  if (!open) return null;
 
   return (
     <div onPointerDown={(e) => e.stopPropagation()} style={panel}>
@@ -416,28 +415,6 @@ class PreviewBoundary extends Component<
 }
 
 // ── styles ──
-const launcherPill: CSSProperties = {
-  position: "absolute",
-  top: 138,
-  left: 16,
-  zIndex: 66,
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 7,
-  padding: "7px 12px",
-  borderRadius: appleVibe.radius.pill,
-  border: "1px solid var(--glass-border)",
-  cursor: "pointer",
-  fontFamily: appleVibe.font.stack,
-  fontSize: 11.5,
-  fontWeight: 650,
-  color: appleVibe.text.secondary,
-  background: "var(--glass-float-bg)",
-  backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-  WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-  boxShadow:
-    "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
-};
 const panel: CSSProperties = {
   position: "absolute",
   top: 138,

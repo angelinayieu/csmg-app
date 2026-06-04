@@ -1,25 +1,21 @@
 // ── / (public landing) ──
 //
-// Marketing surface for unauthenticated visitors. Composed top-down:
+// Marketing surface for unauthenticated visitors.
 //
-//   1. LandingMarketingNav — sticky brand + nav + Log in / Get started
-//   2. Immersive hero — the same <ImmersiveHome /> rendered for /app,
-//      with `demoMode` enabled so:
-//        • the greeting becomes the rotating-word marketing headline,
-//        • the prompt textbox is replaced with the whiteboard's
-//          PlaygroundDock,
-//        • Enter / template-card click stash the intent in
-//          sessionStorage and redirect to /auth/signup,
-//        • after auth, /app's PendingIntakeRunner picks up the stash
-//          and runs the same downstream call the visitor would have
-//          fired if they'd been signed in.
-//   3. Feature tiles + ecosystem diagram — preserved from the prior
-//      landing page; they remain the strongest existing sections.
-//   4. Footer.
+//   • DEFAULT `/`     → the V2 landing (<LandingV2 />): "from idea → value
+//                       asap" hero + the template gallery. This is the live
+//                       marketing page.
+//   • `/?legacy=1`    → the prior landing, preserved intact (immersive
+//                       <ImmersiveHome demoMode /> hero + feature tiles +
+//                       ecosystem diagram + footer). Reachable but not default.
+//   • `/?v2=1`        → alias for the default V2 surface that ALSO bypasses
+//                       the logged-in redirect, so it stays previewable while
+//                       signed in.
 //
-// Single source of truth: the immersive demo IS ImmersiveHome — there
-// is no parallel landing-only floating-cards component. Adding a card
-// position or polishing a hover state is a one-file change.
+// Logged-in visitors hitting the default `/` are redirected to /app (the
+// explicit ?legacy=1 / ?v2=1 previews skip that redirect). This mirrors how
+// MinimalHome took over /app with the prior surfaces parked behind a param.
+// To revert the takeover: make the legacy branch the default again.
 
 import { redirect } from "next/navigation";
 import {
@@ -92,14 +88,26 @@ const V2_LABEL_OVERRIDES: Record<string, string> = { team_retro: "Retrospective"
 export default async function LandingPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ v2?: string }>;
+  searchParams?: Promise<{ v2?: string; legacy?: string }>;
 }) {
-  // ── New landing preview (/?v2=1) ──
-  // Gated variant for A/B'ing the new design without touching the current
-  // landing. Rendered BEFORE the logged-in redirect so it stays previewable
-  // while signed in. Flip the default here once it wins.
   const params = await searchParams;
-  if (params?.v2 === "1") {
+  const showLegacy = params?.legacy === "1"; // the preserved prior landing
+  const previewV2 = params?.v2 === "1"; // explicit V2 preview alias
+
+  // Logged-in visitors skip the marketing surface and drop straight on /app
+  // (Supabase SSR persists the session cookie, so this "remembers" them across
+  // restarts). Explicit ?legacy=1 / ?v2=1 previews bypass the redirect so
+  // either surface stays viewable while signed in.
+  if (!showLegacy && !previewV2) {
+    const user = await getAuthUser();
+    if (user) {
+      redirect("/app");
+    }
+  }
+
+  // ── Default: the V2 landing has taken over `/`. ──
+  // The prior landing is preserved one query-param away, at /?legacy=1.
+  if (!showLegacy) {
     const cards = V2_CAROUSEL_IDS.map((id): LandingCard | null => {
       const t = getTemplate(id);
       if (!t) return null;
@@ -109,24 +117,15 @@ export default async function LandingPage({
         tagline: t.tagline,
         category: t.category,
         // Black & white: feed the card ink instead of the per-template color.
-        // Every card visual (glyph, chips, Generates icons, banner, CTA) reads
-        // this one value, so this single line makes the whole card monochrome.
-        // Revert to `t.accent_color` to bring the per-template colors back.
+        // One value drives every card visual (glyph, chips, Generates icons,
+        // banner, CTA). Revert to `t.accent_color` to bring the colors back.
         accent: "#0B0B0C",
       };
     }).filter((c): c is LandingCard => c !== null);
     return <LandingV2 cards={cards} />;
   }
 
-  // If the visitor already has a valid Supabase session cookie, skip the
-  // marketing surface and drop them straight on /app. Supabase SSR
-  // persists the session in cookies, so this "remembers" them across
-  // browser restarts — no re-login needed until the refresh token expires.
-  const user = await getAuthUser();
-  if (user) {
-    redirect("/app");
-  }
-
+  // ── Preserved prior landing (/?legacy=1) ──
   const templates = TEMPLATE_LIST.map((t) => ({
     id: t.id,
     name: t.name,

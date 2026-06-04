@@ -10,6 +10,13 @@ import type { LayerId } from "@/lib/whiteboard/layer-config";
 
 declare module "@tldraw/tlschema" {
   interface TLGlobalShapePropsMap {
+    // Decomposition group frame — wraps a systems graph into one artifact.
+    "sys-frame": {
+      w: number;
+      h: number;
+      label: string;
+      accent: string;
+    };
     "kg-node": {
       w: number;
       h: number;
