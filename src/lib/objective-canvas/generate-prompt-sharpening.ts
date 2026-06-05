@@ -40,18 +40,29 @@ export async function generatePromptSharpeningForSpace(
   userId: string,
   objective: string,
   opts?: { force?: boolean },
+  // Optional sink — the caller (the POST route) passes an object we write the
+  // failure reason into, so the API can return a real `detail` instead of the
+  // opaque {status:"error"} that turned every failure into a generic card.
+  errorSink?: { reason?: string },
 ): Promise<PromptSharpeningArtifact | null> {
   try {
     const raw = (objective ?? "").trim();
-    if (raw.length < 4) return null;
+    if (raw.length < 4) {
+      if (errorSink) errorSink.reason = "objective too short";
+      return null;
+    }
 
     // Load the space + idempotency check (skip if already sharpened).
-    const { data: space } = await db
+    const { data: space, error: spaceErr } = await db
       .from("spaces")
       .select("user_id, synthesis_data")
       .eq("id", spaceId)
       .maybeSingle();
-    if (!space || space.user_id !== userId) return null;
+    if (spaceErr && errorSink) errorSink.reason = `space load: ${spaceErr.message}`;
+    if (!space || space.user_id !== userId) {
+      if (errorSink && !errorSink.reason) errorSink.reason = "space not found / not owner";
+      return null;
+    }
     const ocState = (space.synthesis_data as Record<string, unknown> | null)
       ?.objective_canvas as
       | { sandbox?: boolean; prompt_sharpening?: PromptSharpeningArtifact }
@@ -120,10 +131,9 @@ export async function generatePromptSharpeningForSpace(
 
     return artifact;
   } catch (err) {
-    console.warn(
-      "[prompt-sharpening] generation failed:",
-      err instanceof Error ? err.message : String(err),
-    );
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[prompt-sharpening] generation failed:", msg);
+    if (errorSink) errorSink.reason = msg;
     return null;
   }
 }

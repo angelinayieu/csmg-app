@@ -90,14 +90,23 @@ export async function POST(req: Request, ctx: Ctx) {
   // can use it as a reliable AWAITED drive (the open request keeps the function
   // alive for the full generation) without wastefully regenerating an existing
   // artifact.
+  const errorSink: { reason?: string } = {};
   const artifact = await generatePromptSharpeningForSpace(
     db,
     spaceId,
     user.id,
     objective,
     { force: override.length > 0 },
+    errorSink,
   );
-  return NextResponse.json(
-    artifact ? { status: "ready", artifact } : { status: "error" },
-  );
+  if (!artifact) {
+    // Surface the real reason so the board card (and we) can see WHY instead of
+    // a generic "couldn't sharpen / out of credits". Logged server-side too.
+    console.warn("[prompt-sharpening] POST returned error:", errorSink.reason);
+    return NextResponse.json({
+      status: "error",
+      detail: errorSink.reason || "unknown",
+    });
+  }
+  return NextResponse.json({ status: "ready", artifact });
 }

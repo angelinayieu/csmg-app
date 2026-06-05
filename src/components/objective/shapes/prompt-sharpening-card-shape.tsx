@@ -218,6 +218,7 @@ function PromptSharpeningRenderer({
   // of leaving the card stuck on the 94% bar forever. Retry re-triggers
   // generation + resumes polling (retryTick re-runs the poll effect).
   const [failed, setFailed] = useState(false);
+  const [failReason, setFailReason] = useState<string>("");
   const [retryTick, setRetryTick] = useState(0);
 
   // Self-heal: while loading, poll the status route and fill the card's OWN
@@ -284,6 +285,7 @@ function PromptSharpeningRenderer({
           if (r.ok) {
             const j = (await r.json()) as {
               status?: string;
+              detail?: string;
               artifact?: { [k: string]: unknown };
             };
             if (j.status === "ready" && j.artifact) {
@@ -291,10 +293,12 @@ function PromptSharpeningRenderer({
               return;
             }
             if (j.status === "error") {
+              if (j.detail) setFailReason(j.detail);
               setFailed(true);
               return;
             }
           } else if (r.status === 402) {
+            setFailReason("out of credits (402)");
             setFailed(true);
             return;
           }
@@ -307,6 +311,7 @@ function PromptSharpeningRenderer({
         timer = setTimeout(poll, 1500);
       } else {
         // Exhausted (~90s) with nothing → stop the spinner, offer a retry.
+        setFailReason("timed out waiting for generation (~90s)");
         setFailed(true);
       }
     }
@@ -655,7 +660,7 @@ function PromptSharpeningRenderer({
 
         {loading &&
           (failed ? (
-            <GenerationFailed color={color} onRetry={retry} />
+            <GenerationFailed color={color} onRetry={retry} reason={failReason} />
           ) : (
             <GenerationActivity color={color} />
           ))}
@@ -1090,9 +1095,11 @@ function PromptSharpeningRenderer({
 function GenerationFailed({
   color,
   onRetry,
+  reason,
 }: {
   color: string;
   onRetry: (e: React.MouseEvent) => void;
+  reason?: string;
 }) {
   return (
     <div style={{ marginTop: 12 }}>
@@ -1106,6 +1113,20 @@ function GenerationFailed({
         Couldn&apos;t generate the sharpened prompt — the AI service may be
         briefly overloaded. This isn&apos;t a credits issue. Tap Retry.
       </div>
+      {reason ? (
+        <div
+          style={{
+            marginTop: 6,
+            fontSize: 10.5,
+            lineHeight: 1.4,
+            color: appleVibe.text.tertiary,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            wordBreak: "break-word",
+          }}
+        >
+          {reason}
+        </div>
+      ) : null}
       <button
         type="button"
         onPointerDown={stopEventPropagation}
