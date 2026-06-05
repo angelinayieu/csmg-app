@@ -522,6 +522,40 @@ function applyJsonValidator<T>(
   return parsed as T;
 }
 
+/** Coerce any JSON schema into one OpenAI's strict `json_schema` mode accepts:
+ *  every object must set `additionalProperties:false` and list ALL of its
+ *  properties in `required`. Recurses through `properties`, `items`, and the
+ *  `anyOf`/`allOf`/`oneOf` combinators. Idempotent — a schema that's already
+ *  strict-compliant is returned unchanged in effect. Used on the OpenAI path so
+ *  Anthropic-authored schemas survive a provider failover to OpenAI. */
+function toStrictOpenAISchema(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(toStrictOpenAISchema);
+  if (!node || typeof node !== "object") return node;
+  const obj: Record<string, unknown> = { ...(node as Record<string, unknown>) };
+  if (
+    obj.type === "object" &&
+    obj.properties &&
+    typeof obj.properties === "object"
+  ) {
+    const props = obj.properties as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(props)) out[k] = toStrictOpenAISchema(props[k]);
+    obj.properties = out;
+    obj.additionalProperties = false;
+    // Strict mode requires every key in `required`. Our downstream validators /
+    // normalizers tolerate fields the model fills with placeholders, so forcing
+    // completeness here is safe (and generally improves it).
+    obj.required = Object.keys(out);
+  }
+  if (obj.items) obj.items = toStrictOpenAISchema(obj.items);
+  for (const comb of ["anyOf", "allOf", "oneOf"] as const) {
+    if (Array.isArray(obj[comb])) {
+      obj[comb] = (obj[comb] as unknown[]).map(toStrictOpenAISchema);
+    }
+  }
+  return obj;
+}
+
 /**
  * Generate JSON from LLM with optional structured output enforcement.
  *
@@ -632,7 +666,19 @@ export async function llmJSON<T = unknown>(opts: {
         json_schema: {
           name: opts.responseSchema.name,
           strict: true,
-          schema: opts.responseSchema.schema,
+          // OpenAI strict mode requires EVERY object to declare
+          // additionalProperties:false and list ALL properties in `required`.
+          // Schemas written for Anthropic's tool path (which has no such rule)
+          // omit this — so the provider-failover retry on OpenAI 400'd with
+          // "'additionalProperties' is required to be supplied and to be false"
+          // (this is what broke prompt-sharpening once the Anthropic key ran
+          // dry and failed over). Coerce to a strict-valid schema here so the
+          // failover — and every native-OpenAI structured call — is robust.
+          // Idempotent for already-compliant schemas.
+          schema: toStrictOpenAISchema(opts.responseSchema.schema) as Record<
+            string,
+            unknown
+          >,
         },
       };
     } else {
