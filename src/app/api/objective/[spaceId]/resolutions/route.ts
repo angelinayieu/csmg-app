@@ -33,14 +33,19 @@ function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
-/** Coerce one untrusted resolution from the request body. */
+/** Coerce one untrusted resolution from the request body. AI-source rows
+ *  preserve `confidence` + `needs_review` so the goal rail's activity strip
+ *  can flag low-confidence commits; manual/voice rows ignore those fields
+ *  (the user IS the confidence). */
 function normalizeResolution(v: unknown): Resolution | null {
   const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
   const phrase = asString(o.phrase).trim();
   const concept_slug = asString(o.concept_slug).trim() || slugify(phrase);
   if (!concept_slug) return null;
   const src = o.source;
-  return {
+  const source: Resolution["source"] =
+    src === "voice" || src === "ai" ? src : "manual";
+  const base: Resolution = {
     concept_slug,
     phrase,
     kind: asString(o.kind) || "concept",
@@ -48,9 +53,24 @@ function normalizeResolution(v: unknown): Resolution | null {
       ? o.chosen_readings.filter((x): x is string => typeof x === "string")
       : [],
     answer_text: asString(o.answer_text).trim(),
-    source: src === "voice" || src === "ai" ? src : "manual",
+    source,
     resolved_at: asString(o.resolved_at) || new Date().toISOString(),
   };
+  if (source === "ai") {
+    const rawConf = o.confidence;
+    if (typeof rawConf === "number" && isFinite(rawConf)) {
+      base.confidence = Math.max(0, Math.min(1, rawConf));
+    }
+    if (typeof o.needs_review === "boolean") {
+      base.needs_review = o.needs_review;
+    } else if (typeof base.confidence === "number") {
+      // Derive when the caller forgot to set it — keeps the rule (conf<0.7
+      // OR no candidate matched) consistent with the auto-resolve route.
+      base.needs_review =
+        base.confidence < 0.7 || base.chosen_readings.length === 0;
+    }
+  }
+  return base;
 }
 
 function slugify(s: string): string {

@@ -178,8 +178,12 @@ import {
   type ArtifactCardDetail,
   DEPLOY_SHARPENING_EVENT,
   FORK_AMBIGUITY_EVENT,
+  DEPLOY_HEATMAP_CARD_EVENT,
+  DEPLOY_PRIORITY_MAP_EVENT,
   type SharpeningCardDetail,
   type AmbiguityForkDetail,
+  type DeployHeatmapCardDetail,
+  type DeployPriorityMapCardDetail,
   DEPLOY_IMAGE_CARD_EVENT,
   type ImageCardDetail,
   DEPLOY_VOICE_NOTE_EVENT,
@@ -199,8 +203,11 @@ import {
 import {
   deployPromptSharpeningOnBoard,
   forkAmbiguityOnBoard,
+  deployHeatmapCardOnBoard,
+  deployPriorityMapCardOnBoard,
   clearLegacySharpeningArrows,
 } from "./canvas-interactions/prompt-sharpening-board";
+import { reflowIntakeStack } from "./canvas-interactions/board-reflow";
 import { SharpeningConnectorsOverlay } from "./canvas-interactions/sharpening-connectors";
 import { SpecForgeConnectorsOverlay } from "./canvas-interactions/specforge-connectors";
 import { CommentStrandsOverlay } from "./canvas-interactions/comment-strands";
@@ -856,6 +863,10 @@ export function WhiteboardBase({
     // Self-heal a board that wrongly carries a chatbox card ON TOP of a
     // promoted objective (stale draft id seeded intake onto a finished board).
     clearStaleChatboxCards(ed);
+    // If the objective grew between sessions, the saved snapshot can have
+    // the sharpening card overlapping it. Push downstream cards back below
+    // the objective once on settle (push-down-only, no-op if clear).
+    reflowIntakeStack(ed);
     for (const d of drainPendingArtifacts(spaceId)) createArtifactCard(ed, d);
     for (const d of drainPendingSubsystemKgs(spaceId))
       createSubsystemKgCard(ed, d);
@@ -1419,6 +1430,24 @@ export function WhiteboardBase({
       );
     }
 
+    function onDeployHeatmapCard(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      deployHeatmapCardOnBoard(
+        editor,
+        (e as CustomEvent<DeployHeatmapCardDetail>).detail,
+      );
+    }
+
+    function onDeployPriorityMap(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      deployPriorityMapCardOnBoard(
+        editor,
+        (e as CustomEvent<DeployPriorityMapCardDetail>).detail,
+      );
+    }
+
     function onDeployImageCard(e: Event) {
       const editor = editorRef.current;
       if (!editor) return;
@@ -1504,6 +1533,8 @@ export function WhiteboardBase({
     const onSubsystemKgB = buffered(onSubsystemKg);
     const onDeploySharpeningB = buffered(onDeploySharpening);
     const onForkAmbiguityB = buffered(onForkAmbiguity);
+    const onDeployHeatmapCardB = buffered(onDeployHeatmapCard);
+    const onDeployPriorityMapB = buffered(onDeployPriorityMap);
     const onDeployImageCardB = buffered(onDeployImageCard);
     const onDeployVoiceNoteB = buffered(onDeployVoiceNote);
     const onDeployJournalB = buffered(onDeployJournal);
@@ -1518,6 +1549,8 @@ export function WhiteboardBase({
     window.addEventListener(CARD_ACTION_EVENT, onCardAction);
     window.addEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpeningB);
     window.addEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguityB);
+    window.addEventListener(DEPLOY_HEATMAP_CARD_EVENT, onDeployHeatmapCardB);
+    window.addEventListener(DEPLOY_PRIORITY_MAP_EVENT, onDeployPriorityMapB);
     window.addEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCardB);
     window.addEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNoteB);
     window.addEventListener(UPDATE_VOICE_ANALYSIS_EVENT, onUpdateVoiceAnalysis);
@@ -1533,6 +1566,8 @@ export function WhiteboardBase({
       window.removeEventListener(CARD_ACTION_EVENT, onCardAction);
       window.removeEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpeningB);
       window.removeEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguityB);
+      window.removeEventListener(DEPLOY_HEATMAP_CARD_EVENT, onDeployHeatmapCardB);
+      window.removeEventListener(DEPLOY_PRIORITY_MAP_EVENT, onDeployPriorityMapB);
       window.removeEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCardB);
       window.removeEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNoteB);
       window.removeEventListener(UPDATE_VOICE_ANALYSIS_EVENT, onUpdateVoiceAnalysis);
@@ -3320,7 +3355,7 @@ function BoardOverlay({
           title="Converge — mark what you decided, then publish the kept set"
           style={{
             position: "absolute",
-            right: 16,
+            left: 16,
             bottom: 16,
             zIndex: 65,
             display: "inline-flex",

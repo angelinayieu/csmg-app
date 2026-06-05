@@ -156,7 +156,14 @@ export function shapeToScanTarget(shape: TLShape): OperationTarget | null {
         typeof props.entityId === "string" && props.entityId
           ? props.entityId
           : roomId;
-      return { text, shapeId: shape.id as string, entityId, roomId };
+      // Surface artifact-card's kind (`mechanism` / `pain` / …) so the recs
+      // surfaces can hide ops that don't fit (e.g. Variations on a mechanism
+      // step). room-card has no meaningful kind — leave undefined → full list.
+      const sourceKind =
+        shape.type === "artifact-card" && typeof props.kind === "string"
+          ? (props.kind as string)
+          : undefined;
+      return { text, shapeId: shape.id as string, entityId, roomId, sourceKind };
     }
     case "insight-card": {
       const text = [asString(props.headline), asString(props.body)]
@@ -173,7 +180,10 @@ export function shapeToScanTarget(shape: TLShape): OperationTarget | null {
       const text = [asString(props.name), asString(props.body)]
         .filter(Boolean)
         .join(" — ");
-      return text.length >= 3 ? { text, shapeId: shape.id as string } : null;
+      if (text.length < 3) return null;
+      const sourceKind =
+        typeof props.kind === "string" ? (props.kind as string) : undefined;
+      return { text, shapeId: shape.id as string, sourceKind };
     }
     default:
       return null;

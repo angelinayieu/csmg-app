@@ -18,6 +18,8 @@ import { SpecFeedbackCardShapeUtil } from "./shapes/spec-feedback-card-shape";
 import { PrototypeCardShapeUtil } from "./shapes/prototype-card-shape";
 import { UiPlanCardShapeUtil } from "./shapes/ui-plan-card-shape";
 import { PromptSharpeningCardShapeUtil } from "./shapes/prompt-sharpening-card-shape";
+import { AmbiguityHeatmapCardShapeUtil } from "./shapes/ambiguity-heatmap-card-shape";
+import { PriorityMapCardShapeUtil } from "./shapes/priority-map-card-shape";
 import { ObjectiveImageCardShapeUtil } from "./shapes/objective-image-card-shape";
 import { ChatboxCardShapeUtil } from "./shapes/chatbox-card-shape";
 import { ObjectiveCardShapeUtil } from "./shapes/objective-card-shape";
@@ -44,6 +46,8 @@ export const CUSTOM_SHAPE_UTILS = [
   UiPlanCardShapeUtil,
   PrototypeCardShapeUtil,
   PromptSharpeningCardShapeUtil,
+  AmbiguityHeatmapCardShapeUtil,
+  PriorityMapCardShapeUtil,
   ObjectiveImageCardShapeUtil,
   ChatboxCardShapeUtil,
   ObjectiveCardShapeUtil,

@@ -18,6 +18,12 @@ import {
   type GlossarySource,
   type AnnotationSeed,
 } from "@/lib/objective-canvas/generate-glossary";
+import {
+  enrichGlossaryWithEvidence,
+  termSlug,
+  loadCrossSpaceGlossary,
+  applyCrossSpaceSeeds,
+} from "@/lib/objective-canvas/taste-glossary";
 import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotations";
 
 export const runtime = "nodejs";
@@ -116,7 +122,35 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
   const db = auth.supabase as any;
   const space = await loadSpace(db, spaceId, auth.user.id);
   if (!space) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.json({ glossary: readGlossary(space.synthesis_data) });
+
+  // Enrich each term with provenance (whose taste shaped it), the references
+  // that ground it, and a cross-space usage count — so the reader SEES that
+  // their definitions are theirs and reused, not re-entered. All additive +
+  // soft-fail: legacy consumers still read { term, definition, ... }.
+  const terms = readGlossary(space.synthesis_data);
+  const enriched = await enrichGlossaryWithEvidence(db, spaceId, terms);
+  // Cross-space reuse count — how many of the user's OTHER spaces define the
+  // same concept as their taste, by concept_slug (NEW object layer). Replaces
+  // the legacy entities-based stat (P3.1) so the count reflects the current
+  // build, and reuses the same scan that powers inheritance seeding.
+  let crossSpace: Awaited<
+    ReturnType<typeof loadCrossSpaceGlossary>
+  > | null = null;
+  try {
+    crossSpace = await loadCrossSpaceGlossary(
+      db,
+      auth.user.id,
+      spaceId,
+      enriched.map((t) => termSlug(t)),
+    );
+  } catch {
+    /* cross-space pill is best-effort */
+  }
+  const glossary = enriched.map((t) => ({
+    ...t,
+    crossSpaceCount: crossSpace?.get(termSlug(t))?.spaceCount ?? 0,
+  }));
+  return NextResponse.json({ glossary });
 }
 
 export async function POST(_req: NextRequest, ctx: RouteContext) {
@@ -167,51 +201,43 @@ export async function POST(_req: NextRequest, ctx: RouteContext) {
     ...subRows.flatMap((s) => seedsFromAnnotations(s.annotations)),
   ];
 
-  const { data: ents } = await db
-    .from("entities")
-    .select("name, entity_type, expanded_detail")
-    .eq("space_id", spaceId);
-  const entityRows = (ents ?? []) as Array<{
-    name?: unknown;
-    entity_type?: unknown;
-    expanded_detail?: unknown;
-  }>;
-  const entityNames = entityRows
-    .filter((e) => e.entity_type !== "objective_anchor")
-    .map((e) => (typeof e.name === "string" ? e.name : ""))
-    .filter((s) => s.length > 0);
-  // Item definitions (expanded_detail.definition) so the glossary stays
-  // consistent with the canonical item definition for terms that name an
-  // entity — the glossary's link into the single-source-of-truth DAG.
-  const entityDefinitions = entityRows
-    .filter((e) => e.entity_type !== "objective_anchor")
-    .map((e) => {
-      const name = typeof e.name === "string" ? e.name : "";
-      const ed = e.expanded_detail as Record<string, unknown> | null;
-      const definition =
-        ed && typeof ed.definition === "string" ? ed.definition : "";
-      return { name, definition };
-    })
-    .filter((e) => e.name.length > 0 && e.definition.trim().length > 0);
-
-  // ── Library objects (the NEW object layer — feature/variable cards from
-  //    decompose-cards) seed the glossary directly: title → term, summary →
-  //    definition, object_type → layer_tag. This is how the generated cards
-  //    contribute now that the entity/room path is deprecated. ──
+  // ── SOURCE OF TRUTH (LOCKED): the glossary derives ONLY from the objective
+  //    lens (annotations, above) + the LIBRARY_OBJECTS CARDS (the new object
+  //    layer — feature/variable/etc. from decompose-cards + converge/publish).
+  //    The deprecated `entities`/rooms path is intentionally NO LONGER read.
+  //    Cards are the cards we read from: title → term, summary → definition,
+  //    object_type → layer_tag; the same vocabulary also feeds jargon-mining
+  //    (entityNames) and the consistency anchor (entityDefinitions) that the
+  //    rooms layer used to provide. ──
   const { data: objs } = await db
     .from("library_objects")
     .select("title, summary, object_type")
     .eq("space_id", spaceId);
-  const objectSeeds: AnnotationSeed[] = (
+  const cardRows = (
     (objs ?? []) as Array<{ title?: unknown; summary?: unknown; object_type?: unknown }>
   )
     .map((o) => ({
-      phrase: typeof o.title === "string" ? o.title : "",
-      reading: typeof o.summary === "string" ? o.summary : "",
-      layer_tag: typeof o.object_type === "string" ? o.object_type : null,
-      weight: 3,
+      title: typeof o.title === "string" ? o.title.trim() : "",
+      summary: typeof o.summary === "string" ? o.summary.trim() : "",
+      object_type: typeof o.object_type === "string" ? o.object_type : null,
     }))
-    .filter((s) => s.phrase.trim().length > 0 && s.reading.trim().length > 0);
+    .filter((o) => o.title.length > 0);
+
+  // Card titles → authoritative term seeds (summary = definition).
+  const objectSeeds: AnnotationSeed[] = cardRows
+    .filter((o) => o.summary.length > 0)
+    .map((o) => ({
+      phrase: o.title,
+      reading: o.summary,
+      layer_tag: o.object_type,
+      weight: 3,
+    }));
+  // Card vocabulary = the jargon-mining hint + the consistency anchor (replaces
+  // what entities/rooms supplied), so coincident terms stay true to the card.
+  const entityNames = cardRows.map((o) => o.title);
+  const entityDefinitions = cardRows
+    .filter((o) => o.summary.length > 0)
+    .map((o) => ({ name: o.title, definition: o.summary }));
 
   if (
     !coreObjectiveText &&
@@ -237,10 +263,24 @@ export async function POST(_req: NextRequest, ctx: RouteContext) {
     existing: readGlossary(space.synthesis_data),
   });
 
+  // ── Cross-space taste (P3.0, CROSS_SPACE_TASTE_SPEC.md): inherit the user's
+  //    PINNED meaning for any term they've already authored in ANOTHER space
+  //    (matched by concept_slug), upgrading weak terms here so they never
+  //    re-define what they've defined elsewhere. Same-space pinned always wins;
+  //    soft-fails to the un-seeded glossary. Persisted, so buildSpaceContext +
+  //    the GET read the inherited meaning for free. ──
+  const crossSpace = await loadCrossSpaceGlossary(
+    db,
+    space.user_id,
+    spaceId,
+    glossary.map((t) => termSlug(t)),
+  );
+  const seeded = applyCrossSpaceSeeds(glossary, crossSpace);
+
   // ── Persist into synthesis_data.glossary (merge, don't clobber). ──
   const nextSynthesis: Record<string, unknown> = {
     ...((space.synthesis_data as Record<string, unknown> | null) ?? {}),
-    glossary,
+    glossary: seeded,
   };
   const { error: updateErr } = await db
     .from("spaces")
@@ -253,7 +293,7 @@ export async function POST(_req: NextRequest, ctx: RouteContext) {
     );
   }
 
-  return NextResponse.json({ glossary });
+  return NextResponse.json({ glossary: seeded });
 }
 
 // ── PATCH — edit / pin a single term ──────────────────────────────
@@ -304,6 +344,16 @@ export async function PATCH(req: NextRequest, ctx: RouteContext) {
   if (typeof body?.pinned === "boolean") {
     next.pinned = body.pinned;
     if (body.pinned) next.source = "user";
+  }
+  // A definition edit or explicit pin makes the term the user's OWN — shed any
+  // cross-space inheritance so it stops reading as "inherited from <App>" and
+  // travels as their authored taste (P3.0).
+  const becameOwn =
+    (typeof body?.definition === "string" && body.definition.trim().length > 0) ||
+    body?.pinned === true;
+  if (becameOwn) {
+    delete next.cross_space_origin;
+    delete next.cross_space_origin_title;
   }
   next.updated_at = now;
   glossary[idx] = next;

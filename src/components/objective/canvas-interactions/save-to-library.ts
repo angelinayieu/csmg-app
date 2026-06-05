@@ -24,6 +24,11 @@ export interface SaveableCard {
   /** Blob-local unique id. REQUIRED for non-entity cards so distinct cards
    *  don't collide on the (space, type, null, null) natural key. */
   sourceRef?: string | null;
+  /** Arbitrary structured payload → library_objects.content_snapshot (JSONB).
+   *  Used for mechanism-step rows to stash { consumes, produces } tokens so
+   *  the tech-spec read path can pick them up as interface contracts. Kept
+   *  unstructured on purpose — no schema migration until consumers stabilize. */
+  contentSnapshot?: Record<string, unknown> | null;
 }
 
 export interface SaveResult {
@@ -62,6 +67,7 @@ export async function saveCardsToLibrary(
             sourceEntityId: card.sourceEntityId ?? null,
             sourceSubObjectiveId: card.sourceSubObjectiveId ?? null,
             sourceRef: card.sourceRef ?? null,
+            contentSnapshot: card.contentSnapshot ?? null,
           }),
         },
       );

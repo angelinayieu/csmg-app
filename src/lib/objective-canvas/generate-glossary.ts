@@ -49,6 +49,13 @@ export interface GlossaryTerm {
    *  show "this is also defined in the glossary as: …". Optional for
    *  back-compat; backfilled lazily on next merge. */
   concept_slug?: string;
+  /** Cross-application taste (P3.0): set when this term's meaning was INHERITED
+   *  from the user's PINNED definition in ANOTHER of their spaces (matched by
+   *  concept_slug). Treated as source:'user' (yours) but NOT pinned, so a local
+   *  edit still wins and the next rebuild refreshes it from the origin. The
+   *  title drives the "inherited from your <App>" UI tag. */
+  cross_space_origin?: string;
+  cross_space_origin_title?: string;
   updated_at: string;
 }
 

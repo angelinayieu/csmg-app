@@ -7,7 +7,11 @@
 // or prefers-reduced-motion is set. The 3D version (starburst-3d.tsx)
 // renders this same star shape at rest, then reveals depth on hover.
 
-const INK = "#0B0B0C";
+// Monochrome — a single near-ink black (no terracotta sun / teal sea).
+// The landing is intentionally cold B&W; do NOT re-warm this.
+const INK = "#1A1A1C";
+const SUN = "#1A1A1C";
+const SEA = "#1A1A1C";
 
 const C = { x: 170, y: 105 };
 const DOTTED = [
@@ -57,9 +61,9 @@ export function StarburstSVG({ className }: { className?: string }) {
           />
         ))}
         {DOTTED.map((p, i) => (
-          <circle key={`d${i}`} cx={p.x} cy={p.y} r={5} fill={INK} />
+          <circle key={`d${i}`} cx={p.x} cy={p.y} r={5} fill={SEA} />
         ))}
-        <circle cx={C.x} cy={C.y} r={7} fill={INK} />
+        <circle cx={C.x} cy={C.y} r={7.5} fill={SUN} />
       </svg>
     </div>
   );

@@ -225,6 +225,29 @@ export async function setOnWhiteboard(
   }
 }
 
+/** Assign / move a curation FOLDER — the `subsystem` cluster the Library
+ *  groups by. This is the SAME column the decompose LLM seeds (the AI
+ *  auto-folder); the user can move/rename via this write path. Pass null to
+ *  unfile. Capped to 40 chars to match the decompose-assigned width. */
+export async function setObjectSubsystem(
+  db: AnyDb,
+  objectId: string,
+  subsystem: string | null,
+): Promise<void> {
+  try {
+    const clean =
+      typeof subsystem === "string" && subsystem.trim()
+        ? subsystem.trim().slice(0, 40)
+        : null;
+    await db
+      .from("library_objects")
+      .update({ subsystem: clean, updated_at: new Date().toISOString() })
+      .eq("id", objectId);
+  } catch (err) {
+    console.warn("[library-objects] setObjectSubsystem failed (soft):", err);
+  }
+}
+
 /** Assign / move a blueprint layer (the per-object slot — enables layer swap). */
 export async function setBlueprintLayer(
   db: AnyDb,

@@ -29,6 +29,12 @@ interface Body {
 interface Item {
   title: string;
   subtitle: string;
+  /** Structured data tokens — mirrored on the subtitle as text but exposed
+   *  here so downstream (library save → tech-spec) reads them as interface
+   *  contracts instead of parsing strings. Empty for the lead "How it works"
+   *  card. */
+  consumes?: string[];
+  produces?: string[];
 }
 
 /** A short noun phrase for the feature name — first line / sentence. */
@@ -65,6 +71,8 @@ function flattenSpec(spec: MechanismSpec): Item[] {
     items.push({
       title: `${i + 1}. ${s.step}`,
       subtitle: [s.component, s.data, handoff].filter(Boolean).join(" · "),
+      consumes: s.consumes ?? [],
+      produces: s.produces ?? [],
     });
   });
   // No runtime flow (thin idea) — fall back to the component architecture so the

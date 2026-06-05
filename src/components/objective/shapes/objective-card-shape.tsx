@@ -27,6 +27,7 @@ import {
   OPEN_CARD_DETAIL_EVENT,
   OBJECTIVE_MARKER,
 } from "@/components/objective/canvas-interactions/object-detail-drawer";
+import { reflowIntakeStack } from "@/components/objective/canvas-interactions/board-reflow";
 
 export type ObjectiveCardShape = TLBaseShape<
   "objective-card",
@@ -117,6 +118,10 @@ function ObjectiveCardRenderer({
         type: "objective-card",
         props: { h: needed },
       });
+      // The card just grew (or shrank). Push the sharpening card + any
+      // anchored cards back below it so a long objective never overlaps the
+      // sharpening intake stack. Same-layout-effect → no visible jitter.
+      reflowIntakeStack(editor);
     }
     // Re-measure when the content or width changes (NOT on h → avoids a loop).
     // eslint-disable-next-line react-hooks/exhaustive-deps

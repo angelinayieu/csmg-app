@@ -334,13 +334,45 @@ export function normalizeSharpening(
  *  concept = a term whose meaning must be pinned. */
 export type SalienceKind = "pain" | "goal" | "constraint" | "lever" | "concept";
 
+/** A pointer to something on the board / glossary / agent log that PARTIALLY
+ *  closes a micro question — without necessarily resolving it. The unit of
+ *  "addressing" (vs binary "resolving"). */
+export interface AddressingRef {
+  kind: "card" | "glossary" | "ai";
+  /** shape id / concept slug / ai-decision id — interpreted by kind. */
+  ref: string;
+  at: string;
+}
+
+/** A sub-uncertainty that decomposes a macro concept. The flat 0..1 macro
+ *  uncertainty is glib — most high-leverage concepts hide 2–4 distinct sub-
+ *  questions, each with its own openness. Micros are the unit the rail / Studio
+ *  actually moves; the macro is derived from them. */
+export interface MicroQuestion {
+  /** Stable id (slug-m<index>); ties to addressing refs + resolutions. */
+  id: string;
+  /** One concrete question that, when answered, addresses PART of the macro. */
+  q: string;
+  /** 0..1 — how under-specified just this sub-question is. */
+  uncertainty: number;
+  /** Cards / glossary / ai commits that touch (not necessarily resolve) it. */
+  addressed_by: AddressingRef[];
+  /** ISO when the micro flipped to fully resolved. Absent = still open. */
+  resolved_at?: string;
+  /** 1–3 plausible readings scoped to JUST this sub-question (finer than the
+   *  macro's candidate_readings). Optional. */
+  candidate_readings?: string[];
+}
+
 export interface SalienceAnnotation {
   /** The exact key phrase/term, quoted from the (sharpened) objective. */
   phrase: string;
   kind: SalienceKind;
   /** 0..1 — how much nailing this drives the outcome (the optimisation weight). */
   leverage: number;
-  /** 0..1 — how under-specified / open to interpretation it is right now. */
+  /** 0..1 — DERIVED when micro_questions is present (mean of micro uncertainty),
+   *  otherwise the model's atomic estimate. Keep reading this field directly;
+   *  the derivation is transparent to consumers. */
   uncertainty: number;
   /** One line — why it carries weight (or why it's ambiguous). */
   why: string;
@@ -350,6 +382,29 @@ export interface SalienceAnnotation {
   concept_slug: string;
   /** Derived: leverage weighted by uncertainty → ranks "needs modelling". */
   priority: number;
+  /** Decomposition of this macro into 2–4 sub-questions. Absent on legacy
+   *  artifacts pre-step-1 — treat as a single implicit micro = the macro. */
+  micro_questions?: MicroQuestion[];
+  /** ISO timestamp this annotation was first SURFACED by a board-aware
+   *  re-scan (Tier-1, step 5) rather than the initial intake depth pass.
+   *  Drives the "new" pulse in the rail. Absent on annotations that landed
+   *  in the original depth pass. */
+  emerged_at?: string;
+}
+
+/** Progress over a macro's micros. Falls back to 0/1 (binary) when micros are
+ *  absent — caller can use the macro's `resolved` state from resolutions[] to
+ *  decide whether the implicit micro is answered. */
+export function macroProgress(a: SalienceAnnotation): {
+  answered: number;
+  total: number;
+} {
+  const m = a.micro_questions;
+  if (!m || m.length === 0) return { answered: 0, total: 1 };
+  return {
+    answered: m.filter((q) => q.resolved_at).length,
+    total: m.length,
+  };
 }
 
 export interface SalienceMetadata {
@@ -371,7 +426,24 @@ export interface Resolution {
   answer_text: string;
   source: "manual" | "voice" | "ai";
   resolved_at: string;
+  /** 0..1, AI-source only — how confident the model was in its choice.
+   *  Absent on manual/voice answers (the user IS the confidence). Used by the
+   *  rail to flag low-confidence AI commits for review. */
+  confidence?: number;
+  /** AI-source only — derived flag: `confidence < 0.7` OR no candidate matched.
+   *  Surfaced in the rail's AI activity strip with a ⚠ for one-click review. */
+  needs_review?: boolean;
 }
+
+const MICRO_QUESTION_SCHEMA = {
+  type: "object",
+  properties: {
+    q: { type: "string" },
+    uncertainty: { type: "number" },
+    candidate_readings: { type: "array", items: { type: "string" } },
+  },
+  required: ["q", "uncertainty"],
+} as const;
 
 const SALIENCE_ITEM_SCHEMA = {
   type: "object",
@@ -385,6 +457,9 @@ const SALIENCE_ITEM_SCHEMA = {
     uncertainty: { type: "number" },
     why: { type: "string" },
     candidate_readings: { type: "array", items: { type: "string" } },
+    // Optional decomposition. Backward-compatible: legacy artifacts that don't
+    // include this are treated as a single implicit micro = the whole concept.
+    micro_questions: { type: "array", items: MICRO_QUESTION_SCHEMA },
   },
   required: [
     "phrase",
@@ -433,14 +508,20 @@ B. SALIENCE ANNOTATIONS — annotate the 4–8 highest-LEVERAGE concepts/phrases
    • kind — pain (a problem to relieve) | goal (an outcome to hit) | constraint (a hard limit) | lever (a tunable that drives the outcome) | concept (a term whose meaning must be pinned).
    • leverage — 0..1 — how much correctly nailing this drives the final outcome. Pain points and goals are the optimisation targets; weight them high.
    • uncertainty — 0..1 — how under-specified or open to interpretation it is right now.
-   • why — ONE line — why it carries weight (or why it's ambiguous).
-   • candidate_readings — 2–4 DISTINCT plausible interpretations of this phrase (these become the options the user will later choose between).
+   • why — ONE line, ≤ 18 words, that GETS STRAIGHT TO THE STAKES: name the specific unresolved fork and what it changes downstream. Do NOT restate the phrase, and do NOT open with throat-clearing ("This is the core/heart/engine of the app, but…", "X is central, but…", "It's important that…"). State the decision directly. GOOD: "Predefined vs. user-generated tasks changes the entire information architecture." BAD: "Task-tagging is the backbone of the app, but it's unclear how tasks work."
+   • candidate_readings — 2–4 DISTINCT plausible interpretations of this phrase (these become the macro-level options in the Resolution Studio).
+   • micro_questions — 2–4 sub-questions that DECOMPOSE this concept. Each is ONE concrete question that, when answered, addresses just PART of the macro (not the whole thing). For each micro:
+       – q: the question itself, ≤ 14 words, decisively scoped.
+       – uncertainty: 0..1 — how open just this sub-question is. The MACRO's uncertainty is the mean of its micros' uncertainty, so weight each honestly.
+       – candidate_readings (optional, 1–3): plausible readings scoped to JUST this sub-question — finer than the macro candidate_readings.
 
 Rules:
 - Quote phrases verbatim from the objective; never invent terms it doesn't imply.
 - Prioritise PAIN POINTS and GOALS — they are what we optimise for.
 - The most valuable annotations are HIGH leverage AND HIGH uncertainty — they most need clarifying. Surface those.
-- Be specific to THIS objective. No generic boilerplate; every line earns its place.`;
+- Be specific to THIS objective. No generic boilerplate; every line earns its place.
+- Every "why" must be DECISIVE — lead with the open fork, never a preamble about how central the phrase is. If a "why" starts by asserting importance ("this is the X of the app, but…"), cut everything before the real point.
+- DECOMPOSE every high-leverage annotation into 2–4 micro_questions. A macro at 0.7 uncertainty almost always hides 3 distinct ambiguities — name them. Micros must be ORTHOGONAL (each answers a different facet), CONCRETE (not "what is X?" — "is X the same person or a role?"), and SCOPED (each answerable in a sentence).`;
 
 export const SHARPENING_DEPTH_USER = (raw: string, sharpened: string) =>
   `Raw objective:\n"""\n${raw}\n"""\n\nSharpened objective:\n"""\n${sharpened}\n"""\n\nReturn the prompt_sharpening_depth JSON.`;
@@ -485,7 +566,7 @@ export function normalizeSalience(data: unknown): {
       const o = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
       const phrase = typeof o.phrase === "string" ? o.phrase.trim() : "";
       const leverage = clamp01(o.leverage);
-      const uncertainty = clamp01(o.uncertainty);
+      const modelUncertainty = clamp01(o.uncertainty);
       const kind: SalienceKind =
         o.kind === "pain" ||
         o.kind === "goal" ||
@@ -494,6 +575,37 @@ export function normalizeSalience(data: unknown): {
         o.kind === "concept"
           ? o.kind
           : "concept";
+      const slug = slugify(phrase);
+      // Extract decomposed micro-questions if present; cap at 5 to keep the
+      // rail/Studio scannable. Each gets a stable id from the parent slug +
+      // index so addressing refs survive across re-fetches.
+      const microsRaw = Array.isArray(o.micro_questions)
+        ? o.micro_questions
+        : [];
+      const micros: MicroQuestion[] = microsRaw
+        .map((m, i): MicroQuestion | null => {
+          const mo = (m && typeof m === "object"
+            ? m
+            : {}) as Record<string, unknown>;
+          const q = typeof mo.q === "string" ? mo.q.trim() : "";
+          if (!q) return null;
+          return {
+            id: `${slug || "m"}-m${i}`,
+            q,
+            uncertainty: clamp01(mo.uncertainty),
+            addressed_by: [],
+            candidate_readings: asStrArray(mo.candidate_readings).slice(0, 3),
+          };
+        })
+        .filter((m): m is MicroQuestion => m !== null)
+        .slice(0, 5);
+      // Derive the macro from the micros when present (mean of sub-uncertainty
+      // — the rail/meter then move incrementally as micros resolve). Fall back
+      // to the model's atomic estimate when no decomposition was emitted.
+      const uncertainty =
+        micros.length > 0
+          ? micros.reduce((s, m) => s + m.uncertainty, 0) / micros.length
+          : modelUncertainty;
       return {
         phrase,
         kind,
@@ -501,9 +613,10 @@ export function normalizeSalience(data: unknown): {
         uncertainty,
         why: typeof o.why === "string" ? o.why.trim() : "",
         candidate_readings: asStrArray(o.candidate_readings).slice(0, 4),
-        concept_slug: slugify(phrase),
+        concept_slug: slug,
         // Leverage dominates; uncertainty boosts the "needs modelling" rank.
         priority: Math.round(leverage * (0.5 + 0.5 * uncertainty) * 1000) / 1000,
+        ...(micros.length > 0 ? { micro_questions: micros } : {}),
       };
     })
     .filter((a) => a.phrase.length > 0)
@@ -520,6 +633,101 @@ export function normalizeSalience(data: unknown): {
     },
     salience: { annotations },
   };
+}
+
+// ── Board-aware EMERGENT pass (Tier-1, step 5) ───────────────────────
+//
+// The original depth pass reads ONLY the raw + sharpened prompt — so once
+// intake lands, no new ambiguities ever appear at the rail, even as the user
+// fleshes out the board and exposes new vocabulary / decisions / assumptions.
+// This pass takes the SAME schema but feeds the LLM the current board cards +
+// the EXISTING salient concepts, and asks: "what's genuinely NEW that the
+// board exposed?" Additive only — never re-evaluates existing concepts, never
+// touches their addressed_by[] / resolved_at. The dedicated generator merges
+// the response into the artifact (existing wins on slug collision; emergent
+// rows get stamped `emerged_at` for the rail's "new" pulse).
+
+export const SHARPENING_EMERGENT_SYSTEM = `You scan a project board for AMBIGUITIES the user's work has newly EXPOSED.
+
+You are given:
+- The sharpened project objective.
+- The user's CURRENT list of salient concepts (slug + a short label per row).
+- A snapshot of the BOARD CARDS the user has placed since intake. These are their actual work — what they've started to flesh out.
+
+Your job: surface concepts / ambiguities the BOARD work brings to light that AREN'T already in the current list. The board exposes vocabulary, decisions, and assumptions the original prompt didn't.
+
+Rules:
+- ADDITIVE ONLY. Do NOT re-evaluate, re-rank, or re-word existing concepts. Output only NEW rows.
+- If nothing genuinely new has surfaced, return an empty array. Inventing rows wastes the user's time.
+- Each new row must be: anchored to a specific phrase visible on the board (quote it verbatim); high enough leverage to deserve resolution; ORTHOGONAL to every existing concept (compare to the slugs you were given).
+- Cap at 0–4 new rows. Quality, not quantity. A single high-leverage new ambiguity beats four marginal ones.
+- Same per-row shape as the depth pass: phrase, kind (pain/goal/constraint/lever/concept), leverage 0..1, uncertainty 0..1, why (decisive, ≤18 words, names the open fork — never preamble), candidate_readings (2–4), micro_questions (2–4 orthogonal sub-questions, each with its own uncertainty).
+- "why" rule applies: NEVER "X is central, but…" or restate the phrase. Lead with the open fork.`;
+
+export interface EmergentBoardCard {
+  id: string;
+  text: string;
+}
+
+/** Build the user message for the emergent pass. Existing concepts are listed
+ *  compactly (slug + phrase, no candidate_readings — we want orthogonality
+ *  judgement, not re-relitigation). Board cards are truncated per-card and
+ *  count-capped so a sprawling board doesn't blow out the context window. */
+export function SHARPENING_EMERGENT_USER(
+  sharpened: string,
+  existing: { concept_slug: string; phrase: string; kind: string }[],
+  cards: EmergentBoardCard[],
+): string {
+  const existingList = existing.length
+    ? existing
+        .map((e) => `- [${e.kind}] ${e.phrase} (${e.concept_slug})`)
+        .join("\n")
+    : "(none)";
+  const boardList = cards.length
+    ? cards
+        .slice(0, 60)
+        .map((c, i) => `${i + 1}. ${c.text.replace(/\s+/g, " ").slice(0, 240)}`)
+        .join("\n")
+    : "(no board cards yet)";
+  return [
+    `Sharpened objective:\n"""\n${sharpened}\n"""`,
+    `Existing salient concepts (do NOT re-rank or re-word these):\n${existingList}`,
+    `Current board cards:\n${boardList}`,
+    `Return the prompt_sharpening_depth JSON with ONLY new salience_annotations rows. Leave interpretation fields (explicit_meaning, inferred_meaning, etc.) empty — this pass is salience-only.`,
+  ].join("\n\n");
+}
+
+/** Normalize the emergent pass output: just the annotations, each stamped
+ *  `emerged_at`. Filters out any slug collision with existing — the merge
+ *  helper does it too but we drop them here for honesty in telemetry. */
+export function normalizeEmergent(
+  data: unknown,
+  existingSlugs: Set<string>,
+  nowIso: string,
+): SalienceAnnotation[] {
+  const { salience } = normalizeSalience(data);
+  return salience.annotations
+    .filter((a) => a.concept_slug && !existingSlugs.has(a.concept_slug))
+    .map((a) => ({ ...a, emerged_at: nowIso }))
+    .slice(0, 4);
+}
+
+/** Merge fresh emergent annotations onto the existing salience map. Existing
+ *  wins on every slug collision (we never overwrite addressed_by / resolved_at
+ *  / candidate_readings the user may have already touched). New rows appended
+ *  with their `emerged_at` stamp; the merged list is re-sorted by priority
+ *  + capped at 10 (same as the depth normalizer's cap). */
+export function mergeEmergentSalience(
+  existing: SalienceAnnotation[],
+  emergent: SalienceAnnotation[],
+): SalienceAnnotation[] {
+  if (emergent.length === 0) return existing;
+  const seen = new Set(existing.map((a) => a.concept_slug).filter(Boolean));
+  const fresh = emergent.filter((a) => !seen.has(a.concept_slug));
+  if (fresh.length === 0) return existing;
+  return [...existing, ...fresh]
+    .sort((a, b) => b.priority - a.priority)
+    .slice(0, 10);
 }
 
 // ── Re-frame (Phase 3 write-back) ────────────────────────────────────

@@ -46,6 +46,11 @@ function objectTypeFor(t?: string): SaveableCard["objectType"] {
   return t === "feature" ? "feature" : t === "variable" ? "variable" : "insight";
 }
 
+/** Ops whose result rows are RUNTIME-FLOW STEPS (consumes/produces tokens) —
+ *  paint them as the "mechanism" artifact-card kind so the group reads as a
+ *  mechanism chain ("Mechanism Step" eyebrow), not generic "Lab" nodes. */
+const MECHANISM_OPS = new Set(["make_technical", "data_flow"]);
+
 /** Result of a run: how many cards landed on the board, plus WHY zero landed.
  *  Callers (the ‹ › popup) use `count === 0` to surface feedback instead of a
  *  silent no-op — the #1 cause of "diverge doesn't work" reports. `error`
@@ -166,6 +171,20 @@ export async function executeCardOperation(
         meta: { opResult: true, op: opId, sourceShapeId: target.shapeId ?? "" },
       });
     } else {
+      // make_technical + data_flow emit a runtime FLOW (1. step → 2. step …,
+      // with consumes/produces tokens); paint those as "mechanism" cards so the
+      // group reads as a mechanism chain instead of a pile of generic "Lab"
+      // nodes. Every other non-oc result stays "lab".
+      const kind: ArtifactCardShape["props"]["kind"] = MECHANISM_OPS.has(opId)
+        ? "mechanism"
+        : "lab";
+      // Stash structured tokens on shape meta (mechanism steps only) so the
+      // in-memory card carries them even before the async library save lands;
+      // the library save below mirrors them into content_snapshot. Non-empty
+      // arrays only — keeps non-mechanism shapes clean.
+      const tokenMeta: Record<string, string[]> = {};
+      if (item.consumes?.length) tokenMeta.consumes = item.consumes;
+      if (item.produces?.length) tokenMeta.produces = item.produces;
       editor.createShape<ArtifactCardShape>({
         id,
         type: "artifact-card",
@@ -174,14 +193,19 @@ export async function executeCardOperation(
         props: {
           w: RESULT_W,
           h: RESULT_H,
-          kind: "lab",
+          kind,
           title: item.title || "Idea",
           subtitle: item.subtitle ?? "",
           color: RESULT_COLOR,
           entityId: `op-${opId}-${stamp}-${i}`,
           roomId: target.roomId ?? "",
         },
-        meta: { opResult: true, op: opId, sourceShapeId: target.shapeId ?? "" },
+        meta: {
+          opResult: true,
+          op: opId,
+          sourceShapeId: target.shapeId ?? "",
+          ...tokenMeta,
+        },
       });
     }
     created.push({ shapeId: id, item, isOc });
@@ -214,17 +238,33 @@ export async function executeCardOperation(
     void (async () => {
       const { objectIds } = await saveCardsToLibrary(
         spaceId,
-        created.map(({ item }) => ({
-          objectType: objectTypeFor(item.type),
-          title: item.title,
-          summary: item.subtitle ?? null,
-          // Unique per (op, title) so distinct result cards don't collide on the
-          // null natural key; a same-title re-run dedupes (updates) instead.
-          sourceRef: `op:${opId}:${item.title
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .slice(0, 60)}`,
-        })),
+        created.map(({ item }) => {
+          // Mechanism-step rows carry data tokens — persist them in
+          // content_snapshot so the tech-spec read path can wire interface
+          // contracts off them (no parsing of subtitle strings). Empty arrays
+          // are omitted to keep the JSONB tight.
+          const contentSnapshot =
+            MECHANISM_OPS.has(opId) &&
+            (item.consumes?.length || item.produces?.length)
+              ? {
+                  kind: "mechanism_step",
+                  consumes: item.consumes ?? [],
+                  produces: item.produces ?? [],
+                }
+              : null;
+          return {
+            objectType: objectTypeFor(item.type),
+            title: item.title,
+            summary: item.subtitle ?? null,
+            // Unique per (op, title) so distinct result cards don't collide on
+            // the null natural key; a same-title re-run dedupes (updates).
+            sourceRef: `op:${opId}:${item.title
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .slice(0, 60)}`,
+            contentSnapshot,
+          };
+        }),
       );
       created.forEach(({ shapeId, isOc }, i) => {
         const objectId = objectIds[i];

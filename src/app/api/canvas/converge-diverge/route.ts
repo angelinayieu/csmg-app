@@ -105,7 +105,7 @@ function buildSystem(
         "a commitment, a constraint, a narrowed choice, or a must-hold criterion. " +
         "Concrete and decision-bearing, not exploratory. " +
         "title = 2-6 words; subtitle = one crisp sentence.";
-  return `${base}\nFor EACH node also set "type": "feature" (a concrete capability / thing to build), "variable" (a measurable quantity or metric the work turns on), "factor" (a qualitative dimension or consideration), "decision" (a commitment or constraint), or "question" (an open question to resolve). Classify honestly — diverge nodes are usually factors / variables / features; converge nodes are usually decisions.\n${depthGuidance(depth)}`;
+  return `${base}\nFor EACH node also set "type": "feature" (a concrete capability / thing to build), "variable" (a measurable quantity or metric the work turns on), "factor" (a qualitative dimension or consideration), "decision" (a commitment or constraint), or "question" (an open question to resolve). Classify honestly — diverge nodes are usually factors / variables / features; converge nodes are usually decisions.\nSUBTITLE STYLE: one sentence, ≤16 words, adding what the title does NOT already say (never restate the title). For any node typed "feature", write the subtitle as a concrete interaction — open with the user's ACTION as a short imperative ("Tap …", "Upload …", "Filter …"), or, if it runs in the background, with the trigger/signal it reacts to — then the specific payoff. Never open a feature subtitle with "Allows/Enables/Lets users…", "Helps…", "Suggests…", "Provides…", or "A feature that…".\n${depthGuidance(depth)}`;
 }
 
 const RESPONSE_SCHEMA = {

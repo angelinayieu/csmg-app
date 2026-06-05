@@ -22,20 +22,56 @@ import {
   resizeBox,
 } from "tldraw";
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, RotateCcw } from "lucide-react";
+import { ChevronDown, RotateCcw, ListChecks, Check, ArrowUpRight } from "lucide-react";
+import { Wand2 as Sparkles } from "@/lib/cute-icons";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import {
   forkAmbiguity,
-  dispatchCardAction,
   openResolutionStudio,
+  refreshSharpening,
   REFRESH_SHARPENING_EVENT,
+  emitAiAutoResolveStarted,
+  emitAiAutoResolveEnded,
+  deployHeatmapCard,
+  deployPriorityMapCard,
 } from "@/components/objective/board-bus";
+import type { Resolution } from "@/lib/objective-canvas/prompt-sharpening-prompt";
 import { useAutoFitHeight } from "@/components/objective/canvas-interactions/use-auto-fit-height";
 
 const COLLAPSED_H = 204;
 const EXPANDED_H = 524;
 const CARD_W = 348;
+
+// Phrase → concept_slug (mirrors the slugify in prompt-sharpening-prompt.ts +
+// the inline aiDecide path). Used to match salience rows against the user's
+// resolved concepts so the priority map can check them off.
+const slugifyPhrase = (s: string) =>
+  s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 48);
+
+// Force a fresh depth/salience pass (POST { force:true }) and return its
+// annotations, or null on any failure. Shared by the manual "Re-scan" button
+// and the auto-refresh that fires after resolutions reframe the prompt — both
+// need the SAME recompute, so the recomputed (usually lower) uncertainty shows.
+async function forceDepthScan(spaceId: string): Promise<SalienceItem[] | null> {
+  try {
+    const r = await fetch(`/api/objective/${spaceId}/sharpening-depth`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ force: true }),
+    });
+    if (!r.ok) return null;
+    const j = (await r.json()) as {
+      status?: string;
+      salience?: { annotations?: SalienceItem[] };
+    };
+    return j.status === "ready" && j.salience?.annotations
+      ? j.salience.annotations
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 // Named generation stages shown while the artifact is in flight. The card
 // fires ONE LLM call, so these are paced across the expected window — the
@@ -330,6 +366,12 @@ function PromptSharpeningRenderer({
   // data, not a core shape prop (no migration needed).
   const [salience, setSalience] = useState<SalienceItem[] | null>(null);
   const [saliencePending, setSaliencePending] = useState(false);
+  // "Scan for ambiguities" re-run state + the set of concept_slugs the user has
+  // already resolved (Resolution Studio or inline "Let AI decide"). resolvedSlugs
+  // drives the check-off on the priority map; rescanPending drives the button +
+  // dot spinner during a forced re-scan.
+  const [rescanPending, setRescanPending] = useState(false);
+  const [resolvedSlugs, setResolvedSlugs] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (loading || !spaceId || salience !== null) return;
     let cancelled = false;
@@ -438,6 +480,23 @@ function PromptSharpeningRenderer({
                 rankedJson: JSON.stringify(rk),
               },
             });
+            // Mark resolved concepts + auto re-scan. The resolutions reframed
+            // the sharpened prompt, so a fresh depth pass recomputes (usually
+            // lowers) uncertainty for what was just pinned → the dots visibly
+            // move and the resolved rows check off.
+            const ress = Array.isArray(
+              (a as { resolutions?: unknown }).resolutions,
+            )
+              ? ((a as { resolutions?: { concept_slug?: string }[] })
+                  .resolutions ?? [])
+              : [];
+            const set = new Set<string>();
+            for (const rr of ress) if (rr?.concept_slug) set.add(rr.concept_slug);
+            setResolvedSlugs(set);
+            setRescanPending(true);
+            const anns = await forceDepthScan(spaceId);
+            if (anns) setSalience(anns);
+            setRescanPending(false);
           }
         } catch {
           /* soft-fail */
@@ -447,6 +506,44 @@ function PromptSharpeningRenderer({
     window.addEventListener(REFRESH_SHARPENING_EVENT, onRefresh);
     return () => window.removeEventListener(REFRESH_SHARPENING_EVENT, onRefresh);
   }, [spaceId, shape.id, editor]);
+
+  // Load already-resolved concepts once the card is live (so reopening a board
+  // with prior resolutions shows the check-offs without re-resolving).
+  useEffect(() => {
+    if (loading || !spaceId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/objective/${spaceId}/prompt-sharpening`, {
+          cache: "no-store",
+        });
+        if (!res.ok || cancelled) return;
+        const j = (await res.json()) as {
+          artifact?: { resolutions?: { concept_slug?: string }[] };
+        };
+        const set = new Set<string>();
+        for (const rr of j.artifact?.resolutions ?? [])
+          if (rr?.concept_slug) set.add(rr.concept_slug);
+        if (!cancelled) setResolvedSlugs(set);
+      } catch {
+        /* soft-fail */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, spaceId]);
+
+  // Manual "scan for ambiguities" — force a fresh depth pass on the latest
+  // (possibly re-framed) objective and re-render the priority map in place.
+  async function onRescanAmbiguities(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!spaceId || rescanPending) return;
+    setRescanPending(true);
+    const anns = await forceDepthScan(spaceId);
+    if (anns) setSalience(anns);
+    setRescanPending(false);
+  }
 
   // No-crop on spawn: grow the card to fit its content (the loading view's
   // title + activity + stage list, the full title + sharpened text, and the
@@ -487,14 +584,112 @@ function PromptSharpeningRenderer({
     forkAmbiguity({ sourceId: shape.id, headline, body, color });
   }
 
-  function runOp(action: "diverge" | "converge", e: React.MouseEvent) {
+  // ── Inline "Let AI decide" ──
+  // Same downstream effect as Resolution Studio's "answer everything" path,
+  // but driven directly from the card so the user never has to enter the
+  // modal: auto-resolve → POST resolutions → POST apply-resolutions
+  // (re-frame + glossary write-back) → refreshSharpening + decompose into
+  // Feature/Variable cards. Falls back to each concept's top candidate reading
+  // if the auto-resolve call fails so something is always committed.
+  const [autoResolving, setAutoResolving] = useState(false);
+  async function aiDecideInline(e: React.MouseEvent) {
     e.stopPropagation();
-    dispatchCardAction({
-      action,
-      entityId: "",
-      title: sharpenedPrompt || title,
-      shapeId: shape.id,
+    if (!salience || salience.length === 0 || autoResolving) return;
+    setAutoResolving(true);
+    const now = new Date().toISOString();
+    const slugify = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 48);
+
+    // Notify any listener (the goal rail's AI activity strip) that the
+    // auto-resolver is in flight. Bus event is fire-and-forget; nothing here
+    // depends on a subscriber.
+    emitAiAutoResolveStarted({
+      spaceId,
+      trigger: "card",
+      conceptCount: salience.length,
     });
+    let aiRes: Resolution[] = [];
+    let aiOk = false;
+    try {
+      const r = await fetch(`/api/objective/${spaceId}/auto-resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          concepts: salience.map((s) => ({
+            concept_slug: slugify(s.phrase),
+            phrase: s.phrase,
+            kind: s.kind,
+            why: s.why,
+            candidate_readings: s.candidate_readings || [],
+          })),
+        }),
+      });
+      if (r.ok) {
+        const j = (await r.json()) as { resolutions?: Resolution[] };
+        aiRes = Array.isArray(j?.resolutions) ? j.resolutions : [];
+        aiOk = aiRes.length > 0;
+      }
+    } catch {
+      /* soft-fail → fall back below */
+    }
+    emitAiAutoResolveEnded({
+      spaceId,
+      trigger: "card",
+      resolvedCount: aiRes.length,
+      reviewCount: aiRes.filter((r) => r.needs_review).length,
+      ok: aiOk,
+    });
+
+    const bySlug = new Map<string, Resolution>();
+    for (const s of salience) {
+      const slug = slugify(s.phrase);
+      const reads = s.candidate_readings || [];
+      if (reads.length) {
+        bySlug.set(slug, {
+          concept_slug: slug,
+          phrase: s.phrase,
+          kind: s.kind,
+          chosen_readings: [reads[0]],
+          answer_text: "",
+          source: "ai",
+          resolved_at: now,
+        });
+      }
+    }
+    for (const r of aiRes) bySlug.set(r.concept_slug, r);
+    const res = [...bySlug.values()];
+
+    try {
+      if (res.length) {
+        await fetch(`/api/objective/${spaceId}/resolutions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ resolutions: res }),
+        });
+        let sp: string | undefined;
+        try {
+          const r = await fetch(`/api/objective/${spaceId}/apply-resolutions`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}",
+          });
+          if (r.ok) {
+            const j = (await r.json()) as { sharpenedPrompt?: string };
+            sp = j?.sharpenedPrompt;
+          }
+        } catch {
+          /* soft-fail — resolutions still saved */
+        }
+        refreshSharpening(spaceId);
+        window.dispatchEvent(
+          new CustomEvent("objective-board:decompose-into-cards", {
+            detail: sp ? { objective: sp } : undefined,
+          }),
+        );
+      }
+    } finally {
+      setAutoResolving(false);
+    }
   }
 
   // Fork EVERY ambiguity at once → one insight-card each to address. Uses the
@@ -519,6 +714,30 @@ function PromptSharpeningRenderer({
       if (it.headline)
         forkAmbiguity({ sourceId: shape.id, headline: it.headline, body: it.body, color });
     }
+  }
+
+  // Fork the heatmap / priority-map out as their own cards on the board. The
+  // sections stay visible inline; this is additive — the user opts in when they
+  // want the heatmap or priority map living next to other thinking. Connectors
+  // are drawn from the sharpening card by the bezier overlay.
+  function forkOutHeatmap(e: React.MouseEvent) {
+    e.stopPropagation();
+    deployHeatmapCard({
+      sourceId: shape.id,
+      spaceId,
+      heatmapJson: shape.props.heatmapJson,
+      color,
+    });
+  }
+  function forkOutPriorityMap(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!salience || salience.length === 0) return;
+    deployPriorityMapCard({
+      sourceId: shape.id,
+      spaceId,
+      salienceJson: JSON.stringify(salience),
+      color,
+    });
   }
 
   // Open the immersive Resolution Studio with the salience deck — the user
@@ -668,6 +887,24 @@ function PromptSharpeningRenderer({
             <GenerationActivity color={color} />
           ))}
 
+        {/* Resolve panel — the FIRST thing the user sees once the artifact
+            lands: an honest count of what still needs answering plus the two
+            ways to address it. "Let AI decide" auto-resolves with the model's
+            best reading for every concept (no modal); "Answer questions"
+            opens the Resolution Studio so the user answers in their own words.
+            Surfacing this above the salience/heatmap means the user never has
+            to expand the card to act on it. */}
+        {!loading && (salience !== null || saliencePending) ? (
+          <ResolvePanel
+            color={color}
+            count={salience?.length ?? 0}
+            pending={saliencePending && !salience}
+            busy={autoResolving}
+            onAiDecide={aiDecideInline}
+            onAnswer={openStudio}
+          />
+        ) : null}
+
         {/* Optimize for — the salience priority map (pain / goal / lever
             weighting). Lands a beat after the card via the lazy depth pass;
             shows a quiet "weighing…" hint until it does. Leads ABOVE the
@@ -765,17 +1002,6 @@ function PromptSharpeningRenderer({
                 Weighing leverage &amp; pain points…
               </div>
             )}
-            {salience && salience.length > 0 && (
-              <button
-                type="button"
-                onPointerDown={stopEventPropagation}
-                onClick={openStudio}
-                style={resolveBtnStyle(color)}
-              >
-                Resolve to sharpen
-                <span aria-hidden> →</span>
-              </button>
-            )}
           </div>
         ) : null}
 
@@ -866,29 +1092,93 @@ function PromptSharpeningRenderer({
                 <div>
                   <div
                     style={{
-                      fontSize: 9.5,
-                      fontWeight: 600,
-                      letterSpacing: "0.06em",
-                      textTransform: "uppercase",
-                      color: appleVibe.text.tertiary,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
                       marginBottom: 7,
                     }}
                   >
-                    Priority map · what to optimize for
+                    <div
+                      style={{
+                        fontSize: 9.5,
+                        fontWeight: 600,
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                        color: appleVibe.text.tertiary,
+                      }}
+                    >
+                      Priority map · what to optimize for
+                    </div>
+                    <button
+                      type="button"
+                      onPointerDown={stopEventPropagation}
+                      onClick={forkOutPriorityMap}
+                      title="Fork the priority map out as its own card"
+                      style={{
+                        marginLeft: "auto",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        border: "none",
+                        cursor: "pointer",
+                        background: `${color}12`,
+                        color,
+                        fontSize: 10,
+                        fontWeight: 600,
+                        flexShrink: 0,
+                      }}
+                    >
+                      <ArrowUpRight style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+                      Fork out
+                    </button>
+                    <button
+                      type="button"
+                      onPointerDown={stopEventPropagation}
+                      onClick={onRescanAmbiguities}
+                      disabled={rescanPending}
+                      title="Re-scan for ambiguities — re-runs the analysis on the latest objective"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        border: "none",
+                        cursor: rescanPending ? "default" : "pointer",
+                        background: `${color}12`,
+                        color,
+                        fontSize: 10,
+                        fontWeight: 600,
+                        opacity: rescanPending ? 0.6 : 1,
+                        flexShrink: 0,
+                      }}
+                    >
+                      <RotateCcw
+                        className={rescanPending ? "animate-spin" : undefined}
+                        style={{ width: 11, height: 11 }}
+                        strokeWidth={2.4}
+                      />
+                      {rescanPending ? "Scanning…" : "Re-scan"}
+                    </button>
                   </div>
                   <div
                     style={{ display: "flex", flexDirection: "column", gap: 6 }}
                   >
                     {salience.map((s, i) => {
                       const ks = KIND_STYLE[s.kind] ?? KIND_STYLE.concept;
+                      const resolved = resolvedSlugs.has(slugifyPhrase(s.phrase));
                       return (
                         <div
                           key={i}
                           style={{
                             padding: "7px 9px",
                             borderRadius: 9,
-                            border: `1px solid ${appleVibe.stroke.soft}`,
-                            background: "#FFFFFF",
+                            border: resolved
+                              ? "1px solid #BBF7D0"
+                              : `1px solid ${appleVibe.stroke.soft}`,
+                            background: resolved ? "#F0FDF4" : "#FFFFFF",
                           }}
                         >
                           <div
@@ -925,19 +1215,43 @@ function PromptSharpeningRenderer({
                             >
                               {s.phrase}
                             </span>
-                            <span
-                              title={`Leverage ${Math.round(s.leverage * 100)}% · Uncertainty ${Math.round(s.uncertainty * 100)}%`}
-                              style={{
-                                marginLeft: "auto",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: 4,
-                                flexShrink: 0,
-                              }}
-                            >
-                              <MiniDot value={s.leverage} color={ks.color} />
-                              <MiniDot value={s.uncertainty} color="#94A3B8" />
-                            </span>
+                            {resolved ? (
+                              <span
+                                title="Resolved — you've pinned this meaning"
+                                style={{
+                                  marginLeft: "auto",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 3,
+                                  flexShrink: 0,
+                                  color: "#16A34A",
+                                  fontSize: 9,
+                                  fontWeight: 700,
+                                  letterSpacing: "0.04em",
+                                  textTransform: "uppercase",
+                                }}
+                              >
+                                <Check
+                                  style={{ width: 12, height: 12 }}
+                                  strokeWidth={3}
+                                />
+                                Resolved
+                              </span>
+                            ) : (
+                              <span
+                                title={`Leverage ${Math.round(s.leverage * 100)}% · Uncertainty ${Math.round(s.uncertainty * 100)}%`}
+                                style={{
+                                  marginLeft: "auto",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 4,
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <MiniDot value={s.leverage} color={ks.color} />
+                                <MiniDot value={s.uncertainty} color="#94A3B8" />
+                              </span>
+                            )}
                           </div>
                           {s.why && (
                             <div
@@ -955,15 +1269,6 @@ function PromptSharpeningRenderer({
                       );
                     })}
                   </div>
-                  <button
-                    type="button"
-                    onPointerDown={stopEventPropagation}
-                    onClick={openStudio}
-                    style={resolveBtnStyle(color)}
-                  >
-                    Resolve to sharpen
-                    <span aria-hidden> →</span>
-                  </button>
                 </div>
               )}
 
@@ -971,15 +1276,47 @@ function PromptSharpeningRenderer({
               <div>
                 <div
                   style={{
-                    fontSize: 9.5,
-                    fontWeight: 600,
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
-                    color: appleVibe.text.tertiary,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
                     marginBottom: 7,
                   }}
                 >
-                  Ambiguity heatmap · tap to fork
+                  <div
+                    style={{
+                      fontSize: 9.5,
+                      fontWeight: 600,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      color: appleVibe.text.tertiary,
+                    }}
+                  >
+                    Ambiguity heatmap · tap to fork
+                  </div>
+                  <button
+                    type="button"
+                    onPointerDown={stopEventPropagation}
+                    onClick={forkOutHeatmap}
+                    title="Fork the heatmap out as its own square card"
+                    style={{
+                      marginLeft: "auto",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      border: "none",
+                      cursor: "pointer",
+                      background: `${color}12`,
+                      color,
+                      fontSize: 10,
+                      fontWeight: 600,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <ArrowUpRight style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+                    Fork out
+                  </button>
                 </div>
                 <div
                   style={{
@@ -1041,35 +1378,16 @@ function PromptSharpeningRenderer({
               </div>
             </div>
 
-            {/* Diverge / Converge — the SAME verbs as the rest of the canvas
-                (replaces the old Explore/Distill). */}
-            <div style={{ display: "flex", gap: 7, marginTop: 11 }}>
-              <button
-                type="button"
-                onPointerDown={stopEventPropagation}
-                onClick={(e) => runOp("diverge", e)}
-                style={actionBtn(color, true)}
-                title="Diverge — open up & generate"
-              >
-                ‹ Diverge
-              </button>
-              <button
-                type="button"
-                onPointerDown={stopEventPropagation}
-                onClick={(e) => runOp("converge", e)}
-                style={actionBtn(color, false)}
-                title="Converge — narrow & commit"
-              >
-                Converge ›
-              </button>
-            </div>
-            {/* One button → fork EVERY ambiguity out as its own card to address. */}
+            {/* Fork every ambiguity out as its own card to address. The
+                Diverge/Converge verbs that used to live here were a duplicate
+                of the canvas-wide ‹ › buttons on every card — kept in one
+                place to avoid confusion. */}
             <button
               type="button"
               onPointerDown={stopEventPropagation}
               onClick={forkAll}
               style={{
-                marginTop: 7,
+                marginTop: 11,
                 width: "100%",
                 padding: "8px 10px",
                 borderRadius: 10,
@@ -1082,7 +1400,7 @@ function PromptSharpeningRenderer({
                 fontFamily: appleVibe.font.stack,
               }}
             >
-              Address all ambiguities
+              Fork every ambiguity to its own card
             </button>
           </div>
         )}
@@ -1349,39 +1667,147 @@ function MiniDot({ value, color }: { value: number; color: string }) {
   );
 }
 
-/** Full-width primary pill that opens the Resolution Studio. */
-function resolveBtnStyle(color: string): React.CSSProperties {
-  return {
-    marginTop: 9,
-    width: "100%",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4,
-    padding: "8px 12px",
-    borderRadius: 999,
-    border: "none",
-    background: color,
-    color: "white",
-    fontSize: 11.5,
-    fontWeight: 650,
-    cursor: "pointer",
-    fontFamily: appleVibe.font.stack,
-    boxShadow: `0 6px 16px -5px ${color}80`,
-  };
-}
-
-function actionBtn(color: string, primary: boolean): React.CSSProperties {
-  return {
-    flex: 1,
-    padding: "7px 12px",
-    borderRadius: 999,
-    border: primary ? "none" : `1px solid ${appleVibe.stroke.soft}`,
-    cursor: "pointer",
-    background: primary ? color : "rgba(255,255,255,0.7)",
-    color: primary ? "white" : appleVibe.text.secondary,
-    fontSize: 11.5,
-    fontWeight: 600,
-    boxShadow: primary ? `0 4px 12px -3px ${color}80` : "none",
-  };
+/** The top-of-card resolve panel — count + two ways to address it. The
+ *  primary action is "Let AI decide" (auto-resolve inline, no modal); the
+ *  secondary is "Answer questions" (open the Resolution Studio). Both are
+ *  disabled until salience has loaded; while it's still being weighed we show
+ *  a quiet "analyzing…" hint so the user can see something is coming. */
+function ResolvePanel({
+  color,
+  count,
+  pending,
+  busy,
+  onAiDecide,
+  onAnswer,
+}: {
+  color: string;
+  count: number;
+  pending: boolean;
+  busy: boolean;
+  onAiDecide: (e: React.MouseEvent) => void;
+  onAnswer: (e: React.MouseEvent) => void;
+}) {
+  const ready = count > 0 && !pending;
+  return (
+    <div
+      style={{
+        marginTop: 11,
+        padding: "9px 10px 10px",
+        borderRadius: 12,
+        border: `1px solid ${color}26`,
+        background: `${color}0D`,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          marginBottom: 8,
+        }}
+      >
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 22,
+            height: 22,
+            borderRadius: 999,
+            background: color,
+            color: "white",
+            fontSize: 11,
+            fontWeight: 700,
+            fontVariantNumeric: "tabular-nums",
+            flexShrink: 0,
+          }}
+        >
+          {pending ? "…" : count}
+        </span>
+        <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+          <span
+            style={{
+              fontSize: 11.5,
+              fontWeight: 650,
+              color: appleVibe.text.primary,
+              lineHeight: 1.2,
+            }}
+          >
+            {pending
+              ? "Analyzing ambiguities…"
+              : count === 0
+                ? "No ambiguities to resolve"
+                : `${count} ambiguit${count === 1 ? "y" : "ies"} to resolve`}
+          </span>
+          <span
+            style={{
+              fontSize: 10,
+              color: appleVibe.text.tertiary,
+              lineHeight: 1.2,
+              marginTop: 1,
+            }}
+          >
+            {pending
+              ? "Weighing leverage & pain points"
+              : "Pick fast or careful — both re-sharpen the prompt"}
+          </span>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          type="button"
+          onPointerDown={stopEventPropagation}
+          onClick={onAiDecide}
+          disabled={!ready || busy}
+          title="Let AI commit the most likely reading for every ambiguity"
+          style={{
+            flex: 1,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 5,
+            padding: "7px 10px",
+            borderRadius: 999,
+            border: "none",
+            background: ready && !busy ? color : `${color}66`,
+            color: "white",
+            fontSize: 11,
+            fontWeight: 650,
+            cursor: ready && !busy ? "pointer" : "not-allowed",
+            fontFamily: appleVibe.font.stack,
+            boxShadow: ready && !busy ? `0 4px 12px -4px ${color}80` : "none",
+          }}
+        >
+          <Sparkles style={{ width: 12, height: 12 }} strokeWidth={2.4} />
+          {busy ? "Resolving…" : "Let AI decide"}
+        </button>
+        <button
+          type="button"
+          onPointerDown={stopEventPropagation}
+          onClick={onAnswer}
+          disabled={!ready || busy}
+          title="Walk through each ambiguity yourself in the Resolution Studio"
+          style={{
+            flex: 1,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 5,
+            padding: "7px 10px",
+            borderRadius: 999,
+            border: `1px solid ${ready ? `${color}40` : appleVibe.stroke.soft}`,
+            background: "rgba(255,255,255,0.85)",
+            color: ready && !busy ? appleVibe.text.primary : appleVibe.text.faint,
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: ready && !busy ? "pointer" : "not-allowed",
+            fontFamily: appleVibe.font.stack,
+          }}
+        >
+          <ListChecks style={{ width: 12, height: 12 }} strokeWidth={2.4} />
+          Answer questions
+        </button>
+      </div>
+    </div>
+  );
 }

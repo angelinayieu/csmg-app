@@ -208,6 +208,40 @@ export function forkAmbiguity(detail: AmbiguityForkDetail) {
   window.dispatchEvent(new CustomEvent(FORK_AMBIGUITY_EVENT, { detail }));
 }
 
+// ── Fork the heatmap / priority-map out of the sharpening card ─────
+// User-driven only: pressing the fork button on the expanded sharpening
+// card spawns a square AmbiguityHeatmap card (the 10-zone grid) or a
+// PriorityMap card (the salience rows) connected back via the bezier overlay.
+
+export interface DeployHeatmapCardDetail {
+  /** tldraw id of the source prompt-sharpening card. */
+  sourceId: string;
+  spaceId: string;
+  heatmapJson: string;
+  color: string;
+}
+export const DEPLOY_HEATMAP_CARD_EVENT = "objective-board:deploy-heatmap-card";
+export function deployHeatmapCard(detail: DeployHeatmapCardDetail) {
+  window.dispatchEvent(
+    new CustomEvent(DEPLOY_HEATMAP_CARD_EVENT, { detail }),
+  );
+}
+
+export interface DeployPriorityMapCardDetail {
+  /** tldraw id of the source prompt-sharpening card. */
+  sourceId: string;
+  spaceId: string;
+  /** salience annotations (JSON-encoded). */
+  salienceJson: string;
+  color: string;
+}
+export const DEPLOY_PRIORITY_MAP_EVENT = "objective-board:deploy-priority-map";
+export function deployPriorityMapCard(detail: DeployPriorityMapCardDetail) {
+  window.dispatchEvent(
+    new CustomEvent(DEPLOY_PRIORITY_MAP_EVENT, { detail }),
+  );
+}
+
 // ── Analyzed image → board ─────────────────────────────────────────
 // ObjectiveImageMount fires this once a pasted image's vision analysis has
 // landed; WhiteboardBase materializes it as an image card below the
@@ -403,6 +437,47 @@ export const REFRESH_SHARPENING_EVENT = "objective-board:refresh-sharpening";
 export function refreshSharpening(spaceId: string) {
   window.dispatchEvent(
     new CustomEvent(REFRESH_SHARPENING_EVENT, { detail: { spaceId } }),
+  );
+}
+
+// ── AI auto-resolve activity bus ─────────────────────────────────────
+// Lets surfaces (the goal rail's activity strip) reflect the auto-resolver in
+// real time: pulse while a call is in-flight, flash when it commits. The bus
+// is the call-site convention — both auto-resolve entry points (the card's
+// "Let AI decide" + the Studio's "Let AI answer all") emit STARTED/ENDED
+// around their fetch. Detail carries the trigger ("card" / "studio") and how
+// many concepts went in, so listeners can render a meaningful label.
+
+export const AI_AUTORESOLVE_STARTED_EVENT =
+  "objective-board:ai-autoresolve-started";
+export const AI_AUTORESOLVE_ENDED_EVENT =
+  "objective-board:ai-autoresolve-ended";
+
+export interface AiAutoResolveStartedDetail {
+  spaceId: string;
+  trigger: "card" | "studio";
+  conceptCount: number;
+}
+export interface AiAutoResolveEndedDetail {
+  spaceId: string;
+  trigger: "card" | "studio";
+  /** Number of resolutions that committed; 0 on failure. */
+  resolvedCount: number;
+  /** Number flagged for review (confidence<0.7 or no candidate matched). */
+  reviewCount: number;
+  /** False when the call failed / returned no resolutions. */
+  ok: boolean;
+}
+
+export function emitAiAutoResolveStarted(detail: AiAutoResolveStartedDetail) {
+  window.dispatchEvent(
+    new CustomEvent(AI_AUTORESOLVE_STARTED_EVENT, { detail }),
+  );
+}
+
+export function emitAiAutoResolveEnded(detail: AiAutoResolveEndedDetail) {
+  window.dispatchEvent(
+    new CustomEvent(AI_AUTORESOLVE_ENDED_EVENT, { detail }),
   );
 }
 

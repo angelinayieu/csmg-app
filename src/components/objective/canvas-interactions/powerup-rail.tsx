@@ -34,6 +34,7 @@ import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import {
   CANVAS_OPERATIONS,
+  operationFitsKind,
   type OperationTarget,
 } from "@/lib/objective-canvas/canvas-operations";
 import { executeCardOperation } from "./operation-executor";
@@ -143,15 +144,27 @@ export function PowerupRail({
       const targets = shapes
         .map(shapeToScanTarget)
         .filter((t): t is OperationTarget => !!t);
+      // Single-card selection: surface the source kind so the rail can hide
+      // ops that don't fit (e.g. Variations on a mechanism step). A multi-
+      // selection collapses to "mixed" → no kind-filter applies (full list).
+      const sourceKind =
+        targets.length === 1 ? targets[0].sourceKind : undefined;
       return {
         labels: shapes.map((s) => labelFor(s)),
         text: targets.map((t) => t.text).join("\n\n"),
         anchorId: targets[0]?.shapeId,
         count: targets.length,
+        sourceKind,
       };
     },
     [editor],
   );
+
+  // The wired text-op rail, pruned by the selected card's kind so a "mechanism"
+  // step doesn't offer Variations / Make-it-technical (it already IS one rung
+  // in a mechanism). When nothing is selected (or selection is mixed), the
+  // full rail shows — matches the prior behavior.
+  const powerups = POWERUPS.filter((o) => operationFitsKind(o, sel.sourceKind));
 
   // Artifacts on the board (tech-spec + prototype cards are ephemeral shapes).
   const boardArtifacts = useValue(
@@ -409,8 +422,10 @@ export function PowerupRail({
     .some((s) => s.type === "tech-spec-card");
   const buildingPlans = running === "ui-plans";
 
-  // Build the rendered op list with overrides applied.
-  const opRows = POWERUPS.map((op) => {
+  // Build the rendered op list with overrides applied. Uses the kind-pruned
+  // `powerups` (Variations / Make-it-technical drop off when the selected card
+  // already IS a mechanism step), not the raw POWERUPS catalog.
+  const opRows = powerups.map((op) => {
     const ov = OP_OVERRIDES[op.id] ?? {};
     return {
       id: op.id,

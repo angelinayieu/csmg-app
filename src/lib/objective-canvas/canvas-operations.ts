@@ -32,6 +32,11 @@ export interface OperationTarget {
   shapeId?: string;
   entityId?: string;
   roomId?: string;
+  /** Source card "kind" (artifact-card `mechanism`, oc-card `feature`/`variable`,
+   *  …). Lets the registry hide ops that don't fit the source — e.g. Variations
+   *  doesn't apply to a make_technical step card. Optional + free-form on
+   *  purpose so a sticky-note target (no kind) still runs everything. */
+  sourceKind?: string;
 }
 
 /** One normalized result row → becomes one result card on the board. */
@@ -42,6 +47,14 @@ export interface OperationResultItem {
    *  | factor | decision | question. Drives whether the executor renders an
    *  oc-card (feature/variable) vs a generic node, and the library object_type. */
   type?: string;
+  /** For mechanism-step rows (make_technical / data_flow): the data tokens this
+   *  step takes IN. Already shown in the subtitle as text; lifted here as
+   *  STRUCTURED data so downstream (library save → tech-spec) reads them as
+   *  interface contracts instead of parsing strings. Empty/omitted for
+   *  non-mechanism rows. */
+  consumes?: string[];
+  /** Tokens this step emits — pair to `consumes` (see above). */
+  produces?: string[];
 }
 
 /** Per-run knobs the scanner / top settings bar thread into the analysis routes.
@@ -88,6 +101,11 @@ export interface CanvasOperation {
    *  still runnable by id (executeCardOperation). The diverge/converge verbs
    *  use this — they're surfaced as the dedicated ‹ › buttons, not as rows. */
   hidden?: boolean;
+  /** Hide this op from a SOURCE card whose kind is in this list — used to
+   *  prune nonsense recommendations (e.g. Variations on a mechanism step,
+   *  Make-it-technical on a card that already IS a mechanism step). The op
+   *  stays runnable by id; only the recommendation surfaces filter on it. */
+  excludeForKinds?: string[];
 }
 
 /** THE CATALOG. Grounded in src/lib/objective-canvas/* + the routes that invoke
@@ -111,6 +129,11 @@ export const CANVAS_OPERATIONS: CanvasOperation[] = [
     augmentMode: "variations",
     requiresLlm: true,
     wired: true,
+    // A mechanism step ("1. Collect engagement data" with consumes/produces
+    // tokens) is one rung in a runtime flow — "alternative angles" doesn't
+    // apply; the user wants per-step ops (refine-interface / edge-cases /
+    // estimate) instead. Hide rather than offer noise.
+    excludeForKinds: ["mechanism"],
   },
   {
     id: "questions",
@@ -138,6 +161,10 @@ export const CANVAS_OPERATIONS: CanvasOperation[] = [
     requiresLlm: true,
     wired: true,
     endpoint: "/api/canvas/idea-mechanism",
+    // The card already IS a mechanism step; re-deriving the mechanism from
+    // it just nests a smaller chain inside one rung. Hide; keep the op
+    // available by id (a deliberate run still works).
+    excludeForKinds: ["mechanism"],
   },
   {
     id: "layers",
@@ -329,6 +356,18 @@ export function menuOperations(): CanvasOperation[] {
   );
 }
 
+/** True when `op` makes sense for a source card whose kind is `sourceKind`.
+ *  Anything without a sourceKind (sticky note, lasso of stickies) keeps the
+ *  full list — the exclusion only fires for cards that declared their kind. */
+export function operationFitsKind(
+  op: CanvasOperation,
+  sourceKind: string | undefined,
+): boolean {
+  if (!sourceKind) return true;
+  if (!op.excludeForKinds || op.excludeForKinds.length === 0) return true;
+  return !op.excludeForKinds.includes(sourceKind);
+}
+
 /** Cap so one click can't flood the board. */
 const MAX_RESULT_ITEMS = 8;
 
@@ -449,22 +488,29 @@ async function runIdeaOp(
     }),
   );
   if (!res.ok) throw await transportErrorFor(res);
-  let json: {
-    items?: Array<{ title?: string; subtitle?: string; type?: string }>;
+  type RawItem = {
+    title?: string;
+    subtitle?: string;
+    type?: string;
+    consumes?: unknown;
+    produces?: unknown;
   };
+  let json: { items?: RawItem[] };
   try {
-    json = (await res.json()) as {
-      items?: Array<{ title?: string; subtitle?: string; type?: string }>;
-    };
+    json = (await res.json()) as { items?: RawItem[] };
   } catch {
     throw new OperationTransportError("server", "malformed response");
   }
+  const asStrings = (v: unknown): string[] | undefined =>
+    Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : undefined;
   return (json.items ?? [])
     .filter((it) => typeof it.title === "string" && it.title.trim().length > 0)
     .map((it) => ({
       title: (it.title as string).trim(),
       subtitle: typeof it.subtitle === "string" ? it.subtitle : undefined,
       type: typeof it.type === "string" ? it.type : undefined,
+      consumes: asStrings(it.consumes),
+      produces: asStrings(it.produces),
     }))
     .slice(0, MAX_RESULT_ITEMS);
 }

@@ -939,11 +939,14 @@ declare module "@tldraw/tlschema" {
     };
     // Objective board — a single room item (pain/feature/outcome) sent to
     // the board so it can be Connect/Synthesize'd with items from OTHER
-    // rooms. "Open room" reopens the source room (roomId).
+    // rooms. "Open room" reopens the source room (roomId). `mechanism` is
+    // the runtime-flow step kind emitted by the make_technical / data_flow
+    // ops (1. Collect → 2. Update …, with consumes/produces tokens) so the
+    // resulting cards read as a mechanism chain instead of generic "Lab".
     "artifact-card": {
       w: number;
       h: number;
-      kind: "pain" | "feature" | "outcome" | "lab";
+      kind: "pain" | "feature" | "outcome" | "lab" | "mechanism";
       title: string;
       subtitle: string;
       color: string;
@@ -1079,6 +1082,27 @@ declare module "@tldraw/tlschema" {
       chips: string[];
       heatmapJson: string;
       rankedJson: string;
+      color: string;
+    };
+    // Forked-out square card showing the 10-zone ambiguity heatmap as its own
+    // surface. Each zone is tap-to-fork (insight-card) — the bezier overlay
+    // routes the fork from this card back to its source sharpening card.
+    "ambiguity-heatmap-card": {
+      w: number;
+      h: number;
+      sourceId: string;
+      spaceId: string;
+      heatmapJson: string;
+      color: string;
+    };
+    // Forked-out card mirroring the "Optimize for" salience priority map.
+    // Each row tap-to-fork; lineage drawn back to the source sharpening card.
+    "priority-map-card": {
+      w: number;
+      h: number;
+      sourceId: string;
+      spaceId: string;
+      salienceJson: string;
       color: string;
     };
     // Objective board — downstream decomposition card (Feature / Variable).

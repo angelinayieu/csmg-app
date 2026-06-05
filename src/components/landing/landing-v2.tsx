@@ -50,9 +50,9 @@ export interface LandingCard {
   bannerAccent?: string;
 }
 
-const NAV = ["Plans", "About", "Blog"];
+const NAV = ["Plans", "About"];
 
-const INK = "#0B0B0C";
+const INK = "#0B0B0C"; // cold near-black — landing is monochrome, do NOT warm
 
 // Small monochrome "verified by akiboe" seal — drawn with the same pen
 // as the hero starburst + card glyphs (round-cap ink), so it reads as the
@@ -137,16 +137,14 @@ export function LandingV2({
 
   return (
     <div
-      className="flex min-h-screen flex-col overflow-hidden"
+      className="relative flex min-h-screen flex-col overflow-hidden"
       style={{
         background: "#F7F8FA",
-        // Whiteboard surface = tldraw-style dot grid on top of the base. Same
-        // pattern MinimalHome uses when the user starts composing.
+        // Whiteboard surface = tldraw-style dot grid. Cold slate dots (the
+        // product's canvas). Landing is intentionally cold B&W — do NOT warm.
         backgroundImage:
           surface === "whiteboard"
-            ? // 1.3px dot, slightly stronger than MinimalHome's behind-text use,
-              // so the whole landing clearly reads as a tldraw-style whiteboard.
-              "radial-gradient(circle, rgba(15,23,42,0.18) 1.3px, transparent 1.6px)"
+            ? "radial-gradient(circle, rgba(15,23,42,0.18) 1.3px, transparent 1.6px)"
             : undefined,
         backgroundSize: surface === "whiteboard" ? "26px 26px" : undefined,
         fontFamily: appleVibe.font.stack,
@@ -155,14 +153,11 @@ export function LandingV2({
       {/* ── Header ── */}
       <header className="flex items-start justify-between px-6 pt-7 sm:px-10">
         <div>
+          {/* The real akiboe brand lockup — sun mark + "akiboe." wordmark.
+              Do NOT revert this to the plain-text wordmark. */}
+          <InterAxisLogo variant="lockup" theme="light" size={26} />
           <div
-            className="text-[22px] font-bold leading-none tracking-tight"
-            style={{ color: INK }}
-          >
-            akiboe
-          </div>
-          <div
-            className="mt-1.5 text-[12.5px] leading-none"
+            className="mt-2 text-[12.5px] leading-none"
             style={{ color: appleVibe.text.tertiary }}
           >
             #1 AI whiteboard space to improve quality of thought
@@ -192,17 +187,20 @@ export function LandingV2({
       {/* ── Hero ── */}
       <main className="flex flex-1 flex-col items-center justify-center px-6 pb-2">
         <h1
-          className="text-center text-[clamp(32px,4.6vw,46px)] font-semibold leading-[1.04]"
+          className="text-center text-[clamp(32px,4.6vw,46px)] font-extrabold leading-[1.04]"
           style={{
-            color: INK,
             fontFamily: appleVibe.font.display,
             letterSpacing: "-0.02em",
           }}
         >
-          from <span className="font-extrabold">idea</span>
+          <span style={{ color: appleVibe.text.faint }}>From</span>{" "}
+          <span style={{ color: INK }}>idea</span>
         </h1>
 
-        <div className="mx-auto my-0.5 w-full max-w-[480px]">
+        {/* Tighter + smaller so "from idea → ✷ → to value asap." reads as ONE
+            connected line, not three far-apart pieces. Negative margin pulls
+            the two headings in toward the mark (the 4:3 box has slack). */}
+        <div className="mx-auto -my-4 w-full max-w-[372px]">
           <Starburst3D />
         </div>
 
@@ -214,26 +212,65 @@ export function LandingV2({
             letterSpacing: "-0.02em",
           }}
         >
-          to <span className="font-extrabold">value</span>{" "}
-          <span className="underline decoration-2 underline-offset-[6px]">
-            asap.
-          </span>
+          <span style={{ color: appleVibe.text.faint }}>to</span>{" "}
+          <span style={{ color: INK }}>value asap</span>
+          <span style={{ color: "#C2593B" }}>.</span>
         </h1>
 
+        {/* Hover = Alex K–style glowing 3D pill (teal, not blue). Resting =
+            flat black. The inline <style> scopes the hover keyframes. */}
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
+              .start-cta {
+                background: ${INK};
+                box-shadow: 0 12px 28px -10px rgba(11,11,12,0.5);
+                transition: all 0.45s cubic-bezier(0.22,1,0.36,1);
+              }
+              .start-cta:hover {
+                background: linear-gradient(180deg, #1ABEC9 0%, #13A2B0 100%);
+                box-shadow:
+                  inset 0 1px 1px rgba(255,255,255,0.35),
+                  0 0 0 4px rgba(19,162,176,0.22),
+                  0 0 40px 6px rgba(19,162,176,0.30),
+                  0 20px 50px -16px rgba(19,162,176,0.50);
+                transform: scale(1.05);
+              }
+              .start-cta:active {
+                transform: scale(0.97);
+                box-shadow:
+                  inset 0 2px 4px rgba(0,0,0,0.2),
+                  0 0 0 3px rgba(19,162,176,0.18),
+                  0 0 24px 4px rgba(19,162,176,0.20);
+              }
+            `,
+          }}
+        />
         <button
           type="button"
           onClick={openSignup}
-          className="mt-6 rounded-full px-11 py-3 text-[17px] font-medium text-white shadow-[0_8px_24px_-10px_rgba(11,11,12,0.5)] transition-transform hover:scale-[1.03] active:scale-95"
-          style={{ background: INK }}
+          className="start-cta mt-7 inline-flex items-center gap-2.5 rounded-full px-10 py-3 text-[16px] font-semibold text-white"
         >
-          Start
+          start
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+            <path
+              d="M3 8h10M9 4l4 4-4 4"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </button>
 
         <div
-          className="mt-3 text-[13.5px]"
-          style={{ color: appleVibe.text.tertiary }}
+          className="mt-3.5 text-[12.5px] tracking-[0.06em]"
+          style={{ color: appleVibe.text.faint }}
         >
-          sync tabs and google drive
+          <span className="font-normal">sync</span>{" "}
+          <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>tabs</span>{" "}
+          <span className="font-normal">and</span>{" "}
+          <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>google drive</span>
         </div>
       </main>
 

@@ -179,7 +179,23 @@ export function NotebookGlossaryView({ spaceId }: { spaceId: string }) {
       ) : (
         <ul className="flex flex-col gap-1.5">
           {terms.map((t) => {
-            const tone = SOURCE_TONE[t.source] ?? SOURCE_TONE.llm;
+            // Taste depth from the enriched glossary GET (additive — absent on
+            // bare terms): the references that ground the term + how widely the
+            // user reuses it + whether it was inherited from another space.
+            const enr = t as GlossaryTerm & {
+              evidence?: Array<{ label?: string; detail?: string }>;
+              crossSpaceCount?: number;
+            };
+            const evidence = enr.evidence ?? [];
+            const crossN = enr.crossSpaceCount ?? 0;
+            const inheritedFrom = t.cross_space_origin_title ?? "";
+            const tone = inheritedFrom
+              ? SOURCE_TONE.user
+              : (SOURCE_TONE[t.source] ?? SOURCE_TONE.llm);
+            const badgeLabel = inheritedFrom ? "inherited" : SOURCE_LABEL[t.source];
+            const badgeTitle = inheritedFrom
+              ? `Inherited from your "${inheritedFrom}" — your meaning, applied here too`
+              : `Definition source: ${SOURCE_LABEL[t.source]}`;
             const isEditing = editing === t.term;
             return (
               <li
@@ -203,9 +219,9 @@ export function NotebookGlossaryView({ spaceId }: { spaceId: string }) {
                     <span
                       className="flex-shrink-0 rounded-full px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.06em]"
                       style={{ background: tone.bg, color: tone.color }}
-                      title={`Definition source: ${SOURCE_LABEL[t.source]}`}
+                      title={badgeTitle}
                     >
-                      {SOURCE_LABEL[t.source]}
+                      {badgeLabel}
                     </span>
                   </div>
                   <div className="flex flex-shrink-0 items-center gap-0.5">
@@ -284,12 +300,43 @@ export function NotebookGlossaryView({ spaceId }: { spaceId: string }) {
                     </div>
                   </div>
                 ) : (
-                  <p
-                    className="mt-0.5 text-[11.5px] font-light leading-snug"
-                    style={{ color: appleVibe.text.secondary }}
-                  >
-                    {t.definition}
-                  </p>
+                  <>
+                    <p
+                      className="mt-0.5 text-[11.5px] font-light leading-snug"
+                      style={{ color: appleVibe.text.secondary }}
+                    >
+                      {t.definition}
+                    </p>
+                    {(crossN > 0 || evidence.length > 0) && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                        {crossN > 0 && (
+                          <span
+                            className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
+                            style={{
+                              background: appleVibe.surface.chip,
+                              color: appleVibe.text.tertiary,
+                            }}
+                            title="You've defined this concept in other spaces too — define once, reused everywhere"
+                          >
+                            in {crossN} other space{crossN === 1 ? "" : "s"}
+                          </span>
+                        )}
+                        {evidence.slice(0, 3).map((e, i) => (
+                          <span
+                            key={i}
+                            className="max-w-[170px] truncate rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+                            style={{
+                              background: "rgba(37,99,235,0.08)",
+                              color: "rgba(30,64,175,0.9)",
+                            }}
+                            title={e.detail || e.label || ""}
+                          >
+                            ↳ {e.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </li>
             );

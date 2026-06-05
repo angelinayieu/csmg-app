@@ -36,14 +36,57 @@ export function GlossaryText({
 
   // Candidate surface forms (term + aliases) → definition. Longest
   // first so multi-word terms win over their sub-words.
-  const candidates: Array<{ surface: string; definition: string; key: string }> =
-    [];
+  const candidates: Array<{
+    surface: string;
+    definition: string;
+    key: string;
+    prov: "yours" | "grounded" | "ai";
+    extra: string;
+    origin: string;
+  }> = [];
   for (const t of terms) {
+    // Opportunistic depth: when the caller passes terms from the enriched
+    // glossary endpoint, surface the references that ground the term + how
+    // widely the user reuses it. Absent on bare terms → no extra line.
+    const enr = t as GlossaryTerm & {
+      evidence?: Array<{ label?: string }>;
+      crossSpaceCount?: number;
+    };
+    const hasEv = !!(enr.evidence && enr.evidence.length > 0);
+    // Provenance, mirroring the server rule (taste-glossary.ts provenanceOf):
+    // pinned/user = "yours"; ref-backed or annotation-derived = "grounded";
+    // entity/llm jargon the user hasn't touched = "ai". Drives the underline
+    // weight + tooltip so the user SEES which meanings are theirs, everywhere.
+    const prov: "yours" | "grounded" | "ai" =
+      t.pinned || t.source === "user"
+        ? "yours"
+        : hasEv || t.source === "annotation"
+          ? "grounded"
+          : "ai";
+    const evNote =
+      enr.evidence && enr.evidence.length > 0
+        ? `Grounded in your material: ${enr.evidence
+            .slice(0, 3)
+            .map((e) => e.label)
+            .filter(Boolean)
+            .join(", ")}`
+        : "";
+    const xN = enr.crossSpaceCount ?? 0;
+    const xNote =
+      xN > 0
+        ? `Also defined by you in ${xN} other space${xN === 1 ? "" : "s"} — defined once.`
+        : "";
+    const extra = [evNote, xNote].filter(Boolean).join("\n");
+    // Inherited from another of the user's spaces (P3.0 cross-space taste).
+    const origin = t.cross_space_origin_title ?? "";
     if (t.term) {
       candidates.push({
         surface: t.term,
         definition: t.definition,
         key: t.term.toLowerCase(),
+        prov,
+        extra,
+        origin,
       });
     }
     for (const a of t.aliases ?? []) {
@@ -52,6 +95,9 @@ export function GlossaryText({
           surface: a,
           definition: t.definition,
           key: t.term.toLowerCase(),
+          prov,
+          extra,
+          origin,
         });
       }
     }
@@ -84,14 +130,32 @@ export function GlossaryText({
     if (!cand || glossed.has(cand.key)) continue; // leave un-glossed text as-is
     glossed.add(cand.key);
     if (m.index > last) nodes.push(text.slice(last, m.index));
+    // Provenance-keyed underline + tooltip. "Yours" reads as a confident solid
+    // accent (this meaning is honored everywhere AI reasons); "ai" stays a
+    // faint dotted hint inviting the user to make it theirs. The tooltip layers
+    // provenance → definition → grounding/reuse, deepest last.
+    const provLine =
+      cand.prov === "yours"
+        ? cand.origin
+          ? `Inherited from your “${cand.origin}” — your meaning, applied here too.`
+          : "Your definition — applied everywhere AI reasons."
+        : cand.prov === "grounded"
+          ? "From your project."
+          : "AI-suggested — edit it to make it yours.";
+    const border =
+      cand.prov === "yours"
+        ? `1.5px solid ${appleVibe.accent.primary}`
+        : cand.prov === "grounded"
+          ? `1px dashed ${appleVibe.text.tertiary}`
+          : `1px dotted ${appleVibe.text.faint}`;
+    const title = [provLine, cand.definition, cand.extra]
+      .filter(Boolean)
+      .join("\n\n");
     nodes.push(
       <span
         key={`g${key++}`}
-        title={cand.definition}
-        style={{
-          borderBottom: `1px dotted ${appleVibe.text.faint}`,
-          cursor: "help",
-        }}
+        title={title}
+        style={{ borderBottom: border, cursor: "help" }}
       >
         {matched}
       </span>,

@@ -30,7 +30,9 @@ export type ArtifactCardShape = TLBaseShape<
   {
     w: number;
     h: number;
-    kind: "pain" | "feature" | "outcome" | "lab";
+    /** `mechanism` = a runtime-flow step (make_technical / data_flow) — reads
+     *  as "Mechanism Step", not the catch-all "Lab". */
+    kind: "pain" | "feature" | "outcome" | "lab" | "mechanism";
     title: string;
     subtitle: string;
     color: string;
@@ -46,6 +48,7 @@ const KIND_LABEL: Record<ArtifactCardShape["props"]["kind"], string> = {
   feature: "Feature",
   outcome: "Outcome",
   lab: "Lab",
+  mechanism: "Mechanism Step",
 };
 
 export class ArtifactCardShapeUtil extends BaseBoxShapeUtil<ArtifactCardShape> {
@@ -53,7 +56,7 @@ export class ArtifactCardShapeUtil extends BaseBoxShapeUtil<ArtifactCardShape> {
   static override props: RecordProps<ArtifactCardShape> = {
     w: T.number,
     h: T.number,
-    kind: T.literalEnum("pain", "feature", "outcome", "lab"),
+    kind: T.literalEnum("pain", "feature", "outcome", "lab", "mechanism"),
     title: T.string,
     subtitle: T.string,
     color: T.string,

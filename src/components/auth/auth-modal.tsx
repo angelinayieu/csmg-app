@@ -46,10 +46,16 @@ function clearHash() {
 
 export function AuthModal() {
   const [mode, setMode] = useState<Mode | null>(null);
+  const [next, setNext] = useState<string>("/app");
   const closeRef = useRef<() => void>(() => {});
 
   useEffect(() => {
-    const sync = () => setMode(readHashMode());
+    const sync = () => {
+      setMode(readHashMode());
+      const params = new URLSearchParams(window.location.search);
+      const raw = params.get("next");
+      setNext(raw && raw.startsWith("/") ? raw : "/app");
+    };
     sync();
     window.addEventListener("hashchange", sync);
     return () => window.removeEventListener("hashchange", sync);
@@ -84,8 +90,9 @@ export function AuthModal() {
       aria-modal="true"
       aria-label={mode === "signin" ? "Log in" : "Create account"}
     >
-      {/* Frosted backdrop — blurred white so the whiteboard underneath
-          stays present but obviously out of focus. */}
+      {/* Translucent backdrop — soft blur so the page underneath stays
+          visible (only slightly de-emphasized), modal becomes the focal
+          surface without hiding what the user was on. */}
       <button
         type="button"
         aria-label="Close"
@@ -93,9 +100,9 @@ export function AuthModal() {
         className="absolute inset-0 cursor-default animate-[fadeIn_220ms_ease-out]"
         style={{
           background:
-            "radial-gradient(120% 80% at 50% 40%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.78) 60%, rgba(244,250,252,0.86) 100%)",
-          backdropFilter: "blur(22px) saturate(1.4)",
-          WebkitBackdropFilter: "blur(22px) saturate(1.4)",
+            "radial-gradient(120% 80% at 50% 40%, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.30) 60%, rgba(244,250,252,0.38) 100%)",
+          backdropFilter: "blur(8px) saturate(1.15)",
+          WebkitBackdropFilter: "blur(8px) saturate(1.15)",
         }}
       />
 
@@ -164,9 +171,9 @@ export function AuthModal() {
 
           <div className="mt-6">
             {mode === "signin" ? (
-              <SignInBody onSwitch={() => switchTo("signup", setMode)} />
+              <SignInBody next={next} onSwitch={() => switchTo("signup", setMode)} />
             ) : (
-              <SignUpBody onSwitch={() => switchTo("signin", setMode)} />
+              <SignUpBody next={next} onSwitch={() => switchTo("signin", setMode)} />
             )}
           </div>
         </GlassPanel>
@@ -290,7 +297,7 @@ function OrDivider() {
 }
 
 // ── Sign in ────────────────────────────────────────────────────────
-function SignInBody({ onSwitch }: { onSwitch: () => void }) {
+function SignInBody({ next, onSwitch }: { next: string; onSwitch: () => void }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -311,13 +318,13 @@ function SignInBody({ onSwitch }: { onSwitch: () => void }) {
       setLoading(false);
       return;
     }
-    router.push("/app");
+    router.push(next);
     router.refresh();
   }
 
   return (
     <div className="space-y-4">
-      <GoogleButton label="Continue with Google" />
+      <GoogleButton label="Continue with Google" next={next} />
       <OrDivider />
       <form onSubmit={handleSubmit} className="space-y-4">
       <Input
@@ -359,7 +366,7 @@ function SignInBody({ onSwitch }: { onSwitch: () => void }) {
 }
 
 // ── Sign up ────────────────────────────────────────────────────────
-function SignUpBody({ onSwitch }: { onSwitch: () => void }) {
+function SignUpBody({ next, onSwitch }: { next: string; onSwitch: () => void }) {
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -381,7 +388,7 @@ function SignUpBody({ onSwitch }: { onSwitch: () => void }) {
       password,
       options: {
         data: { display_name: displayName },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
       },
     });
     if (error) {
@@ -409,7 +416,7 @@ function SignUpBody({ onSwitch }: { onSwitch: () => void }) {
 
   return (
     <div className="space-y-4">
-      <GoogleButton label="Sign up with Google" />
+      <GoogleButton label="Sign up with Google" next={next} />
       <OrDivider />
       <form onSubmit={handleSubmit} className="space-y-4">
       <Input

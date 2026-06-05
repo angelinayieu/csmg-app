@@ -21,6 +21,8 @@ import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { useVoiceRecorder } from "@/components/objective/voice/use-voice-recorder";
 import {
   refreshSharpening,
+  emitAiAutoResolveStarted,
+  emitAiAutoResolveEnded,
   type ResolutionStudioDetail,
   type ResolutionStudioConcept,
 } from "@/components/objective/board-bus";
@@ -289,7 +291,16 @@ export function ResolutionStudio({
     setAutoBusy(true);
     const now = new Date().toISOString();
 
+    // Surface in-flight state to the goal rail's AI activity strip — same bus
+    // event the card's inline "Let AI decide" emits, so the rail's pulse +
+    // post-flight summary cover both entry points.
+    emitAiAutoResolveStarted({
+      spaceId: detail.spaceId,
+      trigger: "studio",
+      conceptCount: deck.length,
+    });
     let aiRes: Resolution[] = [];
+    let aiOk = false;
     try {
       const r = await fetch(`/api/objective/${detail.spaceId}/auto-resolve`, {
         method: "POST",
@@ -307,10 +318,18 @@ export function ResolutionStudio({
       if (r.ok) {
         const j = (await r.json()) as { resolutions?: Resolution[] };
         aiRes = Array.isArray(j?.resolutions) ? j.resolutions : [];
+        aiOk = aiRes.length > 0;
       }
     } catch {
       /* soft-fail → fall back below */
     }
+    emitAiAutoResolveEnded({
+      spaceId: detail.spaceId,
+      trigger: "studio",
+      resolvedCount: aiRes.length,
+      reviewCount: aiRes.filter((r) => r.needs_review).length,
+      ok: aiOk,
+    });
 
     // Merge: user's own answers win; then AI's; then a top-reading fallback for
     // anything still unresolved that has candidate readings.

@@ -17,6 +17,7 @@ import {
   setIncludedInSpec,
   setOnWhiteboard,
   setBlueprintLayer,
+  setObjectSubsystem,
   linkObjects,
   listLibraryObjects,
   type LibraryObjectType,
@@ -61,6 +62,71 @@ async function listDeferredProposals(db: any, spaceId: string): Promise<Deferred
   }
 }
 
+/**
+ * The space's layer stack ({ ordinal, name }) — the domain-specific layer
+ * names (synthesis_data.objective_canvas.layers) so the Library can group +
+ * label objects by their `blueprint_layer_ordinal` slot with real names
+ * instead of generic "Layer N". Soft-fail → [] (the rail falls back to the
+ * canonical default names). Read-only; no normalization beyond ordinal+name.
+ */
+async function listLayerStack(
+  db: any,
+  spaceId: string,
+): Promise<{ ordinal: number; name: string }[]> {
+  try {
+    const { data: space } = await db
+      .from("spaces")
+      .select("synthesis_data")
+      .eq("id", spaceId)
+      .maybeSingle();
+    if (!space) return [];
+    const state = readObjectiveCanvasState(space.synthesis_data) as {
+      layers?: unknown;
+    };
+    const raw = Array.isArray(state.layers) ? state.layers : [];
+    return raw
+      .map((l: any) => ({
+        ordinal: typeof l?.ordinal === "number" ? Math.round(l.ordinal) : NaN,
+        name: typeof l?.name === "string" ? l.name.trim().slice(0, 60) : "",
+      }))
+      .filter((l: { ordinal: number; name: string }) => Number.isFinite(l.ordinal) && l.name)
+      .sort((a: { ordinal: number }, b: { ordinal: number }) => a.ordinal - b.ordinal);
+  } catch (err) {
+    console.warn("[library/objects] listLayerStack failed (soft):", err);
+    return [];
+  }
+}
+
+/**
+ * The space's sub-objective ROOMS ({ id, title }) — the children of the root
+ * improvement_goal. Lets the Library group objects by the room they came from
+ * (`source_sub_objective_id`) with real room titles. Soft-fail → [].
+ */
+async function listRooms(
+  db: any,
+  spaceId: string,
+): Promise<{ id: string; title: string }[]> {
+  try {
+    const { data } = await db
+      .from("improvement_goals")
+      .select("id, title, parent_goal_id")
+      .eq("space_id", spaceId);
+    if (!Array.isArray(data)) return [];
+    return data
+      .filter((r: any) => r?.parent_goal_id) // children = rooms; root has no parent
+      .map((r: any) => ({
+        id: String(r.id),
+        title:
+          typeof r.title === "string" && r.title.trim()
+            ? r.title.trim()
+            : "Untitled room",
+      }));
+  } catch (err) {
+    console.warn("[library/objects] listRooms failed (soft):", err);
+    return [];
+  }
+}
+
 interface RouteContext {
   params: Promise<{ spaceId: string }>;
 }
@@ -98,9 +164,11 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
   const layer = sp.get("layer");
   if (layer && Number.isFinite(Number(layer))) filter.blueprintLayerOrdinal = Number(layer);
 
-  const [objects, deferred] = await Promise.all([
+  const [objects, deferred, layers, rooms] = await Promise.all([
     listLibraryObjects(a.db, spaceId, filter),
     listDeferredProposals(a.db, spaceId),
+    listLayerStack(a.db, spaceId),
+    listRooms(a.db, spaceId),
   ]);
   // Hide infrastructure objects from the default Library list: the per-space
   // context anchor + extracted context concepts are provenance plumbing (fork
@@ -115,7 +183,7 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
             o.object_type !== "context_anchor" &&
             o.object_type !== "context_concept",
         );
-  return NextResponse.json({ objects: visible, deferred });
+  return NextResponse.json({ objects: visible, deferred, layers, rooms });
 }
 
 export async function POST(req: NextRequest, ctx: RouteContext) {
@@ -170,6 +238,17 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
         a.db,
         objectId,
         typeof body.blueprintLayerOrdinal === "number" ? body.blueprintLayerOrdinal : null,
+      );
+      return NextResponse.json({ ok: true });
+    }
+    case "subsystem": {
+      // Manual foldering — set/clear the `subsystem` cluster (the same column
+      // the decompose LLM seeds). Empty/whitespace clears it (→ Unfiled).
+      if (!objectId) return NextResponse.json({ error: "objectId required" }, { status: 400 });
+      await setObjectSubsystem(
+        a.db,
+        objectId,
+        typeof body.subsystem === "string" ? body.subsystem : null,
       );
       return NextResponse.json({ ok: true });
     }

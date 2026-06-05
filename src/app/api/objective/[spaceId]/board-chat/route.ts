@@ -18,6 +18,7 @@ import {
   verifySpaceOwnership,
 } from "@/lib/api-helpers";
 import { llmJSON } from "@/lib/llm";
+import { buildSpaceContext } from "@/lib/objective-canvas/build-space-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -109,12 +110,23 @@ export async function POST(
   try {
     const { data } = await db
       .from("spaces")
-      .select("name, title")
+      .select("name, primary_goal")
       .eq("id", spaceId)
       .maybeSingle();
-    if (data) objectiveTitle = String(data.title ?? data.name ?? "").slice(0, 200);
+    if (data) objectiveTitle = String(data.name ?? data.primary_goal ?? "").slice(0, 200);
   } catch {
     /* soft-fail */
+  }
+
+  // ── Taste: the user's defined vocabulary + resolved intent + the references
+  // that ground their terms. Prepended so the thinking-partner honors the SAME
+  // meanings every other AI surface uses — no re-explaining. Soft-fail. ──────
+  let tasteBlock = "";
+  try {
+    const ctx = await buildSpaceContext(db, spaceId);
+    if (ctx.preamble) tasteBlock = `${ctx.preamble}\n\n---\n\n`;
+  } catch {
+    /* taste is best-effort */
   }
 
   // ── Cross-board context: every OTHER space the user owns, condensed to
@@ -178,7 +190,7 @@ export async function POST(
           .join("\n")}`
       : "";
 
-  const userPrompt = `Objective for THIS board: ${objectiveTitle || "(untitled)"}
+  const userPrompt = `${tasteBlock}Objective for THIS board: ${objectiveTitle || "(untitled)"}
 
 On the board right now (${shapes.length} shape${shapes.length === 1 ? "" : "s"}):
 ${renderShapes(shapes)}${crossBlock}${historyBlock}

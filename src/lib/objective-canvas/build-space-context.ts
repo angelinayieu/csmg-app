@@ -12,6 +12,10 @@
 
 import type { GlossaryTerm } from "./generate-glossary";
 import type { PromptSharpeningArtifact } from "./prompt-sharpening-prompt";
+import {
+  enrichGlossaryWithEvidence,
+  renderTasteGlossaryBlock,
+} from "./taste-glossary";
 
 export interface SpaceContext {
   /** Re-framed sharpened objective if present, else the space's own text. */
@@ -69,10 +73,12 @@ export async function buildSpaceContext(
     const gTop = glossary
       .filter((g) => g?.term && g?.definition)
       .slice(0, MAX_GLOSSARY);
-    const glossaryBlock = gTop.length
-      ? "Defined terms (use these EXACT meanings; never silently redefine):\n" +
-        gTop.map((g) => `- ${g.term}: ${g.definition}`).join("\n")
-      : "";
+    // Deepen each term with the REFERENCES the user fed in (same concept_slug)
+    // and mark whose taste authored it ("yours — honor exactly"), so generation
+    // reasons WITH the user's material — not just the bare definition. Soft-
+    // fails to plain term lines if the context_concept read fails.
+    const enriched = await enrichGlossaryWithEvidence(db, spaceId, gTop);
+    const glossaryBlock = renderTasteGlossaryBlock(enriched);
 
     // Resolutions — the user's explicit clarifications (highest-signal taste).
     const resolutions = artifact?.resolutions ?? [];

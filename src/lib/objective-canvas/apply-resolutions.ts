@@ -125,6 +125,33 @@ export async function applyResolutionsForSpace(
       );
     }
 
+    // ── Append-only build-history events (powers the glossary timeline). ──
+    // Soft + additive: each answer the user pinned → one durable event, so a
+    // term's provenance survives later (lower-authority) glossary regenerations
+    // that the coarse updated_at reconstruction would otherwise lose.
+    if (!writeRes.error && incoming.length > 0) {
+      try {
+        await db.from("glossary_events").insert(
+          incoming.map((t) => ({
+            space_id: spaceId,
+            user_id: userId,
+            concept_slug: t.concept_slug ?? null,
+            term: t.term,
+            event_kind: "pinned",
+            origin: "resolution",
+            source: "user",
+            new_definition: t.definition,
+            created_at: now,
+          })),
+        );
+      } catch (err) {
+        console.warn(
+          "[apply-resolutions] glossary_events emit failed (soft):",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
     return { sharpenedPrompt: reframed, glossaryCount: mergedGlossary.length };
   } catch (err) {
     console.warn(

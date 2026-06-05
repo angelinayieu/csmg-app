@@ -41,8 +41,9 @@ const SCHEMA = {
             concept_slug: { type: "string" },
             chosen_reading: { type: "string" },
             answer_text: { type: "string" },
+            confidence: { type: "number" },
           },
-          required: ["concept_slug", "answer_text"],
+          required: ["concept_slug", "answer_text", "confidence"],
           additionalProperties: false,
         },
       },
@@ -60,6 +61,12 @@ For each concept return:
 - concept_slug — echo it back exactly as given.
 - chosen_reading — if candidate interpretations are listed, the EXACT text of the one you pick (copy it verbatim, character for character). If none are listed or none fit, use "".
 - answer_text — ONE crisp first-person sentence (≤22 words) stating the decision in the user's voice. Never ask a question back; commit.
+- confidence — 0..1, calibrated and HONEST. Anchors:
+    • 0.90+ — only one reading really fits the objective; the others are near-impossible.
+    • 0.70–0.89 — clearly the most likely reading; alternatives plausible but weaker.
+    • 0.50–0.69 — best guess but a coin-flip case; a reasonable person could pick another reading.
+    • <0.50 — you are genuinely unsure; the user should review.
+  Be honest about uncertainty — the user sees a ⚠ on low-confidence decisions and reviews them. Inflating confidence is worse than admitting a guess; deflating it wastes the user's time. If candidate_readings is empty (you had to invent the answer) cap confidence at 0.65.
 
 No preamble, no meta-commentary.`;
 
@@ -138,6 +145,7 @@ export async function POST(req: Request, ctx: Ctx) {
         concept_slug?: string;
         chosen_reading?: string;
         answer_text?: string;
+        confidence?: number;
       }[];
     }>({
       system: SYSTEM,
@@ -163,6 +171,16 @@ export async function POST(req: Request, ctx: Ctx) {
         const answer =
           typeof r?.answer_text === "string" ? r.answer_text.trim() : "";
         if (!chosen.length && !answer) return null;
+        // Clamp confidence to [0, 1]; if missing, treat as a coin-flip — the
+        // model is supposed to emit it but we never want this to crash on a
+        // soft-schema-fail. needs_review is the derived signal the rail acts
+        // on: low confidence OR no candidate matched (the AI had to invent).
+        const rawConf =
+          typeof r?.confidence === "number" && isFinite(r.confidence)
+            ? r.confidence
+            : 0.5;
+        const confidence = Math.max(0, Math.min(1, rawConf));
+        const needs_review = confidence < 0.7 || chosen.length === 0;
         return {
           concept_slug: slug,
           phrase: c.phrase,
@@ -171,6 +189,8 @@ export async function POST(req: Request, ctx: Ctx) {
           answer_text: answer,
           source: "ai",
           resolved_at: now,
+          confidence,
+          needs_review,
         };
       })
       .filter((x): x is Resolution => x !== null);

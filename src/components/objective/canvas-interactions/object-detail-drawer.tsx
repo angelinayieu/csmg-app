@@ -12,10 +12,11 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import type { Editor, TLShape, TLShapeId } from "tldraw";
-import { X, Loader2, Boxes, ArrowRight, ArrowLeft, MapPin, Target, Star } from "lucide-react";
+import { X, Loader2, Boxes, ArrowRight, ArrowLeft, MapPin, Target, Star, Sparkles, Pencil } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { labelFor, panToShape } from "../favorites-sidebar";
 import { ObjectClusterGraph } from "./object-cluster-graph";
+import { slugifyConcept } from "@/lib/objective-canvas/normalize-annotations";
 
 export const OPEN_CARD_DETAIL_EVENT = "objective-board:open-card-detail";
 
@@ -109,6 +110,50 @@ function focusObjectOnBoard(editor: Editor, objectId: string): boolean {
   return false;
 }
 
+/** A glossary term as the enriched endpoint returns it (provenance added). */
+interface TasteTermLite {
+  term: string;
+  aliases?: string[];
+  provenance?: "yours" | "grounded" | "ai";
+  definition?: string;
+  concept_slug?: string;
+}
+
+/** The taste receipt: which USER-SHAPED terms (yours / grounded — never the
+ *  AI's own guesses) actually appear in this card's text. The signal that the
+ *  AI generated this WITH the user's vocabulary, so they don't re-explain it.
+ *  Word-boundary match to avoid substring noise; small cap. */
+function tasteHitsFor(
+  text: string,
+  terms: TasteTermLite[],
+  cap = 6,
+): Array<{ term: string; yours: boolean }> {
+  const hay = text.toLowerCase();
+  if (!hay.trim() || terms.length === 0) return [];
+  const out: Array<{ term: string; yours: boolean }> = [];
+  const seen = new Set<string>();
+  for (const t of terms) {
+    if (!t.term || t.provenance === "ai" || !t.provenance) continue; // user-shaped only
+    const surfaces = [t.term, ...(t.aliases ?? [])]
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    const hit = surfaces.some((s) => {
+      const i = hay.indexOf(s);
+      if (i === -1) return false;
+      const before = i === 0 ? " " : hay[i - 1];
+      const after = i + s.length >= hay.length ? " " : hay[i + s.length];
+      return /[^a-z0-9]/.test(before) && /[^a-z0-9]/.test(after);
+    });
+    const key = t.term.toLowerCase();
+    if (hit && !seen.has(key)) {
+      seen.add(key);
+      out.push({ term: t.term, yours: t.provenance === "yours" });
+      if (out.length >= cap) break;
+    }
+  }
+  return out;
+}
+
 function ObjectDetailDrawer({
   spaceId,
   objectId,
@@ -134,6 +179,14 @@ function ObjectDetailDrawer({
   const [candidates, setCandidates] = useState<
     { id: string; title: string; type: string }[]
   >([]);
+  // The space glossary (enriched with provenance) — drives the taste receipt.
+  // Space-level, so fetched once per space, not per object.
+  const [glossary, setGlossary] = useState<TasteTermLite[]>([]);
+  // Active taste capture — refine THIS concept's meaning in place (pins it).
+  const [editingTerm, setEditingTerm] = useState(false);
+  const [draftDef, setDraftDef] = useState("");
+  const [savingTerm, setSavingTerm] = useState(false);
+  const [glossaryTick, setGlossaryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -149,6 +202,20 @@ function ObjectDetailDrawer({
       alive = false;
     };
   }, [spaceId, objectId, reloadTick]);
+
+  // Glossary (with provenance) for the taste receipt. Soft-fail → no receipt.
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/brainstorm/space/${spaceId}/glossary`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (alive && Array.isArray(j?.glossary)) setGlossary(j.glossary as TasteTermLite[]);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [spaceId, glossaryTick]);
 
   // Lazy-load link candidates the first time the picker opens.
   useEffect(() => {
@@ -190,11 +257,49 @@ function ObjectDetailDrawer({
     setReloadTick((t) => t + 1); // re-fetch detail → cluster graph updates
   }
 
+  // Pin the user's meaning for this object's concept. Reuses the glossary PATCH
+  // (source:'user' + pinned), so it instantly becomes "yours" everywhere AI
+  // reasons + travels to other spaces by concept_slug. Refetch flips the cue.
+  async function saveConceptMeaning(termName: string) {
+    if (!draftDef.trim()) return;
+    setSavingTerm(true);
+    try {
+      await fetch(`/api/brainstorm/space/${spaceId}/glossary`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          term: termName,
+          definition: draftDef.trim(),
+          pinned: true,
+        }),
+      });
+    } catch {
+      /* soft-fail */
+    }
+    setSavingTerm(false);
+    setEditingTerm(false);
+    setGlossaryTick((t) => t + 1);
+  }
+
   const loading = data === null;
   const obj = data?.object ?? null;
   const links = data?.links ?? [];
   const name = obj?.card_face?.name?.trim() || obj?.title || "Object";
   const body = obj?.card_face?.body?.trim() || obj?.summary || "";
+  // Which of the user's defined terms shaped this card (receipt on the output).
+  const tasteHits = obj ? tasteHitsFor(`${name} ${body}`, glossary) : [];
+  // This object's OWN concept as a glossary term (by slug) — the target of the
+  // "make it yours" capture. Objects seed the glossary, so this usually hits.
+  const objSlug = obj ? slugifyConcept(name) : "";
+  const matchedTerm =
+    obj && objSlug
+      ? (glossary.find(
+          (t) =>
+            (t.concept_slug && t.concept_slug === objSlug) ||
+            slugifyConcept(t.term) === objSlug,
+        ) ?? null)
+      : null;
+  const conceptIsYours = matchedTerm?.provenance === "yours";
 
   // group links by relation
   const linkGroups = new Map<string, ObjectLinkRef[]>();
@@ -236,7 +341,92 @@ function ObjectDetailDrawer({
                 {obj.subsystem && <span style={subsystemPill}>{obj.subsystem}</span>}
               </div>
 
+              {/* Taste receipt — the defined terms that shaped this card. "Yours"
+                  chips fill accent (mirroring the inline underline); grounded
+                  ones are dashed. Closes the trust loop: taste is visibly used. */}
+              {tasteHits.length > 0 && (
+                <div
+                  style={tasteRow}
+                  title="Terms you've defined that shaped this card — the AI generated it using your meanings, so you don't have to re-explain them."
+                >
+                  <Sparkles
+                    style={{ width: 12, height: 12, color: appleVibe.accent.primary, flexShrink: 0 }}
+                    strokeWidth={2.4}
+                  />
+                  <span style={tasteLabel}>Shaped by your terms</span>
+                  {tasteHits.map((h) => (
+                    <span key={h.term} style={h.yours ? tasteChipYours : tasteChip}>
+                      {h.term}
+                    </span>
+                  ))}
+                </div>
+              )}
+
               {body && <p style={{ ...bodyText, marginTop: 10 }}>{body}</p>}
+
+              {/* Active taste capture — pin what this concept means to YOU. The
+                  missing "write" side of define-once: one action makes the term
+                  yours everywhere AI reasons + travels to your other spaces. */}
+              {matchedTerm &&
+                (editingTerm ? (
+                  <div style={conceptBox}>
+                    <div style={sectionLabel}>
+                      Define “{matchedTerm.term}” in your words
+                    </div>
+                    <textarea
+                      value={draftDef}
+                      onChange={(e) => setDraftDef(e.target.value)}
+                      rows={3}
+                      autoFocus
+                      placeholder="What does this mean in YOUR project? The AI will honor it everywhere."
+                      style={conceptTextarea}
+                    />
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button
+                        type="button"
+                        onClick={() => saveConceptMeaning(matchedTerm.term)}
+                        disabled={savingTerm || !draftDef.trim()}
+                        style={{
+                          ...conceptSaveBtn,
+                          opacity: savingTerm || !draftDef.trim() ? 0.5 : 1,
+                        }}
+                      >
+                        {savingTerm ? "Saving…" : "Make it mine"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingTerm(false)}
+                        style={conceptCancelBtn}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : conceptIsYours ? (
+                  <div
+                    style={conceptYoursRow}
+                    title="You've defined this — the AI honors your meaning everywhere, and it travels to your other spaces."
+                  >
+                    <Sparkles
+                      style={{ width: 12, height: 12, color: appleVibe.accent.primary, flexShrink: 0 }}
+                      strokeWidth={2.4}
+                    />
+                    <span>“{matchedTerm.term}” is defined in your words</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDraftDef(matchedTerm.definition ?? body ?? "");
+                      setEditingTerm(true);
+                    }}
+                    style={conceptDefineBtn}
+                    title="Pin what this means to you — every AI surface will use your definition, and it carries to your other spaces."
+                  >
+                    <Pencil style={{ width: 12, height: 12, flexShrink: 0 }} strokeWidth={2.4} />
+                    Define “{matchedTerm.term}” in your words
+                  </button>
+                ))}
 
               <Gallery snapshot={obj.content_snapshot} />
 
@@ -845,6 +1035,119 @@ const bodyText: CSSProperties = {
   lineHeight: 1.5,
   color: appleVibe.text.primary,
   margin: 0,
+};
+const tasteRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  flexWrap: "wrap",
+  marginTop: 10,
+  padding: "7px 9px",
+  borderRadius: 10,
+  background: appleVibe.surface.chip,
+};
+const tasteLabel: CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 700,
+  letterSpacing: "0.02em",
+  color: appleVibe.text.secondary,
+  marginRight: 2,
+};
+// "Yours" = solid accent (matches the inline glossary underline); "grounded"
+// = dashed outline. The receipt's visual language ties back to the prose cue.
+const tasteChipYours: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  height: 18,
+  padding: "0 8px",
+  borderRadius: appleVibe.radius.pill,
+  background: appleVibe.accent.primary,
+  color: appleVibe.text.onAccent,
+  fontSize: 10.5,
+  fontWeight: 700,
+};
+const tasteChip: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  height: 18,
+  padding: "0 8px",
+  borderRadius: appleVibe.radius.pill,
+  background: "transparent",
+  color: appleVibe.text.secondary,
+  fontSize: 10.5,
+  fontWeight: 600,
+  border: `1px dashed ${appleVibe.text.tertiary}`,
+};
+// Active taste capture (drawer).
+const conceptBox: CSSProperties = {
+  marginTop: 10,
+  padding: "9px 10px",
+  borderRadius: 10,
+  background: appleVibe.surface.chip,
+};
+const conceptTextarea: CSSProperties = {
+  width: "100%",
+  marginTop: 6,
+  padding: "7px 9px",
+  borderRadius: 8,
+  border: `1px solid ${appleVibe.text.faint}`,
+  background: "transparent",
+  color: appleVibe.text.primary,
+  fontSize: 12.5,
+  lineHeight: 1.45,
+  resize: "vertical",
+  fontFamily: "inherit",
+  outline: "none",
+  boxSizing: "border-box",
+};
+const conceptSaveBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  height: 26,
+  padding: "0 12px",
+  borderRadius: appleVibe.radius.pill,
+  background: appleVibe.accent.primary,
+  color: appleVibe.text.onAccent,
+  fontSize: 11.5,
+  fontWeight: 700,
+  border: "none",
+  cursor: "pointer",
+};
+const conceptCancelBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  height: 26,
+  padding: "0 10px",
+  borderRadius: appleVibe.radius.pill,
+  background: "transparent",
+  color: appleVibe.text.secondary,
+  fontSize: 11.5,
+  fontWeight: 600,
+  border: "none",
+  cursor: "pointer",
+};
+const conceptYoursRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  marginTop: 10,
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: appleVibe.text.secondary,
+};
+const conceptDefineBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  marginTop: 10,
+  padding: "6px 10px",
+  borderRadius: appleVibe.radius.pill,
+  background: "transparent",
+  color: appleVibe.accent.primary,
+  fontSize: 11.5,
+  fontWeight: 650,
+  border: `1px dashed ${appleVibe.accent.primary}`,
+  cursor: "pointer",
 };
 const sectionLabel: CSSProperties = {
   fontSize: 10.5,

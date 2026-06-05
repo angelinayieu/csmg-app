@@ -27,9 +27,11 @@ import {
   type TLShape,
   type TLShapeId,
 } from "tldraw";
-import { Check, X, Globe } from "lucide-react";
+import { Check, X, Globe, HelpCircle } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { openResolutionStudio } from "@/components/objective/board-bus";
+import { slugifyConcept } from "@/lib/objective-canvas/normalize-annotations";
 
 /** A web source backing a Deep Synthesize node. */
 export type InsightCitation = { title: string; url: string };
@@ -230,6 +232,35 @@ function InsightCardRenderer({
       return;
     }
     editor.deleteShapes([shape.id, ...linkedArrowIds()]);
+  }
+
+  // ── Ambiguity-fork resolve (closes the fork → answer → glossary loop) ──
+  // A forked ambiguity card (meta.ambiguityFork) is `accepted`, so it carries
+  // no Keep/Dismiss. Instead it gets a Resolve action that opens the existing
+  // Resolution Studio scoped to THIS ambiguity — the answer then flows the
+  // proven studio → resolutions → apply-resolutions → pinned-glossary path.
+  const forkMeta = shape.meta as { ambiguityFork?: boolean; spaceId?: string };
+  const isFork = !!forkMeta.ambiguityFork;
+
+  function resolveFork(e: React.MouseEvent) {
+    e.stopPropagation();
+    const sid = forkMeta.spaceId;
+    if (!sid) return;
+    openResolutionStudio({
+      spaceId: sid,
+      concepts: [
+        {
+          phrase: headline,
+          kind: "concept",
+          // forked because it matters AND is unclear — seed the studio high.
+          leverage: 0.7,
+          uncertainty: 0.7,
+          why: body,
+          candidate_readings: [],
+          concept_slug: slugifyConcept(headline),
+        },
+      ],
+    });
   }
 
   const eyebrow = isHub
@@ -439,6 +470,35 @@ function InsightCardRenderer({
             >
               <X style={{ width: 12, height: 12 }} strokeWidth={2.6} />
               Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Forked ambiguity → Resolve: opens the studio scoped to THIS one,
+            turning a visual-only fork into the entry point for capturing taste. */}
+        {isFork && forkMeta.spaceId && (
+          <div style={{ marginTop: 12, display: "flex" }}>
+            <button
+              type="button"
+              onPointerDown={stopEventPropagation}
+              onClick={resolveFork}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "6px 13px",
+                borderRadius: 999,
+                border: "none",
+                cursor: "pointer",
+                background: color,
+                color: "white",
+                fontSize: 11.5,
+                fontWeight: 600,
+                boxShadow: `0 4px 12px -3px ${color}88`,
+              }}
+            >
+              <HelpCircle style={{ width: 12, height: 12 }} strokeWidth={2.6} />
+              Resolve
             </button>
           </div>
         )}

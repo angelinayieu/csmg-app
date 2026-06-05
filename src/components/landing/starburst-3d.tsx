@@ -25,7 +25,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { StarburstSVG } from "./starburst-svg";
 
-const INK = 0x0b0b0c;
+// Monochrome — a single near-ink black (no terracotta sun / teal sea).
+// The landing is intentionally cold B&W; do NOT re-warm this.
+const INK = 0x1a1a1c;
+const SUN = 0x1a1a1c;
+const SEA = 0x1a1a1c;
 
 // 3 axes = 3 connected pairs. dir points to the "a" end; "-dir" is the "b"
 // end. Directions bias to the corners/sides (never straight up/down) so the
@@ -132,7 +136,7 @@ export default function Starburst3D() {
     // ── Core (a plain solid ink dot — clean, like the flat mock) ──
     const core = new THREE.Mesh(
       new THREE.SphereGeometry(0.2, 28, 28),
-      new THREE.MeshBasicMaterial({ color: INK }),
+      new THREE.MeshBasicMaterial({ color: SUN }),
     );
     root.add(core);
 
@@ -168,7 +172,7 @@ export default function Starburst3D() {
       [1, -1].forEach((sign) => {
         const base = dir.clone().multiplyScalar(axis.len * sign);
         const mat = new THREE.MeshBasicMaterial({
-          color: INK,
+          color: SEA,
           transparent: true,
           opacity: 1,
         });

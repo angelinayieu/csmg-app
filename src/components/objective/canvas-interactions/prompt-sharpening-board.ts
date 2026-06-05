@@ -10,9 +10,16 @@ import {
   SHARPEN_COLOR,
   type PromptSharpeningCardShape,
 } from "../shapes/prompt-sharpening-card-shape";
+import type { AmbiguityHeatmapCardShape } from "../shapes/ambiguity-heatmap-card-shape";
+import type { PriorityMapCardShape } from "../shapes/priority-map-card-shape";
 import type { InsightCardShape } from "../shapes/insight-card-shape";
 import type { RoomCardShape } from "../shapes/room-card-shape";
-import type { SharpeningCardDetail, AmbiguityForkDetail } from "../board-bus";
+import type {
+  SharpeningCardDetail,
+  AmbiguityForkDetail,
+  DeployHeatmapCardDetail,
+  DeployPriorityMapCardDetail,
+} from "../board-bus";
 
 const CARD_W = 348;
 const CARD_H = 204;
@@ -131,12 +138,26 @@ export function deployPromptSharpeningOnBoard(
   );
 }
 
-/** Fork an ambiguity off the sharpening card as its own insight-card node. */
+/** Fork an ambiguity off the sharpening card (or heatmap / priority-map
+ *  card) as its own insight-card node. The source is whatever shape called
+ *  forkAmbiguity — the bezier overlay routes the connector from that source
+ *  by reading `meta.forkSourceId`. */
 export function forkAmbiguityOnBoard(
   editor: Editor,
   d: AmbiguityForkDetail,
 ): void {
   const sourceId = d.sourceId as TLShapeId;
+  // Read spaceId from whichever fork source supplies it (sharpening directly;
+  // heatmap / priority map carry it forward from their own props).
+  const srcShape = editor.getShape(sourceId);
+  let forkSpaceId = "";
+  if (srcShape?.type === "prompt-sharpening") {
+    forkSpaceId = (srcShape as PromptSharpeningCardShape).props.spaceId;
+  } else if (srcShape?.type === "ambiguity-heatmap-card") {
+    forkSpaceId = (srcShape as AmbiguityHeatmapCardShape).props.spaceId;
+  } else if (srcShape?.type === "priority-map-card") {
+    forkSpaceId = (srcShape as PriorityMapCardShape).props.spaceId;
+  }
   const srcBounds = editor.getShapePageBounds(sourceId);
   const vp = editor.getViewportPageBounds();
   const W = 232;
@@ -174,7 +195,13 @@ export function forkAmbiguityOnBoard(
       sourceIds: [d.sourceId],
       citations: [],
     },
-    meta: { ambiguityFork: true },
+    meta: {
+      ambiguityFork: true,
+      // The overlay routes the connector from this source explicitly. Without
+      // forkSourceId it falls back to the sharpening card (legacy behavior).
+      forkSourceId: d.sourceId,
+      spaceId: forkSpaceId,
+    },
   });
 
   // The sharpening→fork connector is drawn by the bezier overlay.
@@ -182,5 +209,135 @@ export function forkAmbiguityOnBoard(
   editor.centerOnPoint(
     { x: x + W / 2, y: y + H / 2 },
     { animation: { duration: 300 } },
+  );
+}
+
+const HEATMAP_SIZE = 340;
+const PRIORITY_W = 360;
+const PRIORITY_H = 440;
+
+/** Spawn an Ambiguity Heatmap card to the RIGHT of the sharpening card.
+ *  Idempotent per source — re-clicking the fork button focuses the existing
+ *  card instead of duplicating it. */
+export function deployHeatmapCardOnBoard(
+  editor: Editor,
+  d: DeployHeatmapCardDetail,
+): void {
+  const sourceId = d.sourceId as TLShapeId;
+  const existing = editor
+    .getCurrentPageShapes()
+    .find(
+      (s) =>
+        s.type === "ambiguity-heatmap-card" &&
+        (s as AmbiguityHeatmapCardShape).props.sourceId === d.sourceId,
+    );
+  if (existing) {
+    editor.updateShape<AmbiguityHeatmapCardShape>({
+      id: existing.id,
+      type: "ambiguity-heatmap-card",
+      props: { heatmapJson: d.heatmapJson, color: d.color },
+    });
+    editor.select(existing.id);
+    return;
+  }
+
+  const sb = editor.getShapePageBounds(sourceId);
+  const vp = editor.getViewportPageBounds();
+  const preferredLeft = sb ? sb.maxX + 80 : vp.center.x;
+  const top = sb ? sb.minY : vp.center.y;
+  const spot = reserveSpace(
+    editor,
+    { w: HEATMAP_SIZE, h: HEATMAP_SIZE },
+    { anchorMidX: preferredLeft + HEATMAP_SIZE / 2, preferredTop: top, gap: 36, allowPush: false },
+  );
+
+  const id = createShapeId();
+  editor.createShape<AmbiguityHeatmapCardShape>({
+    id,
+    type: "ambiguity-heatmap-card",
+    x: spot.x,
+    y: spot.y,
+    props: {
+      w: HEATMAP_SIZE,
+      h: HEATMAP_SIZE,
+      sourceId: d.sourceId,
+      spaceId: d.spaceId,
+      heatmapJson: d.heatmapJson,
+      color: d.color,
+    },
+  });
+  editor.select(id);
+  editor.centerOnPoint(
+    { x: spot.x + HEATMAP_SIZE / 2, y: spot.y + HEATMAP_SIZE / 2 },
+    { animation: { duration: 320 } },
+  );
+}
+
+/** Spawn a Priority Map card BELOW the heatmap card (or right of sharpening
+ *  if the heatmap isn't out yet). Idempotent per source. */
+export function deployPriorityMapCardOnBoard(
+  editor: Editor,
+  d: DeployPriorityMapCardDetail,
+): void {
+  const sourceId = d.sourceId as TLShapeId;
+  const existing = editor
+    .getCurrentPageShapes()
+    .find(
+      (s) =>
+        s.type === "priority-map-card" &&
+        (s as PriorityMapCardShape).props.sourceId === d.sourceId,
+    );
+  if (existing) {
+    editor.updateShape<PriorityMapCardShape>({
+      id: existing.id,
+      type: "priority-map-card",
+      props: { salienceJson: d.salienceJson, color: d.color },
+    });
+    editor.select(existing.id);
+    return;
+  }
+
+  // Prefer slotting below the heatmap if it's already on the board.
+  const heatmap = editor
+    .getCurrentPageShapes()
+    .find(
+      (s) =>
+        s.type === "ambiguity-heatmap-card" &&
+        (s as AmbiguityHeatmapCardShape).props.sourceId === d.sourceId,
+    );
+  const sb = editor.getShapePageBounds(sourceId);
+  const hb = heatmap ? editor.getShapePageBounds(heatmap.id) : null;
+  const vp = editor.getViewportPageBounds();
+  const preferredLeft = hb
+    ? hb.minX
+    : sb
+      ? sb.maxX + 80
+      : vp.center.x - PRIORITY_W / 2;
+  const top = hb ? hb.maxY + 36 : sb ? sb.minY : vp.center.y;
+  const spot = reserveSpace(
+    editor,
+    { w: PRIORITY_W, h: PRIORITY_H },
+    { anchorMidX: preferredLeft + PRIORITY_W / 2, preferredTop: top, gap: 36, allowPush: false },
+  );
+
+  const id = createShapeId();
+  editor.createShape<PriorityMapCardShape>({
+    id,
+    type: "priority-map-card",
+    x: spot.x,
+    y: spot.y,
+    props: {
+      w: PRIORITY_W,
+      h: PRIORITY_H,
+      sourceId: d.sourceId,
+      spaceId: d.spaceId,
+      salienceJson: d.salienceJson,
+      color: d.color,
+    },
+  });
+  editor.select(id);
+  editor.centerOnPoint(
+    { x: spot.x + PRIORITY_W / 2, y: spot.y + PRIORITY_H / 2 },
+    { animation: { duration: 320 } },
   );
 }
