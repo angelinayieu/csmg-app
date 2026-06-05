@@ -102,7 +102,20 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
     listLibraryObjects(a.db, spaceId, filter),
     listDeferredProposals(a.db, spaceId),
   ]);
-  return NextResponse.json({ objects, deferred });
+  // Hide infrastructure objects from the default Library list: the per-space
+  // context anchor + extracted context concepts are provenance plumbing (fork
+  // roots, glossary substrate), not user idea cards — they have no entry in the
+  // panel's type maps and would render as stray "context_anchor"/"context_
+  // concept" cards. An explicit ?type= query still returns them.
+  const visible =
+    filter.objectType != null
+      ? objects
+      : objects.filter(
+          (o) =>
+            o.object_type !== "context_anchor" &&
+            o.object_type !== "context_concept",
+        );
+  return NextResponse.json({ objects: visible, deferred });
 }
 
 export async function POST(req: NextRequest, ctx: RouteContext) {

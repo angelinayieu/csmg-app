@@ -13,6 +13,7 @@ import { createClient, getAuthUser } from "@/lib/supabase/server";
 import { IntakeHome } from "@/components/home/intake-home";
 import type { LibrarySpace } from "@/components/home/library-grid";
 import type { SyncedTab } from "@/components/home/objective-chatbox";
+import { BRIEF_VERSION } from "@/lib/objective-canvas/summarize-space-card";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,28 @@ export default async function StudioPage() {
       ).data ?? []
     : rich.data ?? [];
 
+  // Which top-level objectives have a sandbox inside them? A sandbox is a
+  // hidden CHILD space (never its own card) — we surface it as a small
+  // sub-branch chip on the parent's library card. Soft-degrades to no chips
+  // if the lookup fails.
+  const topIds = (spacesRows as any[]).map((s) => s.id).filter(Boolean);
+  const sandboxParents = new Set<string>();
+  if (topIds.length) {
+    const { data: kids } = await db
+      .from("spaces")
+      .select("parent_space_id, synthesis_data")
+      .in("parent_space_id", topIds)
+      .eq("archived", false);
+    for (const k of (kids ?? []) as any[]) {
+      if (
+        k?.parent_space_id &&
+        k?.synthesis_data?.objective_canvas?.sandbox === true
+      ) {
+        sandboxParents.add(k.parent_space_id);
+      }
+    }
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const spaces: LibrarySpace[] = (spacesRows as any[])
     // Hide un-promoted DRAFT objective spaces (empty input_text) — they're
@@ -82,10 +105,12 @@ export default async function StudioPage() {
             name?: unknown;
             points?: unknown;
             from_updated_at?: unknown;
+            v?: unknown;
           }
         | null;
       const fresh =
         !!cb &&
+        cb.v === BRIEF_VERSION &&
         typeof cb.name === "string" &&
         typeof cb.kind === "string" &&
         Array.isArray(cb.points) &&
@@ -99,6 +124,7 @@ export default async function StudioPage() {
         description: s.description ?? null,
         space_kind: s.space_kind ?? null,
         card_brief: fresh ? (cb as unknown as LibrarySpace["card_brief"]) : null,
+        hasSandbox: sandboxParents.has(s.id),
       };
     });
 

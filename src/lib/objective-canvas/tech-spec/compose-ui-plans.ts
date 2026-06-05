@@ -1,19 +1,27 @@
-// ── compose-ui-plans — Opus + UI agent skill → N distinct TechSpecUiPlans ─
+// ── compose-ui-plans — Sonnet + UI agent skill → N distinct TechSpecUiPlans ─
 //
 // The pre-step before "Build prototype": from any selected card text, draft
 // N UI-plan variants the user can pick between. Each variant is FORCED onto a
 // different design axis (glass tier × hero pattern × density × motion) so the
 // fork is genuinely distinct, not three slight phrasings of the same plan.
 // Reuses loadUiSkillSystem so the plans speak the app's one design vocabulary.
+//
+// One bounded call PER variant, fired in parallel (was a single 8k-token call
+// that drafted all N at once — slow, and truncated mid-JSON near the cap →
+// "Couldn't draft this plan."). See composeOneVariant + composeUiPlans below.
 
 import { getAnthropicClient } from "@/lib/anthropic";
-import { BEST_TUNABLE_CLAUDE_MODEL } from "@/lib/llm";
+import { BEST_FAST_CLAUDE_MODEL } from "@/lib/llm";
 import { loadUiSkillSystem } from "@/lib/objective-canvas/ui-skill-system";
 import type { TechSpecUiPlan } from "./types";
 
-// Tunable Opus — we pass a custom temperature from the rail's AI settings,
-// which the frontier Opus rejects (see reference_claude_model_constraints).
-const OPUS_MODEL = BEST_TUNABLE_CLAUDE_MODEL;
+// Sonnet-4-6 (was BEST_TUNABLE_CLAUDE_MODEL = opus-4-1). Opus-4-1 took 50–85s
+// AND intermittently returned degenerate/truncated JSON on this nested plan
+// schema → the route 502'd → "Couldn't draft this plan." on the board. Sonnet
+// is ~3–5× faster, reliable on structured JSON, and still honors the custom
+// temperature from the rail's AI settings. Mirrors the same opus-4-1 → Sonnet
+// migration already done in the converge-diverge route.
+const PLAN_MODEL = BEST_FAST_CLAUDE_MODEL;
 
 /** Four pre-built design slants so the variants diverge on different axes,
  *  not just rewording the same plan. Stretched to N by wrapping. */
@@ -60,10 +68,14 @@ interface ComposeArgs {
 interface ComposeResult {
   title: string;
   overview: string;
+  /** One entry per requested slant, IN SLANT ORDER. `null` = that variant's
+   *  call failed; the board renders the survivors and marks the null slots
+   *  "error" (it already null-checks each variant), so one flaky variant no
+   *  longer kills the whole fork. */
   variants: Array<{
     label: string;
     plan: TechSpecUiPlan;
-  }>;
+  } | null>;
 }
 
 /** Pull a JSON object out of the model's reply (fence or raw). */
@@ -75,72 +87,134 @@ function extractJson(text: string): unknown {
   return JSON.parse(body.slice(start));
 }
 
-export async function composeUiPlans(args: ComposeArgs): Promise<ComposeResult> {
-  const count = Math.max(1, Math.min(5, Math.round(args.count || 3)));
-  const uiSkillPrefix = await loadUiSkillSystem();
-  const anthropic = getAnthropicClient();
-
-  const slants = VARIANT_SLANTS.slice(0, count);
-
+/** One parallel call → one variant's plan (+ the shared title/overview). The
+ *  output is a single bounded plan (≤ ~3.5k tokens) so it can't hit the 8k-cap
+ *  truncation cliff the old single-batch call risked, and a flaky/overloaded
+ *  variant rejects on its own without taking the others down. */
+async function composeOneVariant(args: {
+  anthropic: ReturnType<typeof getAnthropicClient>;
+  system: string;
+  source: string;
+  slant: { label: string; brief: string };
+  temperature: number;
+}): Promise<{ title: string; overview: string; plan: TechSpecUiPlan }> {
   const user = [
-    `SOURCE TEXT (the idea the variants explore):`,
-    args.sourceText.trim().slice(0, 4000),
+    `SOURCE TEXT (the idea this UI plan explores):`,
+    args.source,
     "",
-    `Draft ${count} DISTINCT UI plans, each pinned to one of these slants:`,
-    ...slants.map((s, i) => `  ${i + 1}. "${s.label}" — ${s.brief}`),
+    `Design slant — "${args.slant.label}": ${args.slant.brief}`,
     "",
     `Return a single JSON object of shape:`,
     `{
-  "title": string,            // one short product-level title shared by all variants
+  "title": string,            // short product-level title for the idea
   "overview": string,         // 1-2 sentence problem framing
-  "variants": [               // exactly ${count} entries, IN THE SLANT ORDER above
-    {
-      "label": string,        // the slant label verbatim
-      "plan": {
-        "design_language": {
-          "glass_tier": "plate"|"card"|"float"|"hero",
-          "accent_intent": "signal"|"warning"|"growth"|"insight"|"neutral",
-          "density": "airy"|"comfortable"|"dense",
-          "motion_intent": "still"|"breathing"|"reveal"|"responsive",
-          "hero_pattern": "metric"|"flow"|"cycle"|"before_after"|"evidence"|"decision"
-        },
-        "screens": [ { "name": string, "purpose": string, "key_components": string[], "states": string[] } ],
-        "component_inventory": string[],
-        "interaction_notes": string[],
-        "reduction_log": string[],   // "Kept X — because Y" / "Cut Z — because W"
-        "inspiration_cues": string[] // [] when none
-      }
-    }
-  ]
+  "plan": {
+    "design_language": {
+      "glass_tier": "plate"|"card"|"float"|"hero",
+      "accent_intent": "signal"|"warning"|"growth"|"insight"|"neutral",
+      "density": "airy"|"comfortable"|"dense",
+      "motion_intent": "still"|"breathing"|"reveal"|"responsive",
+      "hero_pattern": "metric"|"flow"|"cycle"|"before_after"|"evidence"|"decision"
+    },
+    "screens": [ { "name": string, "purpose": string, "key_components": string[], "states": string[] } ],
+    "component_inventory": string[],
+    "interaction_notes": string[],
+    "reduction_log": string[],   // "Kept X — because Y" / "Cut Z — because W"
+    "inspiration_cues": string[] // [] when none
+  }
 }`,
     "",
-    `Make the variants genuinely DIFFERENT (different design_language tuples + different screen sets), not three rephrasings of one plan. Use realistic concrete component names; never invent CSS selectors.`,
+    `Keep it COMPACT — this renders on a small card and seeds (not replaces) the`,
+    `later prototype build: at most 4 screens, 8 components, 4 interaction_notes,`,
+    `4 reduction_log entries, 3 inspiration_cues. Every string is a terse phrase`,
+    `(a few words), never a paragraph. Honor the slant's design_language tuple.`,
+    `Use realistic concrete component names; never invent CSS selectors. JSON only.`,
   ].join("\n");
 
-  const resp = await anthropic.messages.create(
+  const resp = await args.anthropic.messages.create(
     {
-      model: OPUS_MODEL,
-      max_tokens: 8000,
-      temperature: typeof args.temperature === "number" ? args.temperature : 0.5,
-      system: uiSkillPrefix + "\n\n" + SYSTEM,
+      // 6000 is a safety ceiling, not a target — the COMPACT instruction keeps a
+      // well-formed plan to ~1.5k tokens. The headroom means a verbose reply
+      // still finishes instead of truncating mid-JSON (the 4k cap clipped one
+      // variant in testing → "Couldn't draft this plan." for that card).
+      model: PLAN_MODEL,
+      max_tokens: 6000,
+      temperature: args.temperature,
+      system: args.system,
       messages: [{ role: "user", content: user }],
     },
-    { timeout: 5 * 60 * 1000 },
+    { timeout: 3 * 60 * 1000 },
   );
+  // A max_tokens stop means the JSON is cut off mid-object — fail loudly so
+  // this variant is dropped rather than fed to JSON.parse as garbage.
+  if (resp.stop_reason === "max_tokens") {
+    throw new Error("variant truncated at max_tokens");
+  }
   const text = resp.content
     .filter((b) => b.type === "text")
     .map((b) => (b as { text: string }).text)
     .join("\n");
-  const parsed = extractJson(text) as ComposeResult;
-  if (!parsed || !Array.isArray(parsed.variants)) {
-    throw new Error("invalid plans payload");
+  const parsed = extractJson(text) as {
+    title?: string;
+    overview?: string;
+    plan?: TechSpecUiPlan;
+  };
+  if (!parsed || !parsed.plan || typeof parsed.plan !== "object") {
+    throw new Error("variant missing plan");
   }
-  // Trim to requested count + force the slant label so card chips line up.
-  parsed.variants = parsed.variants.slice(0, count).map((v, i) => ({
-    label: v.label || slants[i]?.label || `Variant ${i + 1}`,
-    plan: v.plan,
-  }));
-  if (!parsed.title) parsed.title = "UI plan";
-  if (!parsed.overview) parsed.overview = args.sourceText.slice(0, 240);
-  return parsed;
+  return {
+    title: typeof parsed.title === "string" ? parsed.title : "",
+    overview: typeof parsed.overview === "string" ? parsed.overview : "",
+    plan: parsed.plan,
+  };
+}
+
+export async function composeUiPlans(args: ComposeArgs): Promise<ComposeResult> {
+  const count = Math.max(1, Math.min(5, Math.round(args.count || 3)));
+  const uiSkillPrefix = await loadUiSkillSystem();
+  const anthropic = getAnthropicClient();
+  const slants = VARIANT_SLANTS.slice(0, count);
+  const temperature = typeof args.temperature === "number" ? args.temperature : 0.5;
+  const source = args.sourceText.trim().slice(0, 4000);
+  const system = uiSkillPrefix + "\n\n" + SYSTEM;
+
+  // One parallel call per variant. This replaces a single 8k-token call that
+  // drafted ALL N plans at once — that call took 50–150s and, when its output
+  // neared the cap, truncated mid-JSON → the route 502'd → "Couldn't draft this
+  // plan." on the board. Bounded per-variant calls run concurrently (wall-clock
+  // ~= one variant, not the sum) and settle independently.
+  const settled = await Promise.allSettled(
+    slants.map((slant) =>
+      composeOneVariant({ anthropic, system, source, slant, temperature }),
+    ),
+  );
+
+  let title = "";
+  let overview = "";
+  const variants: ComposeResult["variants"] = slants.map((slant, i) => {
+    const r = settled[i];
+    if (r.status !== "fulfilled") {
+      console.warn(
+        `[ui-plan] variant "${slant.label}" failed:`,
+        r.reason instanceof Error ? r.reason.message : String(r.reason),
+      );
+      return null;
+    }
+    if (!title && r.value.title) title = r.value.title;
+    if (!overview && r.value.overview) overview = r.value.overview;
+    // Force the slant label so the card chips line up with the requested order.
+    return { label: slant.label, plan: r.value.plan };
+  });
+
+  // Every variant failed → surface a hard error so the route 502s and the board
+  // marks the cards "error" (same contract as before). A partial success still
+  // returns 200 with `null` holes the board renders as per-card errors.
+  if (!variants.some(Boolean)) {
+    throw new Error("all UI-plan variants failed");
+  }
+  return {
+    title: title || "UI plan",
+    overview: overview || source.slice(0, 240),
+    variants,
+  };
 }

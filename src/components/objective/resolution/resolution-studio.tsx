@@ -14,8 +14,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, X, ChevronLeft, Check, CornerDownLeft } from "lucide-react";
-import { Sparkle } from "@/components/objective/icons/sparkle";
+import { Mic, X, Check, CornerDownLeft } from "lucide-react";
+import { Spark } from "@/components/objective/icons/spark";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { useVoiceRecorder } from "@/components/objective/voice/use-voice-recorder";
@@ -76,6 +76,9 @@ export function ResolutionStudio({
   );
   const [assistLoading, setAssistLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [hoverReading, setHoverReading] = useState<number | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
+  const [autoBusy, setAutoBusy] = useState(false);
 
   const assistTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const assistSeq = useRef(0);
@@ -224,19 +227,18 @@ export function ResolutionStudio({
       .filter((x): x is Resolution => x !== null);
   }, [deck, answers]);
 
-  const finish = useCallback(async () => {
-    if (saving) return;
-    const res = buildResolutions();
-    setSaving(true);
-    try {
-      if (res.length) {
+  // Persist a set of resolutions, then run the Phase 3 write-back (glossary +
+  // re-framed prompt) and (re)build Variable/Feature cards from the resolved
+  // objective. Shared by the normal finish AND the "let AI answer all" path.
+  const commitResolutions = useCallback(
+    async (res: Resolution[]) => {
+      if (!res.length) return;
+      try {
         await fetch(`/api/objective/${detail.spaceId}/resolutions`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ resolutions: res }),
         });
-        // Phase 3 write-back: glossary + re-framed prompt, then refresh the
-        // card and (re)build Variable/Feature cards from the resolved objective.
         try {
           const r = await fetch(
             `/api/objective/${detail.spaceId}/apply-resolutions`,
@@ -263,13 +265,91 @@ export function ResolutionStudio({
         } catch {
           /* soft-fail — resolutions are saved regardless */
         }
+      } catch {
+        /* soft-fail — answers are still in state */
       }
-    } catch {
-      /* soft-fail — answers are still in state */
-    }
+    },
+    [detail.spaceId],
+  );
+
+  const finish = useCallback(async () => {
+    if (saving || autoBusy) return;
+    setSaving(true);
+    await commitResolutions(buildResolutions());
     setSaving(false);
     onClose();
-  }, [saving, buildResolutions, detail.spaceId, onClose]);
+  }, [saving, autoBusy, buildResolutions, commitResolutions, onClose]);
+
+  // "Let AI answer everything" — the user skips the flashcards entirely. One
+  // server call commits the most likely reading for EVERY ambiguity at once
+  // (coherently with the objective); we keep any answers the user already gave
+  // and fall back to each concept's top candidate reading if the call fails.
+  const aiDecideAll = useCallback(async () => {
+    if (saving || autoBusy) return;
+    setAutoBusy(true);
+    const now = new Date().toISOString();
+
+    let aiRes: Resolution[] = [];
+    try {
+      const r = await fetch(`/api/objective/${detail.spaceId}/auto-resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          concepts: deck.map((c) => ({
+            concept_slug: slugOf(c),
+            phrase: c.phrase,
+            kind: c.kind,
+            why: c.why,
+            candidate_readings: c.candidate_readings || [],
+          })),
+        }),
+      });
+      if (r.ok) {
+        const j = (await r.json()) as { resolutions?: Resolution[] };
+        aiRes = Array.isArray(j?.resolutions) ? j.resolutions : [];
+      }
+    } catch {
+      /* soft-fail → fall back below */
+    }
+
+    // Merge: user's own answers win; then AI's; then a top-reading fallback for
+    // anything still unresolved that has candidate readings.
+    const bySlug = new Map<string, Resolution>();
+    for (const c of deck) {
+      const reads = c.candidate_readings || [];
+      if (reads.length) {
+        bySlug.set(slugOf(c), {
+          concept_slug: slugOf(c),
+          phrase: c.phrase,
+          kind: c.kind,
+          chosen_readings: [reads[0]],
+          answer_text: "",
+          source: "ai",
+          resolved_at: now,
+        });
+      }
+    }
+    for (const r of aiRes) bySlug.set(r.concept_slug, r);
+    for (const c of deck) {
+      const s = slugOf(c);
+      const a = answers[s];
+      if (a && (a.chosen.length || a.text.trim())) {
+        bySlug.set(s, {
+          concept_slug: s,
+          phrase: c.phrase,
+          kind: c.kind,
+          chosen_readings: a.chosen,
+          answer_text: a.text.trim(),
+          source: a.source,
+          resolved_at: now,
+        });
+      }
+    }
+
+    await commitResolutions([...bySlug.values()]);
+    setAutoBusy(false);
+    onClose();
+  }, [saving, autoBusy, deck, answers, detail.spaceId, commitResolutions, onClose]);
 
   // Esc closes (saving whatever's answered).
   useEffect(() => {
@@ -298,9 +378,9 @@ export function ResolutionStudio({
         alignItems: "center",
         justifyContent: "center",
         padding: 24,
-        background: "rgba(10,15,30,0.46)",
-        backdropFilter: "blur(7px)",
-        WebkitBackdropFilter: "blur(7px)",
+        background: "rgba(15,18,26,0.38)",
+        backdropFilter: "blur(10px)",
+        WebkitBackdropFilter: "blur(10px)",
         fontFamily: appleVibe.font.stack,
       }}
     >
@@ -310,19 +390,79 @@ export function ResolutionStudio({
         exit={{ opacity: 0, scale: 0.975, y: 8 }}
         transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
         onClick={(e) => e.stopPropagation()}
-        style={{ width: "min(1040px, 95vw)", maxHeight: "88vh" }}
+        style={{
+          position: "relative",
+          width: showDetail ? "min(1040px, 95vw)" : "min(620px, 94vw)",
+          maxHeight: "88vh",
+          transition: "width 0.34s cubic-bezier(0.22,1,0.36,1)",
+        }}
       >
+        {/* A deck of cards peeking behind — reinforces the calm "one question
+            at a time" flashcard feel. Only in the focused single-card view;
+            it falls away once the detail rail is opened. */}
+        {!showDetail && (
+          <>
+            <div aria-hidden style={deckCard(2)} />
+            <div aria-hidden style={deckCard(1)} />
+          </>
+        )}
         <GlassPanel
           tier="modal"
           accent={ACCENT}
           radius={24}
           style={{
+            position: "relative",
+            zIndex: 1,
             display: "flex",
             flexDirection: "column",
             maxHeight: "88vh",
             overflow: "hidden",
           }}
         >
+          {/* AI is resolving everything — a calm working state over the card. */}
+          {autoBusy && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 5,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 12,
+                background: "rgba(255,255,255,0.74)",
+                backdropFilter: "blur(3px)",
+                WebkitBackdropFilter: "blur(3px)",
+                textAlign: "center",
+                padding: 24,
+              }}
+            >
+              <Spark
+                className="animate-pulse"
+                style={{ width: 30, height: 30, color: ACCENT }}
+              />
+              <div
+                style={{
+                  fontSize: 14,
+                  fontWeight: 600,
+                  color: appleVibe.text.primary,
+                }}
+              >
+                Letting AI answer all {deck.length}…
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: appleVibe.text.tertiary,
+                  maxWidth: 280,
+                }}
+              >
+                Committing to the most likely reading for each, then sharpening
+                your objective.
+              </div>
+            </div>
+          )}
           {/* Header */}
           <div
             style={{
@@ -333,14 +473,13 @@ export function ResolutionStudio({
               borderBottom: `1px solid ${appleVibe.stroke.hairline}`,
             }}
           >
-            <Sparkle style={{ width: 16, height: 16, color: ACCENT }} strokeWidth={2.4} />
+            <Spark style={{ width: 16, height: 16, color: ACCENT }} strokeWidth={2.4} />
             <div style={{ minWidth: 0 }}>
               <div
                 style={{
-                  fontSize: 9.5,
-                  fontWeight: 700,
-                  letterSpacing: "0.08em",
-                  textTransform: "uppercase",
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  letterSpacing: "0.01em",
                   color: appleVibe.text.tertiary,
                 }}
               >
@@ -370,16 +509,67 @@ export function ResolutionStudio({
                 gap: 12,
               }}
             >
-              <span
+              {/* Escape hatch — let AI answer the whole questionnaire so the
+                  user never has to look through it. */}
+              <button
+                type="button"
+                onClick={() => void aiDecideAll()}
+                disabled={autoBusy || saving}
+                title="Let AI commit to the most likely answer for every question — skip the flashcards"
                 style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "6px 12px",
+                  borderRadius: 999,
+                  border: "none",
+                  background: `${ACCENT}12`,
+                  color: ACCENT,
                   fontSize: 11.5,
                   fontWeight: 600,
-                  color: appleVibe.text.tertiary,
-                  fontVariantNumeric: "tabular-nums",
+                  cursor: autoBusy || saving ? "default" : "pointer",
+                  whiteSpace: "nowrap",
                 }}
               >
-                {answeredCount} / {deck.length} resolved
-              </span>
+                <Spark
+                  className={autoBusy ? "animate-pulse" : undefined}
+                  style={{ width: 13, height: 13 }}
+                />
+                {autoBusy ? "Answering…" : "Auto-answer all"}
+              </button>
+              {showDetail && (
+                <span
+                  style={{
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                    color: appleVibe.text.tertiary,
+                    fontVariantNumeric: "tabular-nums",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {answeredCount} of {deck.length} clarified
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowDetail((v) => !v)}
+                aria-label={showDetail ? "Hide details" : "Show details"}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "5px 11px",
+                  borderRadius: 999,
+                  border: "none",
+                  background: showDetail ? `${ACCENT}14` : "rgba(15,23,42,0.05)",
+                  color: showDetail ? ACCENT : appleVibe.text.secondary,
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                {showDetail ? "Hide" : "Details"}
+              </button>
               <button
                 type="button"
                 onClick={() => void finish()}
@@ -408,7 +598,7 @@ export function ResolutionStudio({
                 minWidth: 0,
                 display: "flex",
                 flexDirection: "column",
-                padding: "18px 22px 16px",
+                padding: "22px 30px 18px",
                 overflowY: "auto",
               }}
             >
@@ -443,47 +633,45 @@ export function ResolutionStudio({
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -14 }}
                   transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-                  style={{ display: "flex", flexDirection: "column" }}
+                  style={{ display: "flex", flexDirection: "column", maxWidth: 600 }}
                 >
-                  {/* kind + meters */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {/* kind — a quiet color swatch + neutral label. The palette
+                      hue appears only as a small saturated dot (legible),
+                      never as text (pale-yellow-on-white was illegible). The
+                      deck is already ordered most-ambiguous-first, so no
+                      alarm badge is needed to flag importance. */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                     <span
                       style={{
-                        fontSize: 9,
-                        fontWeight: 700,
-                        letterSpacing: "0.04em",
-                        textTransform: "uppercase",
-                        color: ks.color,
-                        padding: "2px 7px",
-                        borderRadius: 5,
-                        background: `${ks.color}1A`,
+                        width: 7,
+                        height: 7,
+                        borderRadius: 999,
+                        background: ks.color,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        letterSpacing: "0.01em",
+                        color: appleVibe.text.tertiary,
                       }}
                     >
                       {ks.label}
                     </span>
-                    {current.leverage >= 0.6 && current.uncertainty >= 0.5 && (
-                      <span
-                        style={{
-                          fontSize: 8.5,
-                          fontWeight: 700,
-                          letterSpacing: "0.04em",
-                          color: ks.color,
-                        }}
-                      >
-                        ⚑ NEEDS MODELLING
-                      </span>
-                    )}
                   </div>
 
                   {/* phrase */}
                   <div
                     style={{
-                      marginTop: 12,
-                      fontSize: 23,
-                      fontWeight: 700,
-                      lineHeight: 1.22,
+                      marginTop: 14,
+                      fontSize: 22,
+                      fontWeight: 600,
+                      lineHeight: 1.28,
                       color: appleVibe.text.primary,
-                      letterSpacing: "-0.01em",
+                      letterSpacing: "-0.02em",
+                      fontFamily: appleVibe.font.display,
                     }}
                   >
                     “{current.phrase}”
@@ -505,48 +693,60 @@ export function ResolutionStudio({
                   {current.candidate_readings &&
                     current.candidate_readings.length > 0 && (
                       <div style={{ marginTop: 18 }}>
-                        <div style={microLabel}>
-                          Which do you mean? · pick any
-                        </div>
+                        <div style={microLabel}>Which of these fits?</div>
                         <div
                           style={{
                             display: "flex",
                             flexDirection: "column",
-                            gap: 8,
+                            gap: 3,
                           }}
                         >
                           {current.candidate_readings.map((r, i) => {
                             const sel = ans.chosen.includes(r);
+                            const hov = hoverReading === i && !sel;
                             return (
                               <button
                                 key={i}
                                 type="button"
                                 onClick={() => toggleReading(r)}
+                                onMouseEnter={() => setHoverReading(i)}
+                                onMouseLeave={() =>
+                                  setHoverReading((h) => (h === i ? null : h))
+                                }
                                 style={{
                                   display: "flex",
                                   alignItems: "flex-start",
-                                  gap: 10,
+                                  gap: 13,
                                   textAlign: "left",
-                                  padding: "11px 13px",
+                                  padding: "12px 12px",
                                   borderRadius: 12,
                                   cursor: "pointer",
-                                  border: `1px solid ${sel ? ACCENT : appleVibe.stroke.soft}`,
-                                  background: sel ? `${ACCENT}0F` : "rgba(255,255,255,0.6)",
-                                  transition: "all 0.14s ease",
+                                  border: "none",
+                                  // Bare at rest — no boxes or borders — for an
+                                  // image-2-style minimal list. Just a whisper
+                                  // of wash on hover / selection; the checkbox
+                                  // is the real selection signal.
+                                  background: sel
+                                    ? `${ACCENT}0A`
+                                    : hov
+                                      ? "rgba(15,23,42,0.035)"
+                                      : "transparent",
+                                  transition: "background 0.16s ease",
                                 }}
                               >
                                 <span
                                   style={{
                                     marginTop: 1,
-                                    width: 17,
-                                    height: 17,
-                                    borderRadius: 6,
+                                    width: 18,
+                                    height: 18,
+                                    borderRadius: 7,
                                     flexShrink: 0,
                                     display: "inline-flex",
                                     alignItems: "center",
                                     justifyContent: "center",
                                     border: `1.5px solid ${sel ? ACCENT : appleVibe.stroke.medium}`,
                                     background: sel ? ACCENT : "transparent",
+                                    transition: "all 0.16s ease",
                                   }}
                                 >
                                   {sel && (
@@ -558,8 +758,8 @@ export function ResolutionStudio({
                                 </span>
                                 <span
                                   style={{
-                                    fontSize: 12.5,
-                                    lineHeight: 1.45,
+                                    fontSize: 13,
+                                    lineHeight: 1.5,
                                     fontWeight: sel ? 600 : 500,
                                     color: sel
                                       ? appleVibe.text.primary
@@ -585,7 +785,7 @@ export function ResolutionStudio({
                         gap: 8,
                       }}
                     >
-                      <span>Or say it · type it</span>
+                      <span>In your own words</span>
                       {recorder.recording && (
                         <Waveform level={recorder.level} color={ACCENT} />
                       )}
@@ -593,10 +793,12 @@ export function ResolutionStudio({
                     <div
                       style={{
                         position: "relative",
-                        borderRadius: 12,
-                        border: `1px solid ${recorder.recording ? ACCENT : appleVibe.stroke.soft}`,
-                        background: "rgba(255,255,255,0.7)",
-                        transition: "border 0.14s ease",
+                        borderRadius: 14,
+                        border: `1px solid ${recorder.recording ? ACCENT : "transparent"}`,
+                        background: recorder.recording
+                          ? "rgba(255,255,255,0.85)"
+                          : "rgba(15,23,42,0.03)",
+                        transition: "all 0.16s ease",
                       }}
                     >
                       <textarea
@@ -608,7 +810,7 @@ export function ResolutionStudio({
                           })
                         }
                         placeholder="Answer in your own words…"
-                        rows={3}
+                        rows={2}
                         style={{
                           width: "100%",
                           resize: "none",
@@ -717,7 +919,7 @@ export function ResolutionStudio({
                                 }}
                                 title="Use this crisp version"
                               >
-                                <Sparkle
+                                <Spark
                                   style={{ width: 11, height: 11, color: ACCENT, flexShrink: 0 }}
                                   strokeWidth={2.4}
                                 />
@@ -764,11 +966,13 @@ export function ResolutionStudio({
                 </motion.div>
               </AnimatePresence>
 
-              {/* footer actions */}
+              {/* footer — minimal (image-2): a quiet AI shortcut on the left,
+                  a clean Back / Next pair on the right. No redundant Skip —
+                  Next already advances when nothing is chosen. */}
               <div
                 style={{
                   marginTop: "auto",
-                  paddingTop: 16,
+                  paddingTop: 20,
                   display: "flex",
                   alignItems: "center",
                   gap: 10,
@@ -777,39 +981,28 @@ export function ResolutionStudio({
                 <button
                   type="button"
                   onClick={letAiDecide}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "8px 12px",
-                    borderRadius: 999,
-                    border: `1px solid ${appleVibe.stroke.soft}`,
-                    background: "rgba(255,255,255,0.6)",
-                    color: appleVibe.text.secondary,
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
+                  style={textBtn(appleVibe.text.tertiary)}
                   title="Let AI pick the most likely answer"
                 >
-                  <Sparkle style={{ width: 12, height: 12 }} strokeWidth={2.4} />
+                  <Spark style={{ width: 12, height: 12 }} strokeWidth={2.4} />
                   Let AI decide
                 </button>
 
-                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                <div
+                  style={{
+                    marginLeft: "auto",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
                   {index > 0 && (
                     <button
                       type="button"
                       onClick={() => go(-1)}
-                      style={ghostBtn()}
+                      style={textBtn(appleVibe.text.secondary)}
                     >
-                      <ChevronLeft style={{ width: 15, height: 15 }} strokeWidth={2.4} />
                       Back
-                    </button>
-                  )}
-                  {!last && !isAnswered && (
-                    <button type="button" onClick={() => go(1)} style={ghostBtn()}>
-                      Skip
                     </button>
                   )}
                   {last ? (
@@ -833,42 +1026,57 @@ export function ResolutionStudio({
                       onClick={() => go(1)}
                       style={primaryBtn(false)}
                     >
-                      {isAnswered ? "Next" : "Next"}
+                      Next
                     </button>
                   )}
                 </div>
               </div>
             </div>
 
-            {/* ── Scope rail ── */}
-            <div
-              style={{
-                width: 340,
-                flexShrink: 0,
-                borderLeft: `1px solid ${appleVibe.stroke.hairline}`,
-                background: "rgba(248,250,253,0.6)",
-                padding: "18px 18px",
-                overflowY: "auto",
-                display: "flex",
-                flexDirection: "column",
-                gap: 16,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <Ring value={deck.length ? answeredCount / deck.length : 0} color={ACCENT} />
+            {/* ── Detail rail — hidden by default, revealed via "Details" so
+                the focus stays on the question. ── */}
+            {showDetail && (
+              <motion.div
+                initial={{ opacity: 0, x: 18 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                style={{
+                  width: 340,
+                  flexShrink: 0,
+                  borderLeft: `1px solid ${appleVibe.stroke.hairline}`,
+                  background: "rgba(248,250,253,0.6)",
+                  padding: "18px 18px",
+                  overflowY: "auto",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 16,
+                }}
+              >
+              <div style={{ display: "flex", alignItems: "center", gap: 13 }}>
+                <Ring
+                  value={deck.length ? answeredCount / deck.length : 0}
+                  color={ACCENT}
+                />
                 <div>
-                  <div style={microLabel}>Your scope</div>
                   <div
                     style={{
-                      fontSize: 13,
-                      fontWeight: 700,
+                      fontSize: 14,
+                      fontWeight: 600,
+                      letterSpacing: "-0.01em",
                       color: appleVibe.text.primary,
                     }}
                   >
                     Sharpening
                   </div>
-                  <div style={{ fontSize: 11, color: appleVibe.text.tertiary }}>
-                    {answeredCount} of {deck.length} levers nailed
+                  <div
+                    style={{
+                      marginTop: 2,
+                      fontSize: 11.5,
+                      lineHeight: 1.4,
+                      color: appleVibe.text.tertiary,
+                    }}
+                  >
+                    Clearer with every answer
                   </div>
                 </div>
               </div>
@@ -895,7 +1103,7 @@ export function ResolutionStudio({
               {/* resolved */}
               {answeredCount > 0 && (
                 <div>
-                  <div style={microLabel}>Resolved</div>
+                  <div style={microLabel}>Clarified</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {deck.filter(answeredOf).map((c) => {
                       const a = answers[slugOf(c)];
@@ -941,7 +1149,7 @@ export function ResolutionStudio({
                               {c.phrase}
                             </span>
                             {a.source === "ai" && (
-                              <Sparkle
+                              <Spark
                                 style={{
                                   width: 10,
                                   height: 10,
@@ -979,8 +1187,8 @@ export function ResolutionStudio({
               {/* remaining */}
               {answeredCount < deck.length && (
                 <div>
-                  <div style={microLabel}>Still to nail</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={microLabel}>Still to clarify</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                     {deck.map((c, i) =>
                       answeredOf(c) ? null : (
                         <button
@@ -990,21 +1198,36 @@ export function ResolutionStudio({
                           style={{
                             display: "flex",
                             alignItems: "center",
-                            gap: 7,
-                            padding: "6px 8px",
-                            borderRadius: 8,
+                            gap: 8,
+                            padding: "8px 10px",
+                            borderRadius: 9,
                             border: "none",
-                            background:
-                              i === index ? "rgba(37,99,235,0.08)" : "transparent",
+                            background: i === index ? `${ACCENT}0F` : "transparent",
                             cursor: "pointer",
                             textAlign: "left",
                           }}
                         >
+                          {/* a quiet position dot — the active one lights up.
+                              Replaces the old leverage mini-bar, which read as
+                              an unexplained blue dash. */}
                           <span
                             style={{
-                              fontSize: 11.5,
-                              fontWeight: 500,
-                              color: appleVibe.text.secondary,
+                              width: 5,
+                              height: 5,
+                              borderRadius: 999,
+                              flexShrink: 0,
+                              background:
+                                i === index ? ACCENT : "rgba(15,23,42,0.18)",
+                            }}
+                          />
+                          <span
+                            style={{
+                              fontSize: 12,
+                              fontWeight: i === index ? 600 : 500,
+                              color:
+                                i === index
+                                  ? appleVibe.text.primary
+                                  : appleVibe.text.secondary,
                               overflow: "hidden",
                               textOverflow: "ellipsis",
                               whiteSpace: "nowrap",
@@ -1012,33 +1235,14 @@ export function ResolutionStudio({
                           >
                             {c.phrase}
                           </span>
-                          <span
-                            style={{
-                              marginLeft: "auto",
-                              width: 28,
-                              height: 3,
-                              borderRadius: 999,
-                              background: "rgba(15,23,42,0.08)",
-                              overflow: "hidden",
-                              flexShrink: 0,
-                            }}
-                          >
-                            <span
-                              style={{
-                                display: "block",
-                                height: "100%",
-                                width: `${Math.round(c.leverage * 100)}%`,
-                                background: ACCENT,
-                              }}
-                            />
-                          </span>
                         </button>
                       ),
                     )}
                   </div>
                 </div>
               )}
-            </div>
+              </motion.div>
+            )}
           </div>
         </GlassPanel>
       </motion.div>
@@ -1046,28 +1250,50 @@ export function ResolutionStudio({
   );
 }
 
+// One calm, sentence-case section label for the whole modal — matches the
+// module's `appleVibe.label` spec: hierarchy from weight + spacing, never
+// all-caps shouting. Replaces the old 9.5px uppercase tracked treatment that
+// drummed the same eyebrow style across seven sections.
 const microLabel: React.CSSProperties = {
-  fontSize: 9.5,
+  fontSize: 11,
   fontWeight: 600,
-  letterSpacing: "0.06em",
-  textTransform: "uppercase",
-  color: appleVibe.text.tertiary,
-  marginBottom: 8,
+  letterSpacing: "0.01em",
+  color: "#475569",
+  marginBottom: 10,
 };
 
-function ghostBtn(): React.CSSProperties {
+/** A bare text button (no border / fill) — the quiet secondary-action style
+ *  for the minimal footer (Back, Let AI decide). */
+function textBtn(color: string): React.CSSProperties {
   return {
     display: "inline-flex",
     alignItems: "center",
-    gap: 4,
-    padding: "8px 14px",
+    gap: 5,
+    padding: "8px 12px",
     borderRadius: 999,
-    border: `1px solid ${appleVibe.stroke.soft}`,
-    background: "rgba(255,255,255,0.6)",
-    color: appleVibe.text.secondary,
-    fontSize: 12,
+    border: "none",
+    background: "transparent",
+    color,
+    fontSize: 12.5,
     fontWeight: 600,
     cursor: "pointer",
+  };
+}
+
+/** A card in the deck peeking behind the active flashcard. Same size as the
+ *  panel, nudged down + scaled in so only the bottom/side lip shows. Layer 1
+ *  sits just behind; layer 2 a touch further back and fainter. */
+function deckCard(layer: number): React.CSSProperties {
+  return {
+    position: "absolute",
+    inset: 0,
+    borderRadius: 24,
+    background: "rgba(255,255,255,0.82)",
+    border: `1px solid ${appleVibe.stroke.hairline}`,
+    boxShadow: "0 18px 44px -24px rgba(11,18,40,0.28)",
+    transform: `translateY(${layer * 12}px) scale(${1 - layer * 0.02})`,
+    opacity: layer === 1 ? 0.85 : 0.62,
+    zIndex: 0,
   };
 }
 function primaryBtn(busy: boolean): React.CSSProperties {
@@ -1084,7 +1310,7 @@ function primaryBtn(busy: boolean): React.CSSProperties {
     fontWeight: 650,
     cursor: busy ? "default" : "pointer",
     opacity: busy ? 0.7 : 1,
-    boxShadow: `0 8px 20px -6px ${ACCENT}80`,
+    boxShadow: `0 8px 22px -10px ${ACCENT}66`,
   };
 }
 
@@ -1130,17 +1356,19 @@ function Ring({ value, color }: { value: number; color: string }) {
         transform="rotate(-90 23 23)"
         style={{ transition: "stroke-dashoffset 0.4s ease" }}
       />
-      <text
-        x={23}
-        y={27}
-        textAnchor="middle"
-        fontSize={12}
-        fontWeight={700}
-        fill={color}
-        fontFamily={appleVibe.font.stack}
-      >
-        {Math.round(pct * 100)}
-      </text>
+      {/* Ambient fill, not a score. A big "0" at the start read as
+          "you've done nothing" — the opposite of calm. The arc carries
+          progress; a check lands only when every lever is clarified. */}
+      {pct >= 1 && (
+        <path
+          d="M17 23.5 l4 4 l9 -9"
+          fill="none"
+          stroke={color}
+          strokeWidth={3}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
     </svg>
   );
 }

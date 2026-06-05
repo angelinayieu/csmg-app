@@ -25,7 +25,7 @@ import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { stashPendingIntake } from "@/components/landing/pending-intake";
 import { AuthModal } from "@/components/auth/auth-modal";
 import { StarburstSVG } from "@/components/landing/starburst-svg";
-import { CardGlyph } from "@/components/landing/card-glyph";
+import { CardIcon } from "@/components/landing/card-icon";
 import { CardDecomposition } from "@/components/landing/card-decomposition";
 import { InterAxisLogo } from "@/components/brand/interaxis-logo";
 
@@ -305,15 +305,14 @@ export function LandingV2({
                             "radial-gradient(120% 80% at 80% 0%, rgba(255,255,255,0.7), rgba(255,255,255,0) 60%)",
                         }}
                       />
-                      {/* Glyph on a white rounded "icon tile" — the base fits
-                          the graph with a little margin so it reads as an app
-                          icon sitting on the colored banner. */}
-                      <div className="absolute left-3.5 top-3 flex items-center justify-center rounded-xl bg-white p-1.5 shadow-[0_2px_8px_-3px_rgba(11,18,40,0.18)] ring-1 ring-black/[0.06]">
-                        <div className="h-9 w-14">
-                          <CardGlyph
+                      {/* Meaning-first mark on a white rounded "icon tile" — a
+                          square app-icon sitting on the colored banner. Tilts on
+                          card hover (the akiboe tile lift). */}
+                      <div className="absolute left-3.5 top-3 flex items-center justify-center rounded-xl bg-white p-2 shadow-[0_2px_8px_-3px_rgba(11,18,40,0.18)] ring-1 ring-black/[0.06] transition-transform duration-300 ease-[cubic-bezier(0.2,0.7,0.2,1)] group-hover:-rotate-[4deg] group-hover:scale-105">
+                        <div className="h-9 w-9">
+                          <CardIcon
                             templateId={card.id}
-                            accent={card.accent}
-                            animated
+                            accent={card.bannerAccent ?? card.accent}
                           />
                         </div>
                       </div>
@@ -358,7 +357,7 @@ export function LandingV2({
                             className="whitespace-nowrap text-[11px] font-semibold tracking-[-0.01em]"
                             style={{ color: appleVibe.text.secondary }}
                           >
-                            akiboe Team
+                            akiboe team
                           </span>
                           <VerifiedSeal />
                         </div>
@@ -367,8 +366,10 @@ export function LandingV2({
                           <span
                             className="block rounded-full px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] transition-opacity duration-200 group-hover:opacity-0"
                             style={{
-                              color: card.accent,
-                              background: `${card.accent}1a`,
+                              // Colored category pill — tinted by the real
+                              // per-template color (not the monochrome ink).
+                              color: card.bannerAccent ?? card.accent,
+                              background: `${card.bannerAccent ?? card.accent}1a`,
                               fontFamily: appleVibe.font.display,
                             }}
                           >

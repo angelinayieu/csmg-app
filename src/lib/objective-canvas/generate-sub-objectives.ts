@@ -17,6 +17,7 @@ import {
 import type { ObjectiveAnnotation } from "./generate-annotations";
 import type { RelevantCanonicalConcept } from "./canonical-concept-lookup";
 import { computeLayerPositionLabel, type ObjectiveStack } from "./layer-model";
+import type { ContextConcept } from "./context-frontier";
 
 interface LlmShape {
   category?: unknown;
@@ -29,6 +30,7 @@ interface LlmShape {
     lens_coverage?: unknown;
     layer_ordinals?: unknown;
     layer_position_label?: unknown;
+    frontier_relation?: unknown;
   }>;
 }
 
@@ -77,6 +79,14 @@ export interface GenerateSubObjectivesOptions {
    *  proposal carries layer_ordinals + layer_position_label.
    *  Undefined preserves legacy behavior (no layer tags). */
   objectiveStack?: ObjectiveStack;
+  /** Context-frontier (CONTEXT_FRONTIER_PLAN.md) — the user's PRIOR ideas
+   *  (role=prior_ideas). Drives the COVERED FRONTIER anti-echo block +
+   *  forces each proposal to emit frontier_relation. Empty/undefined →
+   *  legacy behavior (no frontier). */
+  coveredFrontier?: ContextConcept[];
+  /** Context-frontier — reference material / constraints (role=reference)
+   *  injected as grounding to honor. Empty/undefined → omitted. */
+  contextGrounding?: ContextConcept[];
 }
 
 export interface GeneratedSubObjectives {
@@ -123,6 +133,11 @@ export async function generateSubObjectiveProposals(
   const hasLayerStack =
     !!opts.objectiveStack && opts.objectiveStack.layers.length > 0;
 
+  // Context-frontier — only inject the covered-frontier block (+ require
+  // frontier_relation) when the user actually has prior ideas to surpass.
+  const hasFrontier =
+    opts.coveredFrontier?.some((c) => c.role === "prior_ideas") ?? false;
+
   const raw = await llmJSON<LlmShape>({
     system: buildSystemPrompt(intent, opts.hcdMode === true, hasLayerStack),
     user: buildUserPrompt({
@@ -136,8 +151,10 @@ export async function generateSubObjectiveProposals(
       priorConcepts: opts.priorConcepts,
       recentConcepts: opts.recentConcepts,
       objectiveStack: opts.objectiveStack,
+      coveredFrontier: opts.coveredFrontier,
+      contextGrounding: opts.contextGrounding,
     }),
-    responseSchema: buildResponseSchema(hasLens, hasLayerStack),
+    responseSchema: buildResponseSchema(hasLens, hasLayerStack, hasFrontier),
     temperature,
     maxTokens: 2400,
   });

@@ -1,32 +1,22 @@
 // ── Synergy avatar uploader ──
 //
-// Click-to-upload. Resizes the picked image to 256×256 client-side
-// (via canvas) so we don't burn Storage quota on multi-MB phones
-// photos. Uploads via the Supabase Storage browser client, then
-// PATCHes the profile with the public URL.
-//
-// Bucket policy (migration 20260808_tier1_polish.sql):
-//   - Files stored at `<user_id>/<filename>` so RLS gates writes
-//   - Public read so the URL works in inbox cards + room canvases
-//     without auth headers
-//   - 512 KB cap + image/{png,jpeg,webp} allowlist enforced at the
-//     bucket level
+// Click-to-upload avatar control for the Synergy profile. The actual
+// resize → Storage upload → profile PATCH lives in the shared
+// `@/lib/avatar-upload` helper (also used by /app/profile) — this is
+// just the Synergy-styled chrome around it.
 
 "use client";
 
 import { useRef, useState } from "react";
 import { Camera, Loader2, Trash2, UserCircle2 } from "lucide-react";
 import { toast } from "@/lib/hooks/use-toast";
-import { createClient } from "@/lib/supabase/client";
+import { uploadAvatar, removeAvatar } from "@/lib/avatar-upload";
 
 interface Props {
   userId: string;
   currentUrl: string | null;
   onChanged: (newUrl: string | null) => void;
 }
-
-const TARGET_SIZE = 256;
-const MAX_BYTES = 256 * 1024; // 256 KB after resize (well under bucket's 512 KB cap)
 
 export function SynergyAvatarUploader({
   userId,
@@ -47,69 +37,9 @@ export function SynergyAvatarUploader({
     e.target.value = ""; // reset so picking the same file again re-fires
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please pick an image file");
-      return;
-    }
-
     setUploading(true);
     try {
-      const resized = await resizeToSquare(file, TARGET_SIZE);
-      // Output picker: png if input was png (preserves alpha), else webp
-      // for best compression. Both are in the bucket allowlist.
-      const outputType = file.type === "image/png" ? "image/png" : "image/webp";
-      const blob = await canvasToBlob(resized, outputType, 0.85);
-      if (blob.size > MAX_BYTES) {
-        toast.error("Image too large after resize", {
-          description: "Try a smaller original — under 1 MB before resize works best.",
-        });
-        return;
-      }
-
-      const supabase = createClient();
-      // Path convention: <user_id>/avatar-<timestamp>.<ext>. The
-      // timestamp prevents CDN-cache hits on overwrite; the user_id
-      // prefix satisfies the RLS folder check from the migration.
-      const ext = outputType === "image/png" ? "png" : "webp";
-      const path = `${userId}/avatar-${Date.now()}.${ext}`;
-
-      const { error: upErr } = await supabase.storage
-        .from("synergy_avatars")
-        .upload(path, blob, {
-          contentType: outputType,
-          cacheControl: "3600",
-          upsert: false,
-        });
-      if (upErr) throw upErr;
-
-      // Public URL
-      const { data: urlData } = supabase.storage
-        .from("synergy_avatars")
-        .getPublicUrl(path);
-      const publicUrl = urlData.publicUrl;
-
-      // Persist to profile via existing PATCH (we need to extend the
-      // profile endpoint to accept avatar_url — same idiom as
-      // notification_email).
-      const res = await fetch("/api/synergy/profiles/me", {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ avatar_url: publicUrl }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(
-          body.error ?? `${res.status} ${res.statusText}`,
-        );
-      }
-
-      // Cleanup: delete any older avatar files for this user. Best-
-      // effort; Storage list+delete is async + RLS-gated. Failures
-      // are silent.
-      cleanupOldAvatars(supabase, userId, path).catch((err) =>
-        console.warn("[avatar] cleanup failed:", err),
-      );
-
+      const publicUrl = await uploadAvatar(file, userId);
       onChanged(publicUrl);
       toast.success("Avatar updated");
     } catch (err) {
@@ -123,25 +53,7 @@ export function SynergyAvatarUploader({
     if (uploading || removing || !currentUrl) return;
     setRemoving(true);
     try {
-      const res = await fetch("/api/synergy/profiles/me", {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ avatar_url: null }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `${res.status} ${res.statusText}`);
-      }
-      // Delete the underlying file too (best-effort)
-      try {
-        const path = pathFromPublicUrl(currentUrl, userId);
-        if (path) {
-          const supabase = createClient();
-          await supabase.storage.from("synergy_avatars").remove([path]);
-        }
-      } catch {
-        // ignore — orphan file in storage is fine
-      }
+      await removeAvatar(userId, currentUrl);
       onChanged(null);
       toast.success("Avatar removed");
     } catch (err) {
@@ -218,61 +130,4 @@ export function SynergyAvatarUploader({
       />
     </div>
   );
-}
-
-// ── Client-side resize helpers ──
-
-async function resizeToSquare(file: File, size: number): Promise<HTMLCanvasElement> {
-  const bitmap = await createImageBitmap(file);
-  // Crop to a centered square first so non-square photos don't squish
-  const min = Math.min(bitmap.width, bitmap.height);
-  const sx = (bitmap.width - min) / 2;
-  const sy = (bitmap.height - min) / 2;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas 2d context unavailable");
-  ctx.drawImage(bitmap, sx, sy, min, min, 0, 0, size, size);
-  return canvas;
-}
-
-function canvasToBlob(
-  canvas: HTMLCanvasElement,
-  type: string,
-  quality: number,
-): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error("toBlob returned null"));
-      },
-      type,
-      quality,
-    );
-  });
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function cleanupOldAvatars(supabase: any, userId: string, currentPath: string) {
-  const { data: files } = await supabase.storage
-    .from("synergy_avatars")
-    .list(userId);
-  if (!files) return;
-  const stale = (files as Array<{ name: string }>)
-    .map((f) => `${userId}/${f.name}`)
-    .filter((p) => p !== currentPath);
-  if (stale.length === 0) return;
-  await supabase.storage.from("synergy_avatars").remove(stale);
-}
-
-function pathFromPublicUrl(url: string, userId: string): string | null {
-  // Public URLs look like:
-  //   https://<project>.supabase.co/storage/v1/object/public/synergy_avatars/<userId>/<filename>
-  const marker = `/synergy_avatars/${userId}/`;
-  const i = url.indexOf(marker);
-  if (i === -1) return null;
-  return `${userId}/${url.slice(i + marker.length)}`;
 }

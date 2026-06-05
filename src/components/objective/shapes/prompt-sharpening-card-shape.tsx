@@ -449,8 +449,9 @@ function PromptSharpeningRenderer({
   }, [spaceId, shape.id, editor]);
 
   // No-crop on spawn: grow the card to fit its content (the loading view's
-  // title + activity + stage list, or long sharpened text). Disabled while
-  // expanded — that state has a fixed height with an internal scroll.
+  // title + activity + stage list, the full title + sharpened text, and the
+  // "Optimize for" salience rows once they land). Disabled while expanded —
+  // that state has a fixed height with an internal scroll.
   const contentRef = useRef<HTMLDivElement>(null);
   useAutoFitHeight(
     editor,
@@ -458,7 +459,15 @@ function PromptSharpeningRenderer({
     "prompt-sharpening",
     shape.props.h,
     contentRef,
-    [loading, title, sharpenedPrompt, chips.length, expanded],
+    [
+      loading,
+      title,
+      sharpenedPrompt,
+      chips.length,
+      expanded,
+      salience,
+      saliencePending,
+    ],
     !expanded,
   );
 
@@ -612,22 +621,18 @@ function PromptSharpeningRenderer({
           )}
         </div>
 
-        {/* Distilled title */}
+        {/* Distilled title — shown in FULL (no line clamp) so the spawned card
+            never cuts it off. The card auto-fits its height to the title's
+            real length (the distilled title is compact by design). */}
         <div
           style={{
             marginTop: 9,
             fontSize: 15.5,
             fontWeight: 700,
             // Roomier line-height + a hair of bottom padding so descenders
-            // (p, g, y) are never clipped. While loading the title isn't
-            // clamped (it's a fixed short string); the real distilled title
-            // clamps to 2 lines.
+            // (p, g, y) are never clipped.
             lineHeight: 1.32,
             color: appleVibe.text.primary,
-            display: loading ? "block" : "-webkit-box",
-            WebkitLineClamp: loading ? undefined : 2,
-            WebkitBoxOrient: "vertical",
-            overflow: loading ? "visible" : "hidden",
             paddingBottom: 1,
           }}
         >
@@ -639,7 +644,9 @@ function PromptSharpeningRenderer({
         </div>
 
         {/* Sharpened prompt — hidden while generating; the activity view below
-            carries the in-progress state. */}
+            carries the in-progress state. Shown in FULL (no line clamp): it's a
+            1–2 sentence rewrite, and the card auto-fits its height so the
+            sharpened objective is never clipped on spawn. */}
         {!loading && (
           <div
             style={{
@@ -648,10 +655,6 @@ function PromptSharpeningRenderer({
               fontWeight: 450,
               lineHeight: 1.42,
               color: appleVibe.text.secondary,
-              display: "-webkit-box",
-              WebkitLineClamp: expanded ? 3 : 3,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
             }}
           >
             {sharpenedPrompt}

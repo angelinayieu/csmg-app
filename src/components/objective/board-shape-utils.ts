@@ -26,6 +26,7 @@ import {
   JournalCardShapeUtil,
 } from "./canvas-interactions/voice-journal-board";
 import { CommentCardShapeUtil } from "./shapes/comment-card-shape";
+import { SysFrameShapeUtil } from "./shapes/sys-frame-shape";
 
 /** Every custom shape util the objective whiteboard registers, in registration
  *  order. Reused by the main <Tldraw> mount AND by static <TldrawImage>
@@ -49,4 +50,7 @@ export const CUSTOM_SHAPE_UTILS = [
   VoiceNoteCardShapeUtil,
   JournalCardShapeUtil,
   CommentCardShapeUtil,
+  // Grouping underlay for a forked-out set of cards (decompose / ops). Was built
+  // but never registered — without this, creating one throws "unknown shape".
+  SysFrameShapeUtil,
 ];

@@ -203,6 +203,22 @@ export function MinimalHome({
 
   const initial = (displayName || email || "?").trim().charAt(0).toUpperCase();
 
+  // Avatar (set on /app/profile) — fetched client-side so the chip shows
+  // the user's photo when present; falls back to the initial chip.
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void fetch("/api/me/profile")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (alive && d?.avatarUrl) setAvatarUrl(d.avatarUrl as string);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   return (
     <>
       {/* Whiteboard surface — fades in behind the chatbox once composing.
@@ -239,7 +255,7 @@ export function MinimalHome({
             deliberate nav instead of two lonely items pinned to the edges.
             Sticky so it floats as the library scrolls under it. */}
         <header
-          className="sticky top-3 z-20 mx-auto flex max-w-[640px] items-center justify-between gap-3 rounded-full py-2 pl-3 pr-2.5"
+          className="sticky top-3 z-20 mx-auto flex max-w-[1100px] items-center justify-between gap-3 rounded-full py-2 pl-3 pr-2.5"
           style={{
             background: "rgba(255,255,255,0.72)",
             backdropFilter: "saturate(180%) blur(20px)",
@@ -294,10 +310,15 @@ export function MinimalHome({
                 }}
               >
                 <div
-                  className="flex h-8 w-8 items-center justify-center rounded-full text-[13px] font-semibold text-white"
+                  className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full text-[13px] font-semibold text-white"
                   style={{ background: appleVibe.stage.features }}
                 >
-                  {initial}
+                  {avatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    initial
+                  )}
                 </div>
                 <span
                   className="text-[13px] font-semibold"
@@ -323,10 +344,15 @@ export function MinimalHome({
                     style={{ borderBottom: `1px solid ${appleVibe.stroke.soft}` }}
                   >
                     <div
-                      className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-[13px] font-semibold text-white"
+                      className="flex h-9 w-9 flex-shrink-0 items-center justify-center overflow-hidden rounded-full text-[13px] font-semibold text-white"
                       style={{ background: appleVibe.stage.features }}
                     >
-                      {initial}
+                      {avatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        initial
+                      )}
                     </div>
                     <div className="min-w-0 leading-tight">
                       <div
@@ -352,7 +378,7 @@ export function MinimalHome({
                       type="button"
                       onClick={() => {
                         setProfileOpen(false);
-                        router.push("/app/settings");
+                        router.push("/app/profile");
                       }}
                       className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-black/[0.04]"
                       style={{ color: appleVibe.text.primary }}
@@ -426,8 +452,10 @@ export function MinimalHome({
                 letterSpacing: "-0.02em",
               }}
             >
-              {greeting},{" "}
-              <span style={{ color: "#8B93C4" }}>{displayName}</span>
+              <span className="font-bold">
+                {greeting},{" "}
+                <span style={{ color: "#8B93C4" }}>{displayName}</span>
+              </span>
               <br />
               <span className="relative inline-block">
                 {/* reserve width with the longest prompt so layout is stable */}

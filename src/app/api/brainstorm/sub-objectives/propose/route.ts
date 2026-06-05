@@ -40,6 +40,7 @@ import { normalizeAnnotations } from "@/lib/objective-canvas/normalize-annotatio
 import { logDecision } from "@/lib/objective-canvas/decision-log";
 import { loadRelevantCanonicalConcepts } from "@/lib/objective-canvas/canonical-concept-lookup";
 import { loadConceptMemoryFeed } from "@/lib/objective-canvas/concept-memory-feed";
+import { getObjectiveContextScope } from "@/lib/objective-canvas/context-frontier";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -204,6 +205,13 @@ export async function POST(req: NextRequest) {
     maxCharsPerSnippet: 450,
   });
 
+  // ── Context-frontier read (CONTEXT_FRONTIER_PLAN.md) ──
+  // The user's PRIOR ideas (surpass) + reference material (honor). Feeds the
+  // COVERED FRONTIER anti-echo block so decomposition AUGMENTS rather than
+  // repeats what the user already supplied. Soft-fails to empty — absent
+  // context = byte-identical legacy behavior.
+  const contextScope = await getObjectiveContextScope(db, spaceId);
+
   // ── Load parent objective annotations (Variant Lab lens) ──
   // Annotations are persisted on the core goal (parent_goal_id IS
   // NULL). Step 1 fires generation right after clarify/complete, so
@@ -275,6 +283,13 @@ export async function POST(req: NextRequest) {
       // identically to pre-11.A.
       objectiveStack:
         space.synthesis_data?.objective_canvas?.layers ?? undefined,
+      // Context-frontier — prior ideas to surpass + reference to honor.
+      coveredFrontier:
+        contextScope.priorIdeas.length > 0
+          ? contextScope.priorIdeas
+          : undefined,
+      contextGrounding:
+        contextScope.reference.length > 0 ? contextScope.reference : undefined,
     });
 
     if (mode === "variant" && existingBlock) {

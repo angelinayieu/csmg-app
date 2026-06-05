@@ -1,7 +1,15 @@
 # Context Channel + Metadata Frontier — Build Plan
 
-**Status:** Proposed (2026-06-04). Extends, does not fork: [[project_intake_depth_salience]],
-[[project_prompt_sharpening_card]], [[project_canvas_ai_operations]].
+**Status:** Phases 0–3 + chatbox pane BUILT & type-clean (2026-06-05). Extends, does not fork:
+[[project_intake_depth_salience]], [[project_prompt_sharpening_card]], [[project_canvas_ai_operations]].
+
+**Build log (2026-06-05):**
+- Phase 0 — `src/lib/objective-canvas/context-frontier.ts` (anchor + `library_object_sources`/`library_object_notes` writers + `recordContextConcept` + `getObjectiveContextScope`); `LibraryObjectType` += `context_anchor`/`context_concept`. Migration-free.
+- Phase 1 — `POST/GET /api/objective/[spaceId]/context`; chatbox "Context" pane (Ideas↔Reference toggle) in `chatbox-card-shape.tsx`.
+- Phase 2 — `src/lib/objective-canvas/extract-context-frontier.ts` (faithful Sonnet-4-6 extraction → ContextConcept[]).
+- Phase 3 — `decompose-prompt.ts` COVERED FRONTIER + USER CONTEXT TO HONOR blocks + `frontier_relation` schema; `generate-sub-objectives.ts` + `sub-objective-state.ts` thread it through; `sub-objectives/propose` route feeds `getObjectiveContextScope`.
+- Phase 5 (visualization — SHIPPED within owned files): per-proposal **provenance chip** (`FrontierRelationChip` in `sub-objective-picker-card.tsx`, both render paths); chatbox pane **"Read as N concepts"** chips (GET /context + poll); **FrontierStrip** (covered-vs-new tally + prior-idea chips) in both picker views.
+- **Remaining (all require contested board/library files — coordinate first):** Phase 4 (glossary `source:'context'` — blocked by dirty `library-rail.tsx`); Phase 5 board surfaces (context underlines, on-board frontier map — need `whiteboard-base.tsx`/`board-shape-utils.ts`/`tldraw-shapes.d.ts`, all parallel-owned + currently failing typecheck); Phase 7 (snapshot harvest). Live-browser verification still pending (needs an authed draft board).
 **One-line:** Give the user a first-class place to dump prior context/ideas, turn that text into
 the *same* metadata namespace the objective already uses (`concept_slug`), and feed it downstream as
 a **covered frontier to surpass** — not as grounding to echo back — with visible provenance on every

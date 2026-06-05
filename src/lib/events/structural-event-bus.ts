@@ -46,7 +46,14 @@ export type Pipeline =
   // / lab_insight_emitted / lab_score_recorded events. See the
   // 20260629 migration for the matching DB CHECK + lab_experiments /
   // lab_insights tables.
-  | "insight_lab";
+  | "insight_lab"
+  // SpecForge — one pipeline_run per "Forge full spec" click, with N
+  // specforge_engine_runs rows (one per chain engine). Streams
+  // specforge_engine_started / specforge_engine_completed events so a
+  // future SSE-driven progress chip + side-panel timeline can subscribe
+  // without a parallel channel. See migration 20260924 + the persist
+  // service at src/lib/objective-canvas/specforge/persist-run.ts.
+  | "specforge";
 
 export interface StartPipelineRunOpts {
   spaceId: string;

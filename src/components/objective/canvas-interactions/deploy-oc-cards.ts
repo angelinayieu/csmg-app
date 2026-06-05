@@ -22,6 +22,7 @@ import {
 import type { OcCardShape, OcCardKind } from "../shapes/oc-card-shape";
 import { layoutSystemsGraph } from "@/lib/objective-canvas/layout-systems-graph";
 import { reserveSpace } from "./placement";
+import { frameForkedGroup } from "./group-frame";
 
 /** Fire to ask the board to decompose the current objective into cards. */
 export const DECOMPOSE_INTO_CARDS_EVENT = "objective-board:decompose-into-cards";
@@ -116,6 +117,7 @@ export function deployOcCards(
 
   const idByObject = new Map<string, TLShapeId>();
   const cardIds: TLShapeId[] = [];
+  const laneLabelIds: TLShapeId[] = [];
   const allCreated: TLShapeId[] = [];
 
   // ── Quiet swimlane labels (no boxes — a soft label + whitespace keep it
@@ -138,6 +140,7 @@ export function deployOcCards(
       },
       meta: { ocLaneLabel: true },
     });
+    laneLabelIds.push(labelId);
     allCreated.push(labelId);
   }
 
@@ -215,6 +218,21 @@ export function deployOcCards(
       },
     ]);
   }
+
+  // ── Grouping underlay + fork connector ── wrap the whole decomposition in a
+  //    frosted backdrop (so it reads as ONE system, not loose cards) and tether
+  //    it back to the objective it was forked out of. The frame goes to the back
+  //    inside the helper; include it in the selection so the fit-zoom frames it.
+  const objectiveSource =
+    editor.getCurrentPageShapes().find((s) => s.type === "objective-card") ??
+    editor.getCurrentPageShapes().find((s) => s.type === "room-card");
+  const frameId = frameForkedGroup(editor, {
+    childIds: [...cardIds, ...laneLabelIds],
+    sourceShapeId: objectiveSource?.id ?? null,
+    label: "Decomposition",
+    accent: "#7C3AED",
+  });
+  if (frameId) allCreated.push(frameId);
 
   if (allCreated.length > 0) {
     editor.select(...allCreated);

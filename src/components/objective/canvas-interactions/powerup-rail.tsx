@@ -9,6 +9,7 @@
 // rail). Mounted once in WhiteboardBase.
 
 import { useEffect, useState, type CSSProperties } from "react";
+import { usePanel, setPanel } from "@/lib/objective-canvas/board-panel-signal";
 import { useValue, type Editor, type TLShapeId } from "tldraw";
 import {
   Wand2,
@@ -24,6 +25,7 @@ import {
   MapPin,
   AppWindow,
   Pencil,
+  PackageOpen,
   Send,
   Search,
   X,
@@ -68,7 +70,10 @@ const BUILD_PROTOTYPE_EVENT = "objective-board:build-prototype";
 const OPEN_TECH_SPEC_EVENT = "objective-board:open-tech-spec";
 
 const OP_ICON: Record<string, typeof Split> = {
-  decompose: Split,
+  // "Unpack" (formerly "Decompose") — PackageOpen visually separates it from
+  // the top BUILD button "Decompose objective" (Split). Same word collision is
+  // what users were confused by; different icon + different name fixes it.
+  decompose: PackageOpen,
   variations: Shuffle,
   questions: HelpCircle,
   make_plan: ListChecks,
@@ -80,8 +85,14 @@ const OP_ICON: Record<string, typeof Split> = {
 // Local label/intent overrides — terser, verb-first names that read better in a
 // dense list. The registry (canvas-operations.ts) keeps the longer copy because
 // it's also used in the scanner panel + card menus where verbosity is fine.
+//
+// NB: ops "decompose" → "Unpack". The original verb collided with the top
+// BUILD action "Decompose objective" (which creates real typed Feature &
+// Variable cards). Unpack is honest about what this actually does: it returns
+// four lenses (principles · variations · causes · effects) as throwaway
+// suggestion chips below the selected card. No structural commit.
 const OP_OVERRIDES: Record<string, { label?: string; intent?: string }> = {
-  decompose: { intent: "Break into principles & parts" },
+  decompose: { label: "Unpack", intent: "principles · variations · causes · effects" },
   variations: { intent: "Alternative angles" },
   questions: { label: "Clarify", intent: "Questions to answer first" },
   make_plan: { label: "Action plan", intent: "Turn this into a plan" },
@@ -118,16 +129,11 @@ export function PowerupRail({
   spaceId: string;
   editor: Editor;
 }) {
-  const [open, setOpen] = useState(false);
-
-  // While the panel is open, push the top-right style palette left of it (the
-  // rail is 360px at right:12) so the palette can't cover the panel's close
-  // button. Reset to the corner when closed/unmounted.
-  useEffect(() => {
-    const el = document.documentElement;
-    el.style.setProperty("--oc-style-panel-right", open ? "388px" : "12px");
-    return () => el.style.setProperty("--oc-style-panel-right", "12px");
-  }, [open]);
+  // Open state is shared via the board-panel signal — the trigger now lives in
+  // BoardTopRightBar (which also reflects this as an active highlight) and the
+  // rail opens below that bar. No more shoving the style palette aside.
+  const open = usePanel("powerups");
+  const setOpen = (v: boolean) => setPanel("powerups", v);
 
   // Live selection — WHAT the actions will run on (single or multi/lasso).
   const sel = useValue(
@@ -394,20 +400,8 @@ export function PowerupRail({
     return label.toLowerCase().includes(q) || intent.toLowerCase().includes(q);
   }
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        title="Actions — run AI on your selection + see artifacts"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={() => setOpen(true)}
-        style={launcherPill}
-      >
-        <Sparkle style={{ width: 14, height: 14 }} strokeWidth={2.2} />
-        Actions
-      </button>
-    );
-  }
+  // Headless when closed — the trigger lives in BoardTopRightBar.
+  if (!open) return null;
 
   const hasSel = sel.count > 0;
   const selHasTechSpec = editor
@@ -519,9 +513,13 @@ export function PowerupRail({
         )}
 
         {/* Flows — composite actions; Forge is the hero (the one accent-tinted
-            row in the panel). Reserved gray would have read as "disabled". */}
+            row in the panel). Reserved gray would have read as "disabled".
+            BUILD label names the section: these all make REAL persistent objects
+            on the board (cards, specs, prototypes, objectives). Sets up the
+            contrast with EXPLORE below (throwaway suggestion chips). */}
         {visibleFlows.length > 0 && (
           <div style={{ marginTop: hasSel ? 14 : 12 }}>
+            <div style={sectionLabel}>BUILD</div>
             {visibleFlows.map((f) => {
               if (f.id === "forge") {
                 return (
@@ -713,10 +711,17 @@ export function PowerupRail({
           </div>
         )}
 
-        {/* Hairline + Operations — single-shot transforms on the selection. */}
+        {/* Hairline + Operations — single-shot transforms on the selection.
+            EXPLORE label + inline hint tie these rows to the per-card ‹ ›
+            diverge/converge buttons — same verbs, longer-form menu. The hint
+            stops users from feeling like the rail is a separate vocabulary. */}
         {visibleOps.length > 0 && (
           <>
             <div style={hairline} />
+            <div style={sectionLabel}>
+              EXPLORE
+              <span style={sectionHint}>‹ › same as on each card</span>
+            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
               {visibleOps.map((op) => {
                 const Icon = op.id === "custom" ? Pencil : (OP_ICON[op.id] ?? Sparkle);
@@ -905,34 +910,13 @@ function PlanCountChip({
 }
 
 // ── styles ──
-const launcherPill: CSSProperties = {
-  // Unified right toolbar baseline (top:16) — third stop in the row:
-  // palette · Share · Actions · Library · Saved · collaborators.
-  position: "absolute",
-  top: 16,
-  right: 158,
-  zIndex: 66,
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 7,
-  padding: "7px 12px",
-  borderRadius: appleVibe.radius.pill,
-  border: "1px solid var(--glass-border)",
-  cursor: "pointer",
-  fontFamily: appleVibe.font.stack,
-  fontSize: 11.5,
-  fontWeight: 650,
-  color: appleVibe.text.secondary,
-  background: "var(--glass-float-bg)",
-  backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-  WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-  boxShadow: "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
-};
 const rail: CSSProperties = {
+  // Opens BELOW the unified top-right bar (top:16, ~38px tall) so the bar +
+  // this rail's own close ✕ stay visible together; right-aligned to the bar.
   position: "absolute",
-  top: 12,
+  top: 64,
   bottom: 12,
-  right: 12,
+  right: 16,
   width: 360,
   zIndex: 92,
   display: "flex",
@@ -1024,6 +1008,30 @@ const hairline: CSSProperties = {
   height: 1,
   background: "var(--glass-border)",
   margin: "14px 0 10px",
+};
+// Tracked-uppercase eyebrow above each action group. Names the *kind* of move
+// (BUILD makes real persistent objects · EXPLORE drops throwaway chips below
+// a card). Light typography so it never competes with the rows it labels.
+const sectionLabel: CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  gap: 8,
+  fontSize: 10.5,
+  fontWeight: 600,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+  color: appleVibe.text.tertiary,
+  marginBottom: 6,
+};
+// Helper text trailing the EXPLORE label — ties the rail rows to the per-card
+// ‹ › buttons so users know the same verbs exist in both places.
+const sectionHint: CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 400,
+  letterSpacing: 0,
+  textTransform: "none",
+  color: appleVibe.text.tertiary,
+  opacity: 0.75,
 };
 const chip: CSSProperties = {
   display: "inline-flex",

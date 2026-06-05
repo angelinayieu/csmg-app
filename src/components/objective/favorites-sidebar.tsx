@@ -55,7 +55,7 @@ export function FavoritesSidebar({ editor }: { editor: Editor }) {
 
   return (
     <div
-      className="fixed left-4 top-1/2 z-[55] -translate-y-1/2"
+      className="fixed right-4 top-1/2 z-[55] -translate-y-1/2"
       style={{ fontFamily: appleVibe.font.stack }}
     >
       <div

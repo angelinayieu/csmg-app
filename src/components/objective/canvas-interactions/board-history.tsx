@@ -52,6 +52,14 @@ function timeAgo(iso: string): string {
   return `${d}d ago`;
 }
 
+/** Short wall-clock time (e.g. "3:42 PM") — the quiet secondary line under
+ *  the relative time, so the row leads with "when" without repeating a label. */
+function clockTime(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 /** Fired by the top-right nav bar to open this panel (the launcher's own left
  *  pill is retired — the nav bar is the single trigger). */
 export const OPEN_BOARD_HISTORY_EVENT = "board:open-history";
@@ -64,18 +72,52 @@ export function BoardHistoryLauncher({
   editor: Editor;
 }) {
   const [open, setOpen] = useState(false);
+  // `closing` keeps the panel mounted through its exit animation, so it eases
+  // out instead of hard-cutting. A timer ref lets a re-open cancel a pending
+  // close (rapid toggle) and gets cleared on unmount.
+  const [closing, setClosing] = useState(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [versions, setVersions] = useState<Version[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const dirtyRef = useRef(false);
   const [refreshTick, setRefreshTick] = useState(0);
 
-  // Opened from the consolidated nav bar (top-right).
+  // Opened from the consolidated nav bar (top-right). Re-opening mid-exit
+  // cancels the pending unmount so it snaps back to fully open.
   useEffect(() => {
-    const openIt = () => setOpen(true);
+    const openIt = () => {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+      setClosing(false);
+      setOpen(true);
+    };
     window.addEventListener(OPEN_BOARD_HISTORY_EVENT, openIt);
     return () => window.removeEventListener(OPEN_BOARD_HISTORY_EVENT, openIt);
   }, []);
+
+  // Clear any pending close timer if the component unmounts mid-exit.
+  useEffect(
+    () => () => {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    },
+    [],
+  );
+
+  // Play the exit animation, then actually unmount (matches the 150ms
+  // oc-history-out keyframe in globals.css).
+  function requestClose() {
+    if (closeTimerRef.current) return; // already closing
+    setClosing(true);
+    closeTimerRef.current = setTimeout(() => {
+      closeTimerRef.current = null;
+      setOpen(false);
+      setClosing(false);
+      setConfirming(false);
+    }, 150);
+  }
 
   // The version being PREVIEWED. Derived default = newest, so the preview shows
   // immediately on open without a setState-in-effect.
@@ -196,16 +238,21 @@ export function BoardHistoryLauncher({
       /* soft-fail */
     } finally {
       setBusy(false);
-      setConfirming(false);
-      setOpen(false);
+      requestClose();
     }
   }
 
   // The left-edge launcher pill is retired — the top-right nav bar opens this.
-  if (!open) return null;
+  // Stay mounted through the exit animation (`closing`) before unmounting.
+  if (!open && !closing) return null;
 
   return (
-    <div onPointerDown={(e) => e.stopPropagation()} style={panel}>
+    <div
+      onPointerDown={(e) => e.stopPropagation()}
+      className="oc-history-panel"
+      data-closing={closing}
+      style={panel}
+    >
       <div style={panelHeader}>
         <History
           style={{ width: 14, height: 14, color: appleVibe.text.secondary }}
@@ -213,9 +260,10 @@ export function BoardHistoryLauncher({
         />
         <span
           style={{
-            fontSize: 12.5,
+            fontSize: 13,
             fontWeight: 700,
             color: appleVibe.text.primary,
+            letterSpacing: "-0.01em",
           }}
         >
           Version history
@@ -237,7 +285,7 @@ export function BoardHistoryLauncher({
         <button
           type="button"
           title="Close"
-          onClick={() => setOpen(false)}
+          onClick={requestClose}
           style={iconBtn}
         >
           <X style={{ width: 15, height: 15 }} strokeWidth={2.2} />
@@ -248,25 +296,38 @@ export function BoardHistoryLauncher({
         {/* Left rail — the version list. Clicking a row previews it. */}
         <div style={rail}>
           {versions === null ? (
-            <div style={emptyRow}>
-              <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />{" "}
-              Loading…
+            // Calm skeleton instead of a "Loading…" string — three faint,
+            // pulsing row placeholders.
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="animate-pulse"
+                  style={{
+                    height: 38,
+                    borderRadius: appleVibe.radius.sm,
+                    background: appleVibe.surface.chip,
+                  }}
+                />
+              ))}
             </div>
           ) : versions.length === 0 ? (
+            // The rich empty composition lives in the preview pane; keep the
+            // rail quiet so the two don't compete.
             <div
               style={{
-                padding: "14px 4px",
-                fontSize: 12,
+                padding: "14px 6px",
+                fontSize: 11.5,
                 lineHeight: 1.4,
-                color: appleVibe.text.tertiary,
+                color: appleVibe.text.faint,
               }}
             >
-              No versions yet — they accrue as you work, or hit Save to checkpoint
-              now.
+              No checkpoints yet.
             </div>
           ) : (
             versions.map((v) => {
               const active = v.id === activeId;
+              const manual = !!v.label && v.label !== "Autosave";
               return (
                 <button
                   key={v.id}
@@ -277,18 +338,19 @@ export function BoardHistoryLauncher({
                   }}
                   style={{
                     ...row,
+                    // Active = a soft raised chip (filled + gentle drop shadow),
+                    // never a hard left side-spine.
                     background: active
                       ? appleVibe.surface.chipHover
                       : "transparent",
-                    boxShadow: active
-                      ? `inset 2px 0 0 ${appleVibe.accent.primary}`
-                      : "none",
+                    boxShadow: active ? appleVibe.shadow.chip : "none",
                   }}
                 >
                   <span style={{ minWidth: 0, flex: 1, textAlign: "left" }}>
-                    <span style={rowTitle}>{v.label || "Autosave"}</span>
-                    <span style={rowTime}>{timeAgo(v.created_at)}</span>
+                    <span style={rowTitle}>{timeAgo(v.created_at)}</span>
+                    <span style={rowTime}>{clockTime(v.created_at)}</span>
                   </span>
+                  {manual ? <span style={savedTag}>Saved</span> : null}
                 </button>
               );
             })
@@ -298,9 +360,36 @@ export function BoardHistoryLauncher({
         {/* Right pane — the live preview of the selected version's screen. */}
         <div style={previewPane}>
           <div style={previewFrame}>
-            {!activeId ? (
-              <div style={previewMsg}>Select a version to preview</div>
-            ) : previewLoading ? (
+            {versions !== null && versions.length === 0 ? (
+              // One calm empty composition (not three competing messages):
+              // glyph + line + the single primary action.
+              <div style={emptyState}>
+                <History
+                  style={{ width: 22, height: 22, color: appleVibe.text.faint }}
+                  strokeWidth={1.8}
+                />
+                <div style={emptyTitle}>No checkpoints yet</div>
+                <div style={emptySub}>
+                  Versions accrue automatically as you work.
+                </div>
+                <button
+                  type="button"
+                  onClick={saveNow}
+                  disabled={busy}
+                  style={emptyCta}
+                >
+                  {busy ? (
+                    <Loader2
+                      className="animate-spin"
+                      style={{ width: 13, height: 13 }}
+                    />
+                  ) : (
+                    <Save style={{ width: 13, height: 13 }} strokeWidth={2.2} />
+                  )}
+                  Save one now
+                </button>
+              </div>
+            ) : !activeId || previewLoading ? (
               <div style={previewMsg}>
                 <Loader2
                   className="animate-spin"
@@ -337,15 +426,14 @@ export function BoardHistoryLauncher({
             )}
           </div>
 
-          {/* Footer — active version meta + restore (with confirm). */}
+          {/* Footer — active version meta + restore (with confirm). Only
+              shown once a real version is selected, so the empty/loading
+              states never render a dead Restore button. */}
+          {activeVersion ? (
           <div style={previewFooter}>
             <span style={{ minWidth: 0, flex: 1 }}>
-              <span style={rowTitle}>
-                {activeVersion?.label || "Autosave"}
-              </span>
-              <span style={rowTime}>
-                {activeVersion ? timeAgo(activeVersion.created_at) : ""}
-              </span>
+              <span style={rowTitle}>{timeAgo(activeVersion.created_at)}</span>
+              <span style={rowTime}>{clockTime(activeVersion.created_at)}</span>
             </span>
             {confirming ? (
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -378,10 +466,10 @@ export function BoardHistoryLauncher({
                 type="button"
                 title="Restore this version"
                 onClick={() => setConfirming(true)}
-                disabled={!activeId || !preview?.snapshot}
+                disabled={!preview?.snapshot}
                 style={{
                   ...restoreBtn,
-                  opacity: activeId && preview?.snapshot ? 1 : 0.5,
+                  opacity: preview?.snapshot ? 1 : 0.5,
                 }}
               >
                 <RotateCcw style={{ width: 12, height: 12 }} strokeWidth={2.2} />
@@ -389,6 +477,7 @@ export function BoardHistoryLauncher({
               </button>
             )}
           </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -426,9 +515,13 @@ const panel: CSSProperties = {
   flexDirection: "column",
   minHeight: 0,
   borderRadius: appleVibe.radius.lg,
-  background: "var(--glass-float-bg)",
-  backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-  WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+  // Pulled ~22% more translucent than the shared float token (theme-safe via
+  // color-mix, so we don't mutate the global --glass-float-bg) — this is what
+  // lets the blur + saturate actually read as glass over canvas content
+  // instead of a flat opaque slab.
+  background: "color-mix(in srgb, var(--glass-float-bg), transparent 22%)",
+  backdropFilter: "blur(var(--blur-float)) saturate(1.8)",
+  WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.8)",
   border: "1px solid var(--glass-border)",
   boxShadow:
     "inset 0 1px 0 var(--glass-highlight), 0 28px 60px -24px rgba(11,18,40,0.38)",
@@ -437,8 +530,8 @@ const panel: CSSProperties = {
 const panelHeader: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
-  padding: "11px 11px 9px",
+  gap: 9,
+  padding: "13px 14px 11px",
   borderBottom: "1px solid var(--glass-border)",
 };
 const body: CSSProperties = {
@@ -447,10 +540,10 @@ const body: CSSProperties = {
   minHeight: 0,
 };
 const rail: CSSProperties = {
-  width: 210,
+  width: 214,
   flexShrink: 0,
   overflowY: "auto",
-  padding: "6px 8px 10px",
+  padding: "8px 10px 12px",
   borderRight: "1px solid var(--glass-border)",
   minHeight: 0,
 };
@@ -459,12 +552,14 @@ const previewPane: CSSProperties = {
   minWidth: 0,
   display: "flex",
   flexDirection: "column",
-  padding: 12,
-  gap: 10,
+  padding: 14,
+  gap: 12,
 };
 const previewFrame: CSSProperties = {
   flex: 1,
-  minHeight: 0,
+  // A floor so the pane keeps its confident shape even in the empty/loading
+  // state — no more stubby collapsed panel on first open.
+  minHeight: 264,
   borderRadius: appleVibe.radius.md,
   border: "1px solid var(--glass-border)",
   background: appleVibe.surface.base,
@@ -513,23 +608,62 @@ const iconBtn: CSSProperties = {
   cursor: "pointer",
   color: appleVibe.text.tertiary,
 };
-const emptyRow: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "16px 4px",
-  color: appleVibe.text.tertiary,
-  fontSize: 12,
-};
 const row: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
+  gap: 10,
   width: "100%",
-  padding: "8px 9px",
-  marginBottom: 2,
+  padding: "9px 11px",
+  marginBottom: 3,
   borderRadius: appleVibe.radius.sm,
   border: "none",
+  cursor: "pointer",
+  fontFamily: appleVibe.font.stack,
+};
+const savedTag: CSSProperties = {
+  flexShrink: 0,
+  fontSize: 10,
+  fontWeight: 650,
+  letterSpacing: "0.02em",
+  color: appleVibe.text.secondary,
+  padding: "2px 7px",
+  borderRadius: appleVibe.radius.pill,
+  background: appleVibe.surface.chip,
+  border: "1px solid var(--glass-border)",
+};
+const emptyState: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 6,
+  textAlign: "center",
+  padding: 24,
+  maxWidth: 300,
+};
+const emptyTitle: CSSProperties = {
+  fontSize: 13.5,
+  fontWeight: 650,
+  color: appleVibe.text.primary,
+  letterSpacing: "-0.01em",
+};
+const emptySub: CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.45,
+  color: appleVibe.text.tertiary,
+};
+const emptyCta: CSSProperties = {
+  marginTop: 8,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "7px 14px",
+  borderRadius: appleVibe.radius.pill,
+  border: `1px solid ${appleVibe.accent.primary}`,
+  background: appleVibe.accent.primary,
+  color: appleVibe.text.onAccent,
+  fontSize: 12,
+  fontWeight: 650,
   cursor: "pointer",
   fontFamily: appleVibe.font.stack,
 };

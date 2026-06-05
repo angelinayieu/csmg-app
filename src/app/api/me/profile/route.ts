@@ -1,9 +1,10 @@
 // GET /api/me/profile → { displayName, avatarUrl }
 //
 // Lightweight current-user profile for client surfaces that aren't
-// server-rendered (e.g. the voice recorder card on the board). Reads
-// synergy_profiles.display_name; avatar is rendered as an initial chip
-// client-side (no avatar column today), so avatarUrl is null for now.
+// server-rendered (e.g. the home profile chip, the voice recorder card
+// on the board). Reads synergy_profiles.display_name + avatar_url; the
+// avatar is set on /app/profile. avatarUrl is null when none is set
+// (callers fall back to an initial chip).
 
 import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
@@ -19,7 +20,7 @@ export async function GET() {
 
   const { data } = await db
     .from("synergy_profiles")
-    .select("display_name")
+    .select("display_name, avatar_url")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -28,5 +29,7 @@ export async function GET() {
     user.email?.split("@")[0] ||
     "You";
 
-  return NextResponse.json({ displayName, avatarUrl: null });
+  const avatarUrl = (data?.avatar_url as string | null)?.trim() || null;
+
+  return NextResponse.json({ displayName, avatarUrl });
 }

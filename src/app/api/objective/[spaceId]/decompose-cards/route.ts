@@ -223,5 +223,35 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     links.push({ fromObjectId: from.objectId, toObjectId: to.objectId, relation });
   }
 
+  // Fork provenance: every decomposed card is `derived_from` the objective.
+  // When the space ALREADY has a context anchor (the addressable objective/
+  // context root), tether each card to it so the objective→decomposition fork
+  // becomes a REAL edge in the cluster graph — the persisted truth behind the
+  // grouping frame's connector — not a board-only arrow. READ-ONLY on purpose:
+  // we never MINT an anchor here (that would surface a stray "Context" object
+  // in the Library for bare spaces); spaces without one just skip this vertical
+  // link. The horizontal feeds/depends_on edges above persist regardless.
+  try {
+    const { data: anchor } = await db
+      .from("library_objects")
+      .select("id")
+      .eq("space_id", spaceId)
+      .eq("object_type", "context_anchor")
+      .maybeSingle();
+    const anchorId = (anchor as { id: string } | null)?.id;
+    if (anchorId) {
+      for (const c of cards) {
+        await linkObjects(db, {
+          spaceId,
+          fromObjectId: c.objectId,
+          toObjectId: anchorId,
+          relation: "derived_from",
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("[decompose-cards] fork-anchor link failed (soft):", err);
+  }
+
   return NextResponse.json({ cards, links });
 }

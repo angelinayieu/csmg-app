@@ -3,8 +3,9 @@
 // Generates the home-library card for a space, in three zones:
 //   • kind   — a SHORT "what is this" description of the TYPE of work (grey)
 //   • name   — the SPECIFIC title: the prompt-sharpening distilled title from
-//              intake, or the user's renamed space title (deterministic — not
-//              re-summarized, so the card title matches the board)
+//              intake or an already-clean space name when present (so the card
+//              matches the board); else an AI-refined crisp title, so an old /
+//              un-sharpened space shows a clean name instead of its raw prompt
 //   • points — 2-3 living bullets: the most important decisions / saved
 //              pieces / finalized direction, grounded in the actual board
 //              state (what the user saved + sub-objectives), not the raw
@@ -20,13 +21,20 @@ import { llmJSON, MODEL_DEFAULTS } from "@/lib/llm";
 export interface SpaceCardBrief {
   /** Grey label — a ≤6-word description of the TYPE of work. */
   kind: string;
-  /** Specific title — sharpening distilled title (intake) or user's name. */
+  /** Specific title — distilled/clean name, else the AI-refined headline. */
   name: string;
   /** 2-3 concise, living bullets — the most important points / final idea. */
   points: string[];
   /** spaces.updated_at the brief was generated from (staleness check). */
   from_updated_at: string;
+  /** Brief schema version. Bumped when the card shape changes (e.g. the
+   *  AI-refined title) so older cached briefs are treated as stale and
+   *  regenerate once. Briefs without the current version count as stale. */
+  v?: number;
 }
+
+/** Current card-brief schema version (see SpaceCardBrief.v). */
+export const BRIEF_VERSION = 2;
 
 interface SpaceRow {
   id: string;
@@ -52,7 +60,8 @@ function clip(s: string | null | undefined, n = MAX_FIELD): string {
 const SYSTEM = `You write the tiny home-library card for a user's idea workspace. You receive the user's SHARPENED objective plus what they've actually built/saved on the canvas.
 
 Return:
-- "kind": a SHORT (≤6 words) description of WHAT THIS WORKSPACE IS — the type / category of work (e.g. "Consumer fitness app concept", "Essay revision workflow", "Go-to-market research"). General, NOT the specific name. Title Case-ish, no trailing period, never a bare label like "Objective" or "Canvas".
+- "title": a crisp, SPECIFIC name for this work, written as a headline — Title Case, ≤ 6 words, no trailing punctuation. Refine the user's raw phrasing into a clean product / idea name and fix obvious typos (e.g. "build a music remix social app that helps you discover new music" → "Music Remix Social App"; "app for peopel to debate with ai" → "AI Debate App"). Specific to THIS idea; never a bare label like "Objective", "Canvas", or "Untitled".
+- "kind": a SHORT (≤6 words) description of the general TYPE / category this belongs to — broader than the title (e.g. "Consumer social app", "Personal productivity tool", "Go-to-market research"). Title Case-ish, no trailing period, never a bare label like "Objective" or "Canvas".
 - "points": 2-3 short, direct bullets capturing the CURRENT state of the idea — the most important decisions made, the pieces the user saved, or the finalized direction. Each ≤ 12 words, concrete + specific to THIS work, no filler, no leading punctuation. Prefer what the user actually saved / decided over restating the objective. If the canvas is still empty, distill the sharpened intent into the points.
 
 Base everything ONLY on the provided content. Never invent specifics that aren't implied.`;
@@ -63,9 +72,13 @@ const SCHEMA: { name: string; schema: Record<string, unknown> } = {
     type: "object",
     additionalProperties: false,
     properties: {
+      title: {
+        type: "string",
+        description: "crisp ≤6-word SPECIFIC name (the card headline)",
+      },
       kind: {
         type: "string",
-        description: "≤6-word description of the TYPE of work",
+        description: "≤6-word general TYPE / category of the work",
       },
       points: {
         type: "array",
@@ -73,7 +86,7 @@ const SCHEMA: { name: string; schema: Record<string, unknown> } = {
         items: { type: "string" },
       },
     },
-    required: ["kind", "points"],
+    required: ["title", "kind", "points"],
   },
 };
 
@@ -129,9 +142,10 @@ export async function summarizeSpaceCard(
 
   const sharp = readSharpening(s.synthesis_data);
 
-  // Deterministic title: the sharpening distilled title (the concise title
-  // generated at intake), else the user's space name. Never re-summarized,
-  // so the library card title matches what's on the board.
+  // Seed title fed to the model as context (the sharpening distilled title
+  // from intake, else the user's space name). The FINAL card name is decided
+  // below — it prefers this when it already reads like a title, else the
+  // model's refined headline.
   const seedTitle =
     (sharp.distilledTitle && sharp.distilledTitle.trim()) ||
     (s.name && s.name.trim()) ||
@@ -200,9 +214,9 @@ export async function summarizeSpaceCard(
   const content = parts.join("\n\n").trim();
   if (content.length < 8) return null;
 
-  let result: { kind?: unknown; points?: unknown };
+  let result: { title?: unknown; kind?: unknown; points?: unknown };
   try {
-    result = await llmJSON<{ kind?: unknown; points?: unknown }>({
+    result = await llmJSON<{ title?: unknown; kind?: unknown; points?: unknown }>({
       system: SYSTEM,
       user: content,
       provider: "anthropic",
@@ -227,11 +241,31 @@ export async function summarizeSpaceCard(
         .slice(0, 3)
     : [];
 
+  // AI-refined headline — the model's crisp name for THIS idea.
+  const aiTitle =
+    typeof result.title === "string" && result.title.trim().length > 0
+      ? result.title.trim().slice(0, 90)
+      : "";
+
+  // Final card title. Keep the existing name when it already reads like a
+  // title — short and not all-lowercase (an intentional rename or a naturally
+  // tight objective like "Sandbox"). Only when the name is a long or
+  // all-lowercase prompt do we swap in the AI-refined headline, so old /
+  // un-sharpened spaces stop showing their raw prompt as the card title.
+  // Sharpened spaces always keep their distilled title (board-consistent).
+  const rawName = (s.name && s.name.trim()) || "";
+  const distilled = (sharp.distilledTitle && sharp.distilledTitle.trim()) || "";
+  const nameIsClean =
+    rawName.length > 0 && rawName.length <= 48 && /[A-Z]/.test(rawName);
+  const refinedName =
+    distilled || (nameIsClean ? rawName : aiTitle || rawName) || "Untitled";
+
   const brief: SpaceCardBrief = {
     kind,
-    name: seedTitle.slice(0, 90),
+    name: refinedName.slice(0, 90),
     points,
     from_updated_at: s.updated_at ?? new Date().toISOString(),
+    v: BRIEF_VERSION,
   };
 
   try {

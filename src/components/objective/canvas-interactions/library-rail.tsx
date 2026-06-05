@@ -47,6 +47,7 @@ import type { GlossaryTerm } from "@/lib/objective-canvas/generate-glossary";
 import { OPEN_CARD_DETAIL_EVENT } from "@/components/objective/canvas-interactions/object-detail-drawer";
 import { openNotebook } from "@/components/objective/board-bus";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { usePanel, setPanel } from "@/lib/objective-canvas/board-panel-signal";
 
 type View = "glossary" | "objects" | "artifacts";
 
@@ -551,7 +552,10 @@ function toggle(set: Dispatch<SetStateAction<Set<string>>>, key: string) {
 }
 
 export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: Editor }) {
-  const [open, setOpen] = useState(false);
+  // Open state is shared via the board-panel signal — the trigger lives in
+  // BoardTopRightBar; this component is headless until opened.
+  const open = usePanel("library");
+  const setOpen = (v: boolean) => setPanel("library", v);
   const [full, setFull] = useState(false);
   const [view, setView] = useState<View>("objects");
   const [objects, setObjects] = useState<LibObject[] | null>(null);
@@ -568,15 +572,6 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, full]);
-
-  // While the panel is open, push the top-right style palette LEFT of it
-  // (rail is 384px at right:12) so the palette can't sit on top of the close
-  // X. Mirrors the same trick PowerupRail uses; reset on close/unmount.
-  useEffect(() => {
-    const el = document.documentElement;
-    el.style.setProperty("--oc-style-panel-right", open && !full ? "412px" : "12px");
-    return () => el.style.setProperty("--oc-style-panel-right", "12px");
   }, [open, full]);
 
   // Fetch the space's library_objects once the rail opens (shared by both
@@ -608,20 +603,8 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
     }
   }
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        title="Library — objects + glossary"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={() => setOpen(true)}
-        style={launcherPill}
-      >
-        <LibraryIcon style={{ width: 14, height: 14 }} strokeWidth={2.2} />
-        Library
-      </button>
-    );
-  }
+  // Headless when closed — the trigger lives in BoardTopRightBar.
+  if (!open) return null;
 
   const tabs: { id: View; label: string; Icon: typeof BookOpen }[] = [
     { id: "objects", label: "Objects", Icon: Boxes },
@@ -646,15 +629,37 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
             })}
           </div>
           {/* flexShrink:0 keeps the expand + close buttons pinned and on-screen.
-              Without it the fixed-width tabs pushed the close ✕ past the 384px
-              rail's right edge (and off the viewport), so the panel couldn't be
-              closed. The tab bar (minWidth:0) yields space instead. */}
-          <div style={{ marginLeft: "auto", display: "flex", gap: 2, flexShrink: 0 }}>
-            <button type="button" title={full ? "Restore" : "Expand to full screen"} onClick={() => setFull((f) => !f)} style={iconBtn}>
-              {full ? <Minimize2 style={{ width: 14, height: 14 }} strokeWidth={2.2} /> : <Maximize2 style={{ width: 14, height: 14 }} strokeWidth={2.2} />}
+              Without it the fixed-width tabs pushed the close ✕ past the rail's
+              right edge. The tab bar (minWidth:0) yields space instead. The
+              close ✕ rests on a chip fill so it reads as an obvious button. */}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 4, flexShrink: 0 }}>
+            <button
+              type="button"
+              title={full ? "Restore" : "Expand to full screen"}
+              aria-label={full ? "Restore" : "Expand to full screen"}
+              onClick={() => setFull((f) => !f)}
+              style={iconBtn}
+              onMouseEnter={(e) => (e.currentTarget.style.background = appleVibe.surface.chip)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              {full ? <Minimize2 style={{ width: 15, height: 15 }} strokeWidth={2.2} /> : <Maximize2 style={{ width: 15, height: 15 }} strokeWidth={2.2} />}
             </button>
-            <button type="button" title="Close" onClick={() => setOpen(false)} style={iconBtn}>
-              <X style={{ width: 15, height: 15 }} strokeWidth={2.2} />
+            <button
+              type="button"
+              title="Close library"
+              aria-label="Close library"
+              onClick={() => setOpen(false)}
+              style={closeBtn}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = appleVibe.accent.primary;
+                e.currentTarget.style.color = appleVibe.text.onAccent;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = appleVibe.surface.chip;
+                e.currentTarget.style.color = appleVibe.text.secondary;
+              }}
+            >
+              <X style={{ width: 16, height: 16 }} strokeWidth={2.4} />
             </button>
           </div>
         </div>
@@ -672,34 +677,15 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
 }
 
 // ── styles ──
-const launcherPill: CSSProperties = {
-  // Unified right toolbar baseline (top:16) — fourth stop in the row:
-  // palette · Share · Powerups · Library · Saved · collaborators.
-  position: "absolute",
-  top: 16,
-  right: 282,
-  zIndex: 66,
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 7,
-  padding: "7px 12px",
-  borderRadius: appleVibe.radius.pill,
-  border: "1px solid var(--glass-border)",
-  cursor: "pointer",
-  fontFamily: appleVibe.font.stack,
-  fontSize: 11.5,
-  fontWeight: 650,
-  color: appleVibe.text.secondary,
-  background: "var(--glass-float-bg)",
-  backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-  WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-  boxShadow: "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
-};
 const railStyle = (full: boolean): CSSProperties => ({
+  // Non-full: opens BELOW the unified top-right bar (top:16, ~38px tall) and
+  // right-aligned to it, so the bar + this rail's own close ✕ stay visible
+  // together — the close is well inside the card, never out in the corner.
+  // Full screen: cover everything (its own restore/close chrome takes over).
   position: "absolute",
-  top: 12,
+  top: full ? 12 : 64,
   bottom: 12,
-  right: 12,
+  right: full ? 12 : 16,
   width: full ? "calc(100% - 24px)" : 384,
   zIndex: 92,
   display: "flex",
@@ -751,13 +737,29 @@ const iconBtn: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  width: 28,
-  height: 28,
+  width: 30,
+  height: 30,
   borderRadius: appleVibe.radius.sm,
   border: "none",
   background: "transparent",
   cursor: "pointer",
-  color: appleVibe.text.tertiary,
+  color: appleVibe.text.secondary,
+  transition: "background 0.15s ease, color 0.15s ease",
+};
+const closeBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 30,
+  height: 30,
+  borderRadius: appleVibe.radius.sm,
+  border: "none",
+  // Resting chip fill so the close ✕ is an obvious, easy target — not a faint
+  // glyph floating in the corner.
+  background: appleVibe.surface.chip,
+  cursor: "pointer",
+  color: appleVibe.text.secondary,
+  transition: "background 0.15s ease, color 0.15s ease",
 };
 const scrollArea: CSSProperties = { flex: 1, overflowY: "auto", padding: "0 12px 14px", minHeight: 0 };
 const emptyRow: CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "20px 4px", color: appleVibe.text.tertiary, fontSize: 12.5 };

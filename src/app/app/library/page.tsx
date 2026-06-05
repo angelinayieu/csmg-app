@@ -50,6 +50,8 @@ export default async function LibraryPage({
       .from("spaces")
       .select("id, name")
       .eq("user_id", user.id)
+      // Children (e.g. sandboxes) live inside their parent — not pickable here.
+      .is("parent_space_id", null)
       .order("updated_at", { ascending: false }),
     db
       .from("improvement_goals")

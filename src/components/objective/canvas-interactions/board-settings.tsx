@@ -2,14 +2,14 @@
 
 // ── BoardSettingsLauncher ─────────────────────────────────────────
 //
-// The new minimalist settings, living ON the objective board (the old
-// /app/settings page is retired — see the route-compaction middleware). A
-// left-edge pill opens a small glass panel: who you're signed in as + sign out.
-// Matches the board's glass chrome. Self-contained.
+// The board's account popover, opened from the top-right nav gear. Shows
+// who you're signed in as, a link out to the full Profile page
+// (/app/profile — identity, plan, appearance, privacy), and a quick sign
+// out. Matches the board's glass chrome. Self-contained.
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
-import { Settings, X, LogOut, Loader2 } from "lucide-react";
+import { Settings, X, LogOut, Loader2, ChevronRight } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
@@ -87,6 +87,22 @@ export function BoardSettingsLauncher() {
             <div style={{ marginTop: 2, fontSize: 12.5, color: appleVibe.text.tertiary }}>{email}</div>
           )}
 
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              router.push("/app/profile");
+            }}
+            style={profileBtn}
+          >
+            <Settings style={{ width: 14, height: 14, color: appleVibe.text.tertiary }} strokeWidth={2.2} />
+            Profile settings
+            <ChevronRight
+              style={{ marginLeft: "auto", width: 15, height: 15, color: appleVibe.text.faint }}
+              strokeWidth={2.2}
+            />
+          </button>
+
           <button type="button" onClick={signOut} disabled={signingOut} style={signOutBtn}>
             {signingOut ? (
               <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />
@@ -150,8 +166,24 @@ const overline: CSSProperties = {
   textTransform: "uppercase",
   color: appleVibe.text.faint,
 };
-const signOutBtn: CSSProperties = {
+const profileBtn: CSSProperties = {
   marginTop: 16,
+  width: "100%",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "9px 12px",
+  borderRadius: appleVibe.radius.md,
+  border: `1px solid ${appleVibe.stroke.soft}`,
+  background: appleVibe.surface.card,
+  color: appleVibe.text.primary,
+  fontSize: 12.5,
+  fontWeight: 650,
+  cursor: "pointer",
+  fontFamily: appleVibe.font.stack,
+};
+const signOutBtn: CSSProperties = {
+  marginTop: 10,
   width: "100%",
   display: "inline-flex",
   alignItems: "center",

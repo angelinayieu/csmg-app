@@ -125,6 +125,15 @@ function ObjectDetailDrawer({
   // data starts null (lazy); the component is keyed by objectId so navigating to
   // a linked object remounts it fresh — no setState in the effect body.
   const [data, setData] = useState<DetailResponse | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
+  // "+ Link" picker state — persists a REAL object_link from this card so the
+  // connection shows up in the cluster graph (manual linking, collision-free).
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [relation, setRelation] = useState<"feeds" | "depends_on">("feeds");
+  const [query, setQuery] = useState("");
+  const [candidates, setCandidates] = useState<
+    { id: string; title: string; type: string }[]
+  >([]);
 
   useEffect(() => {
     let alive = true;
@@ -139,7 +148,47 @@ function ObjectDetailDrawer({
     return () => {
       alive = false;
     };
-  }, [spaceId, objectId]);
+  }, [spaceId, objectId, reloadTick]);
+
+  // Lazy-load link candidates the first time the picker opens.
+  useEffect(() => {
+    if (!linkOpen || candidates.length) return;
+    let alive = true;
+    fetch(`/api/brainstorm/space/${spaceId}/library/objects`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (alive && Array.isArray(j?.objects)) {
+          setCandidates(
+            (
+              j.objects as Array<{ id: string; title: string; type: string }>
+            ).map((o) => ({ id: o.id, title: o.title, type: o.type })),
+          );
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [linkOpen, spaceId, candidates.length]);
+
+  async function doLink(toId: string) {
+    try {
+      await fetch(`/api/objective/${spaceId}/link-objects`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          fromObjectId: objectId,
+          toObjectId: toId,
+          relation,
+        }),
+      });
+    } catch {
+      /* soft-fail */
+    }
+    setLinkOpen(false);
+    setQuery("");
+    setReloadTick((t) => t + 1); // re-fetch detail → cluster graph updates
+  }
 
   const loading = data === null;
   const obj = data?.object ?? null;
@@ -154,6 +203,7 @@ function ObjectDetailDrawer({
     if (arr) arr.push(l);
     else linkGroups.set(l.relation, [l]);
   }
+  const linkedIds = new Set(links.map((l) => l.id));
 
   return (
     <div onPointerDown={(e) => e.stopPropagation()} style={rail}>
@@ -190,31 +240,128 @@ function ObjectDetailDrawer({
 
               <Gallery snapshot={obj.content_snapshot} />
 
-              {/* cluster graph — this object + its linked neighborhood */}
-              {links.length > 0 && (
+              {/* cluster — this object + its linked neighborhood, plus a
+                  "+ Link" affordance that persists a real object_link. */}
+              {obj && (
                 <section style={{ marginTop: 14 }}>
-                  <div style={sectionLabel}>Cluster</div>
                   <div
                     style={{
-                      marginTop: 6,
-                      borderRadius: appleVibe.radius.sm,
-                      background: appleVibe.surface.chip,
-                      padding: "8px 4px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
                     }}
                   >
-                    <ObjectClusterGraph
-                      centerTitle={name}
-                      centerType={obj.object_type}
-                      neighbors={links.map((l) => ({
-                        id: l.id,
-                        title: l.title,
-                        type: l.type,
-                        relation: l.relation,
-                        direction: l.direction,
-                      }))}
-                      onNavigate={onNavigate}
-                    />
+                    <div style={sectionLabel}>Cluster</div>
+                    <button
+                      type="button"
+                      onClick={() => setLinkOpen((v) => !v)}
+                      style={linkAddBtn}
+                    >
+                      {linkOpen ? "Cancel" : "+ Link"}
+                    </button>
                   </div>
+
+                  {linkOpen && (
+                    <div style={pickerWrap}>
+                      <div style={{ display: "flex", gap: 6, marginBottom: 7 }}>
+                        {(["feeds", "depends_on"] as const).map((rel) => (
+                          <button
+                            key={rel}
+                            type="button"
+                            onClick={() => setRelation(rel)}
+                            style={relChip(relation === rel)}
+                          >
+                            {rel === "feeds" ? "Feeds" : "Depends on"}
+                          </button>
+                        ))}
+                      </div>
+                      <input
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Search a card to link…"
+                        style={searchInput}
+                      />
+                      <div
+                        style={{
+                          marginTop: 6,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 3,
+                          maxHeight: 168,
+                          overflowY: "auto",
+                        }}
+                      >
+                        {candidates
+                          .filter(
+                            (c) =>
+                              c.id !== objectId &&
+                              !linkedIds.has(c.id) &&
+                              c.title
+                                .toLowerCase()
+                                .includes(query.trim().toLowerCase()),
+                          )
+                          .slice(0, 10)
+                          .map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => doLink(c.id)}
+                              style={linkRow}
+                              onMouseEnter={(e) =>
+                                (e.currentTarget.style.background =
+                                  appleVibe.surface.chipHover)
+                              }
+                              onMouseLeave={(e) =>
+                                (e.currentTarget.style.background =
+                                  appleVibe.surface.chip)
+                              }
+                              title={`Link "${c.title}"`}
+                            >
+                              <span style={{ minWidth: 0, flex: 1 }}>
+                                <span style={linkTitle}>{c.title}</span>
+                                <span style={linkType}>{titleCase(c.type)}</span>
+                              </span>
+                            </button>
+                          ))}
+                        {candidates.length === 0 && (
+                          <div style={{ ...emptyRow, padding: "8px 2px" }}>
+                            Loading…
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {links.length > 0 ? (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        borderRadius: appleVibe.radius.sm,
+                        background: appleVibe.surface.chip,
+                        padding: "8px 4px",
+                      }}
+                    >
+                      <ObjectClusterGraph
+                        centerTitle={name}
+                        centerType={obj.object_type}
+                        neighbors={links.map((l) => ({
+                          id: l.id,
+                          title: l.title,
+                          type: l.type,
+                          relation: l.relation,
+                          direction: l.direction,
+                        }))}
+                        onNavigate={onNavigate}
+                      />
+                    </div>
+                  ) : (
+                    !linkOpen && (
+                      <div style={{ ...emptyRow, padding: "10px 2px" }}>
+                        No connections yet — + Link to feed this into another
+                        card.
+                      </div>
+                    )
+                  )}
                 </section>
               )}
 
@@ -591,6 +738,52 @@ const subsystemPill: CSSProperties = {
   fontSize: 10.5,
   fontWeight: 650,
 };
+const linkAddBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  height: 20,
+  padding: "0 9px",
+  borderRadius: appleVibe.radius.pill,
+  border: "1px solid var(--glass-border)",
+  background: appleVibe.surface.chip,
+  color: appleVibe.text.secondary,
+  fontSize: 10.5,
+  fontWeight: 650,
+  cursor: "pointer",
+  fontFamily: appleVibe.font.stack,
+};
+const pickerWrap: CSSProperties = {
+  marginTop: 8,
+  padding: 10,
+  borderRadius: appleVibe.radius.sm,
+  border: "1px solid var(--glass-border)",
+  background: "rgba(255,255,255,0.55)",
+};
+const searchInput: CSSProperties = {
+  width: "100%",
+  padding: "7px 9px",
+  borderRadius: appleVibe.radius.sm,
+  border: "1px solid var(--glass-border)",
+  background: "rgba(255,255,255,0.8)",
+  fontSize: 12,
+  color: appleVibe.text.primary,
+  outline: "none",
+  fontFamily: appleVibe.font.stack,
+};
+function relChip(active: boolean): CSSProperties {
+  return {
+    flex: 1,
+    padding: "5px 8px",
+    borderRadius: appleVibe.radius.sm,
+    border: `1px solid ${active ? appleVibe.accent.primary : "var(--glass-border)"}`,
+    background: active ? "rgba(37,99,235,0.10)" : appleVibe.surface.chip,
+    color: active ? appleVibe.text.primary : appleVibe.text.secondary,
+    fontSize: 11,
+    fontWeight: 600,
+    cursor: "pointer",
+    fontFamily: appleVibe.font.stack,
+  };
+}
 const header: CSSProperties = {
   display: "flex",
   alignItems: "center",

@@ -73,10 +73,19 @@ const PINNED_TYPES: ReadonlySet<string> = new Set([
   "prompt-sharpening",
 ]);
 
-/** Connectors / freehand follow their endpoints, so they neither block a
- *  placement nor get pushed directly. */
+/** Shapes that neither block a placement nor get pushed directly: connectors /
+ *  freehand follow their endpoints, and passive backdrops (the group underlay,
+ *  layer bands) are sized to their OWN content — pushing a frame without its
+ *  cards would tear the underlay off the set it wraps. */
+const NON_BLOCKING: ReadonlySet<string> = new Set([
+  "arrow",
+  "draw",
+  "highlight",
+  "sys-frame",
+  "layer-band",
+]);
 function isBlocker(type: string): boolean {
-  return type !== "arrow" && type !== "draw" && type !== "highlight";
+  return !NON_BLOCKING.has(type);
 }
 
 function pageBox(editor: Editor, id: TLShapeId): Rect | null {

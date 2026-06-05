@@ -998,6 +998,8 @@ declare module "@tldraw/tlschema" {
       body: string;
       modelJson: string;
       entityId: string;
+      /** specforge_engine_runs.id — KG state-model provenance (migration 20260924). */
+      engineRunId: string;
     };
     // SpecForge → Tech Spec — the engineering-grade spec generated at the end
     // of a forge run (Opus + UI agent skill). Holds the spec as JSON + the

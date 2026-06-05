@@ -8,9 +8,10 @@
 // three dispatch open-events their (now pill-less) launcher panels listen for.
 // Icons + tooltips only, per the minimal chrome direction.
 
-import { type CSSProperties } from "react";
+import { type CSSProperties, useSyncExternalStore } from "react";
 import { Home, Plus, Compass, History, Settings } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { openSandbox } from "@/lib/objective-canvas/sandbox-signal";
 import { OPEN_BOARD_GOAL_EVENT } from "./goal-ranking-sidebar";
 import { OPEN_BOARD_HISTORY_EVENT } from "./board-history";
 import { OPEN_BOARD_SETTINGS_EVENT } from "./board-settings";
@@ -18,13 +19,29 @@ import { OPEN_BOARD_SETTINGS_EVENT } from "./board-settings";
 const fire = (name: string) =>
   window.dispatchEvent(new CustomEvent(name));
 
-/** Spin up a fresh, isolated scratch space + navigate to it. */
+/** The objective this board belongs to, parsed from the URL — so the nav
+ *  bar stays prop-free (and we never touch the collision-hot whiteboard-base). */
+function currentObjectiveId(): string | null {
+  if (typeof window === "undefined") return null;
+  const m = window.location.pathname.match(/\/app\/objective\/([^/]+)/);
+  return m ? m[1] : null;
+}
+
+/** Find-or-create THE sandbox for the current objective and pop it open in
+ *  place as a floating, isolated sub-whiteboard. No navigation and no library
+ *  card — the sandbox is a hidden child space surfaced only via the panel. */
 async function createSandbox() {
+  const parentSpaceId = currentObjectiveId();
+  if (!parentSpaceId) return;
   try {
-    const r = await fetch("/api/objective/sandbox", { method: "POST" });
+    const r = await fetch("/api/objective/sandbox", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ parentSpaceId }),
+    });
     if (!r.ok) return;
     const { spaceId } = (await r.json()) as { spaceId?: string };
-    if (spaceId) window.location.assign(`/app/objective/${spaceId}`);
+    if (spaceId) openSandbox({ sandboxId: spaceId, parentSpaceId });
   } catch {
     /* ignore — soft-fail */
   }
@@ -44,9 +61,24 @@ const ITEMS: {
 ];
 
 export function BoardNavBar() {
+  // Embedded mode (the sandbox iframe, `?embed=1`) drops Home + New-Sandbox —
+  // there's no "home" inside a sandbox, and a sandbox can't spawn a sandbox.
+  // Read the client-only `?embed=1` flag with a stable `false` server snapshot
+  // — no hydration mismatch, no setState-in-effect. (Same primitive as
+  // board-panel-signal.) The flag is fixed for the iframe's lifetime, so no
+  // live subscription is needed.
+  const embed = useSyncExternalStore(
+    () => () => {},
+    () => new URLSearchParams(window.location.search).get("embed") === "1",
+    () => false,
+  );
+  const items = embed
+    ? ITEMS.filter((i) => i.key !== "home" && i.key !== "sandbox")
+    : ITEMS;
+
   return (
     <div onPointerDown={(e) => e.stopPropagation()} style={bar}>
-      {ITEMS.map(({ key, label, Icon, onClick }) => (
+      {items.map(({ key, label, Icon, onClick }) => (
         <button
           key={key}
           type="button"

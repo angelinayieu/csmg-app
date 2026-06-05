@@ -41,7 +41,7 @@ export async function GET() {
   ]);
   const { data: prof } = await db
     .from("profiles")
-    .select("allowance_remaining, weekly_allowance, plan")
+    .select("allowance_remaining, weekly_allowance, plan, week_anchor")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -53,6 +53,7 @@ export async function GET() {
     plan: prof?.plan ?? "free",
     allowanceRemaining: prof?.allowance_remaining ?? 0,
     weeklyAllowance: prof?.weekly_allowance ?? 0,
+    weekAnchor: prof?.week_anchor ?? null,
     // Include tier costs so the UI can render "X credits = Y standard runs"
     // without re-importing the tier config on the client.
     tiers: {

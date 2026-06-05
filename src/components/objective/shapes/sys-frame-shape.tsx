@@ -14,6 +14,7 @@
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
+  Rectangle2d,
   T,
   type RecordProps,
   type TLBaseShape,
@@ -56,6 +57,18 @@ export class SysFrameShapeUtil extends BaseBoxShapeUtil<SysFrameShape> {
   // an arrow start/end by accident (the deliberate frame→objective connector
   // is created explicitly).
   override canBind = () => true;
+
+  // Backdrop, not a surface: only the BORDER hit-tests. A click in the open
+  // area between the cards it wraps falls through (the cards sit on top and the
+  // gaps deselect) instead of grabbing the whole frame — you still grab the
+  // edge deliberately to move/resize the group.
+  override getGeometry(shape: SysFrameShape) {
+    return new Rectangle2d({
+      width: shape.props.w,
+      height: shape.props.h,
+      isFilled: false,
+    });
+  }
 
   component(shape: SysFrameShape) {
     const { w, h, label, accent } = shape.props;

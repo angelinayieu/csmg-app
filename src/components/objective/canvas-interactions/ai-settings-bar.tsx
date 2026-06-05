@@ -143,24 +143,34 @@ export function AiSettingsBar() {
           e.stopPropagation();
           setOpen((o) => !o);
         }}
+        onMouseEnter={(e) => {
+          if (open) return;
+          e.currentTarget.style.background = appleVibe.surface.chip;
+          e.currentTarget.style.color = appleVibe.text.primary;
+        }}
+        onMouseLeave={(e) => {
+          if (open) return;
+          e.currentTarget.style.background = "transparent";
+          e.currentTarget.style.color = appleVibe.text.secondary;
+        }}
         style={{
+          // Transparent in-row pill — the BoardTopRightBar provides the glass
+          // material; this button only fills with accent when its popover is
+          // open (matching the other in-bar triggers).
           display: "flex",
           alignItems: "center",
           gap: 7,
-          padding: "6px 12px",
-          borderRadius: appleVibe.radius.pill,
-          border: "1px solid var(--glass-border)",
+          padding: "6px 11px",
+          borderRadius: 999,
+          border: "none",
           cursor: "pointer",
           fontFamily: appleVibe.font.stack,
           fontSize: 11.5,
           fontWeight: 650,
           letterSpacing: "-0.01em",
           color: open ? appleVibe.text.onAccent : appleVibe.text.secondary,
-          background: open ? appleVibe.accent.primary : "var(--glass-float-bg)",
-          backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-          WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-          boxShadow:
-            "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
+          background: open ? appleVibe.accent.primary : "transparent",
+          transition: "background 0.15s ease, color 0.15s ease",
         }}
       >
         <SlidersHorizontal style={{ width: 13, height: 13 }} strokeWidth={2.2} />
@@ -191,9 +201,11 @@ export function AiSettingsBar() {
           />
           <div
             style={{
+              // Anchor below + right-aligned: the trigger sits near the right
+              // edge of the bar, so extend the popover leftward to stay on-screen.
               position: "absolute",
-              top: "calc(100% + 8px)",
-              left: 0,
+              top: "calc(100% + 10px)",
+              right: 0,
               zIndex: 2,
               width: 256,
               padding: 13,

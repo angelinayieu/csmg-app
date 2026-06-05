@@ -146,6 +146,10 @@ export function SubObjectivePickerCard({
   // both the PriorConceptsStrip + per-proposal "↻ links to" badges
   // fire this. Null = closed.
   const [openConceptCode, setOpenConceptCode] = useState<string | null>(null);
+  // Context-frontier — the user's prior-idea concepts (the covered frontier
+  // they supplied as context). Fetched once; powers the FrontierStrip +
+  // the per-proposal provenance chips' "building on" framing.
+  const [frontier, setFrontier] = useState<FrontierConceptLite[]>([]);
   // Brainstorm panel (Phase 4 of BRAINSTORM_MODULE_SPEC.md) — autopilot
   // version of the variant lab. The "Generate better" bar stays for
   // single-intent manual presses; this opens the orchestrated 3-intent
@@ -167,6 +171,29 @@ export function SubObjectivePickerCard({
     void runAction("propose", { mode: "initial" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Load the context frontier (prior ideas the user supplied) ──
+  // Soft-fail; empty → FrontierStrip renders nothing (legacy/no-context).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/objective/${spaceId}/context`);
+        if (!res.ok) return;
+        const json = (await res.json()) as {
+          priorIdeas?: FrontierConceptLite[];
+        };
+        if (!cancelled && Array.isArray(json?.priorIdeas)) {
+          setFrontier(json.priorIdeas);
+        }
+      } catch {
+        /* soft-fail */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [spaceId]);
 
   // ── Materialize the recommended trio as explicit picks ──
   // electedIds otherwise FALLS BACK to the recommended set when no
@@ -531,6 +558,7 @@ export function SubObjectivePickerCard({
       <RecommendedPresentation
         recommended={recommended}
         allProposals={allProposals}
+        frontier={frontier}
         totalCount={allProposals.length}
         electedCount={electedIds.size}
         category={block.category}
@@ -722,6 +750,10 @@ export function SubObjectivePickerCard({
           onConceptClick={setOpenConceptCode}
         />
       )}
+
+      {/* Context-frontier strip — the prior ideas the user supplied +
+          a tally of how proposals build on them (covered-vs-new). */}
+      <FrontierStrip frontier={frontier} proposals={allProposals} />
 
       {/* Cluster bar — auto-fires on the proposal set; renders only
           when there's something to surface (in-flight, results, or
@@ -937,6 +969,7 @@ export function SubObjectivePickerCard({
 export function RecommendedPresentation({
   recommended,
   allProposals,
+  frontier,
   totalCount,
   electedCount,
   clusterAnalysis,
@@ -951,6 +984,7 @@ export function RecommendedPresentation({
 }: {
   recommended: SubObjectiveProposal[];
   allProposals: SubObjectiveProposal[];
+  frontier: FrontierConceptLite[];
   totalCount: number;
   electedCount: number;
   category?: string | null;
@@ -1063,6 +1097,9 @@ export function RecommendedPresentation({
           filter: "blur(12px)",
         }}
       />
+
+      {/* Context-frontier strip — prior ideas + covered-vs-new tally. */}
+      <FrontierStrip frontier={frontier} proposals={allProposals} />
 
       {/* Translucent glass base hosting the category tabs + the cards. */}
       <div
@@ -1390,9 +1427,203 @@ function HeroProposalCard({
               Why this: {proposal.rationale}
             </p>
           )}
+
+          {proposal.frontier_relation && (
+            <div className="mt-3">
+              <FrontierRelationChip relation={proposal.frontier_relation} />
+            </div>
+          )}
         </div>
       </div>
     </button>
+  );
+}
+
+// ── Context-frontier provenance chip ────────────────────────────────
+//
+// Shows how a proposal relates to the user's PRIOR ideas (the covered
+// frontier they supplied as context). Driven by proposal.frontier_relation
+// (CONTEXT_FRONTIER_PLAN.md): "extends:<slug>" | "combines:<a>+<b>" |
+// "gap_between:<a>,<b>" | "novel". This is the visible proof that the system
+// AUGMENTED the user's input rather than parroting it back — slugs are the
+// glossary concept_slug namespace, de-slugged here for a readable label.
+function deslugConcept(s: string): string {
+  return s.replace(/-/g, " ").trim();
+}
+
+function FrontierRelationChip({ relation }: { relation?: string }) {
+  if (!relation) return null;
+  const [kindRaw, argRaw = ""] = relation.trim().split(/:(.+)/);
+  const kind = kindRaw.trim().toLowerCase();
+
+  let label: string | null = null;
+  let glyph = "↗";
+  if (kind === "novel") {
+    glyph = "✦";
+    label = "New — not in your context";
+  } else if (kind === "extends") {
+    glyph = "↗";
+    const c = deslugConcept(argRaw);
+    label = c ? `Extends your “${c}”` : "Extends your prior idea";
+  } else if (kind === "combines") {
+    glyph = "⊕";
+    const parts = argRaw.split("+").map(deslugConcept).filter(Boolean);
+    label =
+      parts.length >= 2
+        ? `Combines “${parts[0]}” + “${parts[1]}”`
+        : "Combines your prior ideas";
+  } else if (kind === "gap_between") {
+    glyph = "◇";
+    const parts = argRaw.split(",").map(deslugConcept).filter(Boolean);
+    label =
+      parts.length >= 2
+        ? `Fills gap: “${parts[0]}” ↔ “${parts[1]}”`
+        : "Fills a gap in your context";
+  }
+  if (!label) return null;
+
+  const novel = kind === "novel";
+  return (
+    <span
+      className="inline-flex max-w-full items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+      style={{
+        background: novel ? "rgba(99,102,241,0.10)" : "rgba(16,185,129,0.10)",
+        color: novel ? "rgba(67,56,202,0.95)" : "rgba(6,95,70,0.95)",
+        border: `1px solid ${novel ? "rgba(99,102,241,0.22)" : "rgba(16,185,129,0.22)"}`,
+      }}
+      title="How this builds on the prior context you supplied"
+    >
+      <span aria-hidden>{glyph}</span>
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
+// ── Context-frontier strip (covered-vs-new) ─────────────────────────
+//
+// Header summary for the picker: the PRIOR ideas the user supplied as
+// context (the covered frontier) + a tally of how the generated proposals
+// relate to them (extend / combine / fill-gaps / new). This is the
+// frontier-map payoff in compact form — visible proof the decomposition
+// AUGMENTED the user's input rather than repeating it. Renders only when
+// the user actually supplied prior-idea context.
+interface FrontierConceptLite {
+  concept: string;
+  concept_slug: string;
+  kind: "idea" | "constraint" | "fact" | "question";
+  summary: string;
+}
+
+function tallyFrontierRelations(proposals: SubObjectiveProposal[]) {
+  let extend = 0;
+  let combine = 0;
+  let gap = 0;
+  let novel = 0;
+  for (const p of proposals) {
+    if (!p.frontier_relation) continue;
+    const kind = p.frontier_relation.split(":")[0].trim().toLowerCase();
+    if (kind === "extends") extend += 1;
+    else if (kind === "combines") combine += 1;
+    else if (kind === "gap_between") gap += 1;
+    else if (kind === "novel") novel += 1;
+  }
+  return { extend, combine, gap, novel };
+}
+
+function FrontierStrip({
+  frontier,
+  proposals,
+}: {
+  frontier: FrontierConceptLite[];
+  proposals: SubObjectiveProposal[];
+}) {
+  if (frontier.length === 0) return null;
+  const t = tallyFrontierRelations(proposals);
+  const built = t.extend + t.combine + t.gap;
+  const pills: Array<[string, number]> = [
+    ["extend", t.extend],
+    ["combine", t.combine],
+    ["fill gaps", t.gap],
+  ];
+  return (
+    <div
+      className="mt-4 rounded-2xl border px-3 py-2.5"
+      style={{
+        background: "rgba(16,185,129,0.04)",
+        borderColor: "rgba(16,185,129,0.18)",
+        borderRadius: appleVibe.radius.md,
+      }}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <span
+          className="text-[10.5px] font-semibold uppercase tracking-[0.14em]"
+          style={{ color: "rgba(6,95,70,0.95)" }}
+        >
+          Building on your prior context
+        </span>
+        <span
+          className="text-[11px] font-light"
+          style={{ color: appleVibe.text.tertiary }}
+        >
+          {frontier.length} idea{frontier.length === 1 ? "" : "s"}
+          {built > 0 && ` · ${built} build on them`}
+          {t.novel > 0 && ` · ${t.novel} new`}
+        </span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1">
+        {frontier.slice(0, 8).map((c) => (
+          <span
+            key={c.concept_slug}
+            title={c.summary || c.kind}
+            className="inline-flex max-w-[200px] items-center rounded-full px-2 py-0.5 text-[10px] font-medium"
+            style={{
+              background: "rgba(255,255,255,0.7)",
+              color: "rgba(6,95,70,0.95)",
+              border: "1px solid rgba(16,185,129,0.22)",
+            }}
+          >
+            <span className="truncate">{c.concept}</span>
+          </span>
+        ))}
+        {frontier.length > 8 && (
+          <span
+            className="text-[10px] font-medium"
+            style={{ color: appleVibe.text.tertiary }}
+          >
+            +{frontier.length - 8} more
+          </span>
+        )}
+      </div>
+      {built + t.novel > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {pills
+            .filter(([, n]) => n > 0)
+            .map(([label, n]) => (
+              <span
+                key={label}
+                className="rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold"
+                style={{
+                  background: "rgba(16,185,129,0.10)",
+                  color: "rgba(6,95,70,0.95)",
+                }}
+              >
+                {n} {label}
+              </span>
+            ))}
+          {t.novel > 0 && (
+            <span
+              className="rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold"
+              style={{
+                background: "rgba(99,102,241,0.10)",
+                color: "rgba(67,56,202,0.95)",
+              }}
+            >
+              {t.novel} new
+            </span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1957,6 +2188,14 @@ export function ProposalRow({
                   </span>
                 ),
               )}
+            </div>
+          )}
+
+          {/* Context-frontier provenance — how this proposal builds on the
+              user's prior ideas (extends / combines / gap / novel). */}
+          {proposal.frontier_relation && (
+            <div className="mt-1.5">
+              <FrontierRelationChip relation={proposal.frontier_relation} />
             </div>
           )}
 

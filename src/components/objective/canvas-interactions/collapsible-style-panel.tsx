@@ -2,66 +2,34 @@
 
 // ── CollapsibleStylePanel ──
 //
-// A collapsed-by-default replacement for tldraw's always-expanded style panel
-// (color / opacity / dash / size). Renders a small glass palette icon; clicking
-// it reveals the DefaultStylePanel. Declutters the top-right and stops the full
-// palette colliding with the Notebook pill. Passed to <Tldraw components>.
+// tldraw's style panel (color / opacity / dash / size), but collapsed by
+// default and CONTROLLED by the shared board-panel signal. The trigger lives
+// in the unified BoardTopRightBar (so the palette reads as part of that one
+// glass row); this component only renders the actual DefaultStylePanel — and
+// only while the "style" panel is open — anchored just BELOW the bar at the
+// top-right. It stays mounted in the tldraw `components.StylePanel` slot
+// because DefaultStylePanel needs the editor context.
 
-import { useState } from "react";
 import { DefaultStylePanel, type TLUiStylePanelProps } from "tldraw";
-import { Palette } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { usePanel } from "@/lib/objective-canvas/board-panel-signal";
 
 export function CollapsibleStylePanel(props: TLUiStylePanelProps) {
-  const [open, setOpen] = useState(false);
+  const open = usePanel("style");
+  if (!open) return null;
   return (
     <div
       style={{
         display: "flex",
         flexDirection: "column",
         alignItems: "flex-end",
-        gap: 6,
         pointerEvents: "all",
-        // Hug the top-right corner. BoardNavBar lives at top-LEFT, so the
-        // top-right is free; we sit at top: 14 alongside the Saved status
-        // pill (which is at right: 168, so we don't horizontally collide).
-        // Library + Powerups pills sit BELOW at top: 56 / 96 and don't fight
-        // for this row. The layout still overrides via the CSS var if a
-        // future layout needs to push us elsewhere.
-        marginTop: "var(--oc-style-panel-top, 14px)",
-        // Slides left of the Powerups panel when it's open (the rail sets
-        // `--oc-style-panel-right`) so the palette never covers the panel's
-        // close button. Back to the corner (12px) when the panel is closed.
-        marginRight: "var(--oc-style-panel-right, 12px)",
-        transition: "margin-right 0.28s cubic-bezier(0.22,1,0.36,1)",
+        // Sit just below the unified top-right bar (top:16, ~38px tall),
+        // hugging the right edge so it reads as that bar's dropdown.
+        marginTop: 62,
+        marginRight: 16,
       }}
     >
-      <button
-        type="button"
-        title={open ? "Hide style controls" : "Style controls"}
-        aria-label="Toggle style controls"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={() => setOpen((o) => !o)}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: 36,
-          height: 36,
-          borderRadius: appleVibe.radius.sm,
-          background: open ? appleVibe.accent.primary : "var(--glass-float-bg)",
-          color: open ? appleVibe.text.onAccent : appleVibe.text.secondary,
-          border: "1px solid var(--glass-border)",
-          boxShadow:
-            "inset 0 1px 0 var(--glass-highlight), 0 8px 24px -12px rgba(11,18,40,0.26)",
-          backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-          WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-          cursor: "pointer",
-        }}
-      >
-        <Palette style={{ width: 16, height: 16 }} strokeWidth={2} />
-      </button>
-      {open && <DefaultStylePanel {...props} />}
+      <DefaultStylePanel {...props} />
     </div>
   );
 }

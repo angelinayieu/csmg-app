@@ -26,7 +26,7 @@ import {
   resizeBox,
 } from "tldraw";
 import { useEffect, useRef, useState } from "react";
-import { Check, MessageSquare, Sparkles, Trash2 } from "lucide-react";
+import { Check, MessageSquare, Zap, Trash2 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import {
   dispatchCommentAnalyze,
@@ -35,7 +35,14 @@ import {
   dispatchCommentBodyPatch,
 } from "@/components/objective/board-bus";
 
-export const COMMENT_COLOR = "#B4734A"; // warm kraft — human-annotation register
+export const COMMENT_COLOR = "#6366F1"; // vibrant indigo — human-annotation register
+
+// Vibrant + light accent for the human-annotation register. A fresh
+// indigo→violet that reads brighter and more alive than the old muddy
+// kraft brown; the avatar + Analyze CTA lean on the gradient plus a soft
+// colored glow (the canvas "Vision Pro" accent-glow taste).
+const COMMENT_GRADIENT = "linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)";
+const COMMENT_GLOW = "0 6px 18px -7px rgba(99,102,241,0.5)";
 
 export type CommentStatus = "open" | "resolved" | "analyzed";
 
@@ -119,7 +126,7 @@ function relativeTime(iso: string): string {
 }
 
 function CommentCardRenderer({ shape }: { shape: CommentCardShape }) {
-  const { authorName, authorAvatarUrl, body, status, color, createdAtIso, targetShapeIds } =
+  const { authorName, authorAvatarUrl, body, status, createdAtIso, targetShapeIds } =
     shape.props;
   const initial = (authorName || "You").trim().charAt(0).toUpperCase();
 
@@ -166,7 +173,7 @@ function CommentCardRenderer({ shape }: { shape: CommentCardShape }) {
 
   const statusChip = (() => {
     if (status === "analyzed")
-      return { label: "Analyzed", tone: "#7C3AED", icon: Sparkles };
+      return { label: "Analyzed", tone: "#7C3AED", icon: Zap };
     if (status === "resolved")
       return { label: "Resolved", tone: "#16A34A", icon: Check };
     return { label: "Open", tone: appleVibe.text.faint, icon: MessageSquare };
@@ -215,7 +222,8 @@ function CommentCardRenderer({ shape }: { shape: CommentCardShape }) {
                 width: 32,
                 height: 32,
                 borderRadius: 999,
-                background: color,
+                background: COMMENT_GRADIENT,
+                boxShadow: COMMENT_GLOW,
                 color: "white",
                 display: "grid",
                 placeItems: "center",
@@ -251,7 +259,10 @@ function CommentCardRenderer({ shape }: { shape: CommentCardShape }) {
                 gap: 4,
               }}
             >
-              <MessageSquare style={{ width: 10, height: 10, color }} strokeWidth={2.2} />
+              <MessageSquare
+                style={{ width: 10, height: 10, color: COMMENT_COLOR }}
+                strokeWidth={2.2}
+              />
               comment · {relativeTime(createdAtIso)}
               {targetCount > 0 && <span> · on {targetCount} card{targetCount === 1 ? "" : "s"}</span>}
             </div>
@@ -361,10 +372,11 @@ function CommentCardRenderer({ shape }: { shape: CommentCardShape }) {
               display: "inline-flex",
               alignItems: "center",
               gap: 5,
-              padding: "5px 11px",
+              padding: "5px 14px",
               borderRadius: 999,
               border: "none",
-              background: color,
+              background: COMMENT_GRADIENT,
+              boxShadow: busyAnalyze ? "none" : COMMENT_GLOW,
               color: "#FFFFFF",
               fontSize: 11,
               fontWeight: 650,
@@ -373,7 +385,6 @@ function CommentCardRenderer({ shape }: { shape: CommentCardShape }) {
               opacity: busyAnalyze ? 0.7 : 1,
             }}
           >
-            <Sparkles style={{ width: 12, height: 12 }} strokeWidth={2.2} />
             {busyAnalyze ? "Analyzing…" : "Analyze"}
           </button>
           <button

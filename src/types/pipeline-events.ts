@@ -169,7 +169,16 @@ export type StructuralEvent =
   // forces might be at play, and what the LLM expects to find. They
   // get superseded by the deeper synthesize-stage insights but
   // close the "is this working" gap during the long reasoning phase.
-  | PreliminaryHypothesisEvent;
+  | PreliminaryHypothesisEvent
+  // ── SpecForge — engine lifecycle (Phase A KG state model) ──
+  // Fired by the SpecForge persistence service around each engine call
+  // inside a `pipeline=specforge` run, so a future SSE-driven progress
+  // chip / side-panel timeline can subscribe through the existing event
+  // bus instead of a parallel channel. Engine row + reasoning artifact
+  // are durably persisted in specforge_engine_runs +
+  // specforge_reasoning_artifacts (migration 20260924).
+  | SpecForgeEngineStartedEvent
+  | SpecForgeEngineCompletedEvent;
 
 // ── Phase 2E · Tier 2 — probability space axes ──
 //
@@ -1638,6 +1647,39 @@ export interface LabScoreRecordedEvent {
   stackAvg: number;
   /** Number of insights that contributed to the stack average. */
   insightCount: number;
+}
+
+// ── SpecForge — engine lifecycle (KG state model Phase A) ──────────────
+//
+// Fired around each engine call inside a `pipeline=specforge` run so a
+// future SSE-driven progress chip / side-panel timeline can subscribe to
+// the existing event bus instead of a parallel channel. The durable
+// rows live in specforge_engine_runs + specforge_reasoning_artifacts
+// (migration 20260924). Payload is intentionally small: viewers fetch
+// the artifact JSON on-demand when they need to render it.
+
+export interface SpecForgeEngineStartedEvent {
+  type: "specforge_engine_started";
+  /** specforge_engine_runs.id — the row just inserted. */
+  engineRunId: string;
+  /** Engine id from SpecForgeEngineId (e.g. "problem_tree"). */
+  engine: string;
+  /** Position in the chain (0-indexed). */
+  sequence: number;
+  /** Total number of engines in the chain for the progress bar. */
+  total: number;
+}
+
+export interface SpecForgeEngineCompletedEvent {
+  type: "specforge_engine_completed";
+  engineRunId: string;
+  engine: string;
+  sequence: number;
+  status: "completed" | "failed" | "skipped";
+  /** Whether the critic accepted the first pass. */
+  criticPass: boolean | null;
+  /** Whether a one-shot repair pass salvaged the output. */
+  repaired: boolean;
 }
 
 // ── Problem-framing diverge-converge (Phase 1) ─────────────────────────

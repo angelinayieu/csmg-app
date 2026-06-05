@@ -82,6 +82,14 @@ export interface SubObjectiveProposal {
    *  The picker card surfaces this verbatim — no client-side
    *  derivation needed. Optional for legacy + back-compat. */
   layer_position_label?: string;
+  /** Context-frontier (CONTEXT_FRONTIER_PLAN.md) — how this proposal
+   *  relates to the user's PRIOR ideas (the covered frontier):
+   *    "extends:<slug>" | "combines:<slugA>+<slugB>" |
+   *    "gap_between:<slugA>,<slugB>" | "novel"
+   *  Emitted only when a covered frontier was supplied at generation
+   *  time; powers the per-card provenance label + the anti-echo
+   *  self-check. Optional/back-compat. */
+  frontier_relation?: string;
 }
 
 export interface SubObjectiveBatch {
@@ -226,6 +234,14 @@ export function normalizeProposals(
           ? rec.layer_position_label.trim().slice(0, 40)
           : undefined;
 
+      // Context-frontier — provenance string the LLM emits when a covered
+      // frontier was supplied. Free-form (validated shape is enforced by
+      // the prompt, not here); just trim + cap so a stray value is safe.
+      const frontier_relation =
+        typeof rec.frontier_relation === "string"
+          ? rec.frontier_relation.trim().slice(0, 120)
+          : undefined;
+
       return {
         id,
         title,
@@ -237,6 +253,7 @@ export function normalizeProposals(
         ...(lens_coverage.length > 0 ? { lens_coverage } : {}),
         ...(layer_ordinals.length > 0 ? { layer_ordinals } : {}),
         ...(layer_position_label ? { layer_position_label } : {}),
+        ...(frontier_relation ? { frontier_relation } : {}),
         disposition,
       };
     })

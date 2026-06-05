@@ -1,5 +1,17 @@
+import { Plus_Jakarta_Sans } from "next/font/google";
 import { getAuthUser, createClient } from "@/lib/supabase/server";
 import { PricingClient } from "./pricing-client";
+
+// The brand wordmark specifies Plus Jakarta Sans (see akiboe-logo.tsx) but it
+// was never actually loaded — so every heading silently fell back to Geist/SF.
+// Load it here (variable font, full weight range) and expose it as a CSS var
+// so the warm marketing type on this page reads as the akiboe brand, not the
+// app's neutral UI font.
+const jakarta = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  variable: "--font-jakarta",
+  display: "swap",
+});
 
 export const metadata = {
   title: "Pricing — akiboe",
@@ -31,5 +43,9 @@ export default async function PricingPage() {
     // Public page — render the logged-out view on any failure.
   }
 
-  return <PricingClient isLoggedIn={isLoggedIn} currentPlan={currentTier} />;
+  return (
+    <div className={jakarta.variable}>
+      <PricingClient isLoggedIn={isLoggedIn} currentPlan={currentTier} />
+    </div>
+  );
 }

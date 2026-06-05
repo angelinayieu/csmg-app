@@ -43,6 +43,7 @@ import { ObjectiveImageMount } from "@/components/objective/objective-image-moun
 import { VoiceRecordFab } from "@/components/objective/voice/voice-record-fab";
 import { ResolutionStudioMount } from "@/components/objective/resolution/resolution-studio-mount";
 import { AnnotationsVisibilityToggle } from "@/components/objective/annotations-visibility-toggle";
+import { SandboxPanel } from "@/components/objective/canvas-interactions/sandbox-panel";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 interface Props {
@@ -105,10 +106,14 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   // useSearchParams Suspense requirement); defaults to minimal on first
   // paint, so the common case never flashes the heavy chrome.
   const [fullMode, setFullMode] = useState(false);
+  // Embed mode — this objective is being rendered inside the floating Sandbox
+  // panel's iframe (`?embed=1`). We strip the outer chrome (intake mounts, the
+  // sandbox panel itself) so the embedded board reads as a clean nested canvas.
+  const [embed, setEmbed] = useState(false);
   useEffect(() => {
-    setFullMode(
-      new URLSearchParams(window.location.search).get("full") === "1",
-    );
+    const sp = new URLSearchParams(window.location.search);
+    setFullMode(sp.get("full") === "1");
+    setEmbed(sp.get("embed") === "1");
   }, [pathname]);
   // Only the objective ROOT (mode "space", not a /sub/ room or the brief)
   // collapses to the minimal board surface.
@@ -234,19 +239,25 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
       {/* First intake intelligence object — polls for the sharpening
           artifact + materializes the Prompt Sharpening Card on the board.
           Minimal mode only (the full canvas has its own analysis surfaces). */}
-      {minimal && !isBrief && <PromptSharpeningMount spaceId={spaceId} />}
+      {minimal && !isBrief && !embed && <PromptSharpeningMount spaceId={spaceId} />}
       {/* Analyzed pasted images → cards on the board (minimal mode only). */}
-      {minimal && !isBrief && <ObjectiveImageMount spaceId={spaceId} />}
+      {minimal && !isBrief && !embed && <ObjectiveImageMount spaceId={spaceId} />}
 
       {/* Voice journal — the record FAB (bottom-center) opens the recorder
           panel; committing drops a voice-note card + re-synthesizes the
           journal. Board-only (minimal), when the board is showing. */}
-      {minimal && !isBrief && <VoiceRecordFab spaceId={spaceId} />}
+      {minimal && !isBrief && !embed && <VoiceRecordFab spaceId={spaceId} />}
 
       {/* Immersive Resolution Studio — opened from the Prompt Sharpening Card
           to resolve high-leverage ambiguities (flashcards + voice + live AI
           assist). Headless until an open event fires. */}
-      {minimal && !isBrief && <ResolutionStudioMount spaceId={spaceId} />}
+      {minimal && !isBrief && !embed && <ResolutionStudioMount spaceId={spaceId} />}
+
+      {/* Floating, isolated Sandbox whiteboard — headless until the top-left
+          "New sandbox" button fires OPEN_SANDBOX_EVENT. Mounted on the real
+          objective only (never inside its own embed iframe). Available in both
+          minimal + full chrome. */}
+      {!isBrief && !embed && <SandboxPanel parentSpaceId={spaceId} />}
 
       {/* Collapsed pill — visible whenever the notebook is closed.
           Render WITHOUT the hydration gate so it's visible on first

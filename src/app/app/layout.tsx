@@ -36,6 +36,9 @@ export default async function AppLayout({
     .from("spaces")
     .select("*")
     .eq("archived", false)
+    // Hide child spaces (e.g. sandboxes) — they live inside their parent
+    // objective, never as a top-level item. Mirrors the home library filter.
+    .is("parent_space_id", null)
     .order("pinned", { ascending: false })
     .order("updated_at", { ascending: false });
 
@@ -47,7 +50,13 @@ export default async function AppLayout({
     : richSpacesRes;
 
   const rawSpaces = (spacesRes.data ?? []) as Space[];
-  const spaces = rawSpaces.filter((s) => !s.archived);
+  const spaces = rawSpaces.filter(
+    (s) =>
+      !s.archived &&
+      // Belt-and-suspenders for the column-light fallback query, which can't
+      // filter parent_space_id server-side.
+      !(s as { parent_space_id?: string | null }).parent_space_id,
+  );
 
   return (
     <AppStoreProvider initialState={{ spaces }}>

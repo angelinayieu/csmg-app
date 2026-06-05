@@ -31,8 +31,16 @@ interface MembersResponse {
   shared: boolean;
 }
 
-export function ShareBoardLauncher({ spaceId }: { spaceId: string }) {
+export function ShareBoardLauncher({
+  spaceId,
+  variant,
+}: {
+  spaceId: string;
+  /** "bar" → an in-flow accent pill for BoardTopRightBar; default floats. */
+  variant?: "bar";
+}) {
   const [open, setOpen] = useState(false);
+  const inBar = variant === "bar";
   return (
     <>
       <button
@@ -41,25 +49,26 @@ export function ShareBoardLauncher({ spaceId }: { spaceId: string }) {
         title="Share this board"
         aria-label="Share this board"
         style={{
-          // Right toolbar baseline — sits just inside the style palette as
-          // the ONE filled/accent action in the otherwise-glass top row.
-          position: "absolute",
-          top: 16,
-          right: 56,
-          zIndex: 70,
+          // The ONE filled/accent action in the top-right row. In the bar it's
+          // an in-flow flex child; standalone it floats at the right edge.
+          ...(inBar
+            ? {}
+            : { position: "absolute", top: 16, right: 56, zIndex: 70 }),
           display: "inline-flex",
           alignItems: "center",
           gap: 6,
-          padding: "7px 13px",
+          padding: inBar ? "6px 12px" : "7px 13px",
           borderRadius: 999,
           border: `1px solid ${appleVibe.accent.primary}`,
           background: appleVibe.accent.primary,
           color: appleVibe.text.onAccent,
-          fontSize: 12,
+          fontSize: inBar ? 11.5 : 12,
           fontWeight: 650,
           cursor: "pointer",
           fontFamily: appleVibe.font.stack,
-          boxShadow: "0 8px 24px -10px rgba(124,58,237,0.45)",
+          boxShadow: inBar
+            ? "0 6px 16px -8px rgba(124,58,237,0.5)"
+            : "0 8px 24px -10px rgba(124,58,237,0.45)",
         }}
       >
         <Share2 className="h-3.5 w-3.5" strokeWidth={2.4} />

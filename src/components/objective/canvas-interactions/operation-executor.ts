@@ -26,6 +26,7 @@ import {
 } from "@/lib/objective-canvas/canvas-operations";
 import { saveCardsToLibrary, type SaveableCard } from "./save-to-library";
 import { reserveSpace } from "./placement";
+import { frameForkedGroup } from "./group-frame";
 
 const RESULT_W = 216;
 const RESULT_H = 132;
@@ -80,6 +81,20 @@ export async function executeCardOperation(
     anchorMidX = vp.center.x;
     startY = vp.center.y;
   }
+
+  // Source object for fork-link persistence: when the op runs on an oc-card (a
+  // real library object), every result is `derived_from` it — so the group
+  // forked here becomes a real edge in the object cluster graph, not just a
+  // visual frame. Resolved now (the source shape is still present) and consumed
+  // in the library-backfill below. Empty for stickies / non-object sources, in
+  // which case we persist no fork link (matches Connect's "both oc-cards" rule).
+  const srcShape = target.shapeId
+    ? editor.getShape(target.shapeId as TLShapeId)
+    : undefined;
+  const sourceObjectId =
+    srcShape?.type === "oc-card"
+      ? ((srcShape.props as { objectId?: string }).objectId ?? "")
+      : "";
 
   // No pending placeholder shape — the trigger surfaces show their own
   // affordance (scanner rows + the ‹ › buttons), and a grey sticky on the
@@ -172,6 +187,18 @@ export async function executeCardOperation(
     created.push({ shapeId: id, item, isOc });
   });
 
+  // ── Grouping underlay + fork connector ── a multi-card result is a set forked
+  //    out of the source card; wrap it in a frosted backdrop labelled with the
+  //    op and tether it back to where it came from. Same primitive decompose
+  //    uses, so EVERY set-deploying op gets the boundary + connector. (A lone
+  //    result card isn't a "system" — the helper no-ops below 2.)
+  frameForkedGroup(editor, {
+    childIds: created.map((c) => c.shapeId),
+    sourceShapeId: target.shapeId ?? null,
+    label: op.label,
+    accent: RESULT_COLOR,
+  });
+
   // Reveal where the results landed (the cluster may have been relocated to
   // clear space) without yanking the zoom level.
   editor.centerOnPoint(
@@ -221,6 +248,29 @@ export async function executeCardOperation(
           /* shape removed before backfill */
         }
       });
+
+      // Close the connection loop: persist each result as `derived_from` its
+      // source object via the SAME link-objects route the Connect op uses, so
+      // the forked group is a live edge in the cluster graph (feeds the metadata
+      // recommender / auto-cluster), not a visual-only frame. Fire-and-forget,
+      // soft-fail — a link miss never blocks the cards that already rendered.
+      if (sourceObjectId) {
+        await Promise.all(
+          objectIds.map((oid) =>
+            oid
+              ? fetch(`/api/objective/${spaceId}/link-objects`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    fromObjectId: oid,
+                    toObjectId: sourceObjectId,
+                    relation: "derived_from",
+                  }),
+                }).catch(() => undefined)
+              : Promise.resolve(undefined),
+          ),
+        );
+      }
     })();
   }
 

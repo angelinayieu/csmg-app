@@ -50,7 +50,27 @@ import {
   extractConstraintsFromEngineResult,
   summarizeConstraintsForContext,
 } from "@/lib/objective-canvas/specforge/constraints";
+import { outputSummaryFor } from "@/lib/objective-canvas/specforge/operation-cards";
 import { reserveSpace } from "./placement";
+
+/** Per-engine status snapshot the Operation Lane consumes. The runner
+ *  rebuilds this object after every engine returns, so the lane re-renders
+ *  with each tick (status flips → output count appears → shape id wired
+ *  for click-to-focus). Spec §7.1 / §14 / §21. */
+export interface EngineLaneStatus {
+  status: "not_started" | "running" | "passed" | "failed" | "repaired";
+  /** tldraw shape id of the produced reasoning card. Click-to-focus reads
+   *  this; absent when the engine hasn't placed any card (soft-fail) or
+   *  hasn't run yet. */
+  shapeId?: string;
+  /** Critic issue count (0 = clean). */
+  issueCount?: number;
+  /** 0..100 — engine's self-reported confidence when reported. */
+  confidence?: number;
+  /** 1-line output summary from outputSummary() — pre-computed so the
+   *  lane stays render-cheap. */
+  outputSummary?: string;
+}
 
 export interface SpecForgeProgress {
   phase: "running" | "done" | "error";
@@ -70,10 +90,21 @@ export interface SpecForgeProgress {
    *  (the "first build" hero). Lets the chip offer a "Jump to first build"
    *  action so the user doesn't have to scroll through 20 cards to find it. */
   focusShapeId?: string;
+  /** Per-engine status snapshot. Always present (engines start "not_started";
+   *  flip to "running" then "passed"/"failed"/"repaired"). Powers the
+   *  Operation Lane — clickable per-engine map of the chain. */
+  engineStatuses: Partial<Record<SpecForgeEngineId, EngineLaneStatus>>;
 }
 
 interface RunOptions {
   onProgress?: (p: SpecForgeProgress) => void;
+  /** Space id this forge belongs to. When present, the runner opens a
+   *  `pipeline=specforge` pipeline_run via /api/canvas/specforge/run/start
+   *  and threads its runId through every per-engine call so the chain's
+   *  artifacts persist (specforge_engine_runs + reasoning_artifacts +
+   *  constraints). When omitted, the chain runs in-memory only — same
+   *  behavior as before persistence shipped. */
+  spaceId?: string;
 }
 
 const ANCHOR_GAP = 64;
@@ -109,7 +140,12 @@ async function fetchEngine(
   engine: SpecForgeEngineId,
   idea: string,
   context: string,
-): Promise<{ result: unknown; critic?: QualityCriticResult } | null> {
+  persist: { runId: string; spaceId: string; sequence: number } | null,
+): Promise<{
+  result: unknown;
+  critic?: QualityCriticResult;
+  engineRunId?: string;
+} | null> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), ENGINE_TIMEOUT_MS);
   try {
@@ -120,6 +156,15 @@ async function fetchEngine(
         engine,
         idea: idea.slice(0, 6000),
         context: context.slice(0, 8000),
+        // Persistence handle — route writes engine_run + artifact rows
+        // when all three are present. Soft-fails server-side if not.
+        ...(persist
+          ? {
+              runId: persist.runId,
+              spaceId: persist.spaceId,
+              sequence: persist.sequence,
+            }
+          : {}),
       }),
       signal: controller.signal,
     });
@@ -127,9 +172,14 @@ async function fetchEngine(
     const json = (await res.json()) as {
       result?: unknown;
       critic?: QualityCriticResult;
+      engineRunId?: string;
     };
     if (json.result === undefined || json.result === null) return null;
-    return { result: json.result, critic: json.critic };
+    return {
+      result: json.result,
+      critic: json.critic,
+      engineRunId: json.engineRunId,
+    };
   } catch {
     return null;
   } finally {
@@ -192,6 +242,33 @@ export async function runSpecForge(
   const contextParts: string[] = [];
   const stamp = Date.now();
   let createdAny = false;
+
+  // ── KG state-model Phase A: open a SpecForge pipeline_run ─────────
+  // Soft-fail: when spaceId is missing, /run/start refuses, or any DB
+  // hiccup happens, runId stays null and the chain runs in-memory exactly
+  // like before. Per-engine persistence + /run/complete both no-op on
+  // null runId, so this is a pure additive surface.
+  let runId: string | null = null;
+  if (opts.spaceId) {
+    try {
+      const res = await fetch("/api/canvas/specforge/run/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ spaceId: opts.spaceId, idea }),
+      });
+      if (res.ok) {
+        const json = (await res.json()) as { runId?: string | null };
+        runId = json.runId ?? null;
+      }
+    } catch (err) {
+      // Persistence-off is a recoverable degradation — log + continue.
+      console.warn("[specforge-runner] run/start failed:", err);
+    }
+  }
+  // Map of engine id → engine_run UUID, threaded into the final
+  // /run/complete call so each persisted constraint can resolve its
+  // origin engine to a real engine_run FK (not just a textual id).
+  const engineRunIdByEngine: Partial<Record<SpecForgeEngineId, string>> = {};
   // Every placed card, in causal order — threaded into a connected
   // dependency graph (sequence → fork → converge) once the chain finishes.
   const allPlaced: PlacedCard[] = [];
@@ -206,6 +283,21 @@ export async function runSpecForge(
   // affordance on completion (the most-asked navigation in user testing).
   let recommendationShapeId: string | undefined;
 
+  // Per-engine status snapshot for the Operation Lane. Seed every engine
+  // as `not_started`; the run-loop flips entries to `running` then
+  // `passed`/`failed`/`repaired`. Re-emitted on every onProgress tick so
+  // the lane re-renders incrementally.
+  const engineStatuses: Partial<Record<SpecForgeEngineId, EngineLaneStatus>> = {};
+  for (const e of SPECFORGE_CHAIN) {
+    engineStatuses[e] = { status: "not_started" };
+  }
+  // Cloned per emission — React state updates are reference-based, so a
+  // mutation on the running map wouldn't trigger a re-render in the lane.
+  const snapshotStatuses = () =>
+    Object.fromEntries(
+      Object.entries(engineStatuses).map(([k, v]) => [k, v ? { ...v } : v]),
+    ) as typeof engineStatuses;
+
   const firstEngine = SPECFORGE_CHAIN[0];
   const firstAct = PHASE_OF_ENGINE[firstEngine];
   opts.onProgress?.({
@@ -216,11 +308,15 @@ export async function runSpecForge(
     act: firstAct,
     actIndex: PHASE_ORDER.indexOf(firstAct) + 1,
     actTotal: PHASE_ORDER.length,
+    engineStatuses: snapshotStatuses(),
   });
 
   for (let idx = 0; idx < SPECFORGE_CHAIN.length; idx++) {
     const engine = SPECFORGE_CHAIN[idx];
     const act = PHASE_OF_ENGINE[engine];
+    // Flip THIS engine to running before the LLM call returns, so the lane
+    // shows "in flight" rather than skipping straight from not_started.
+    engineStatuses[engine] = { status: "running" };
     opts.onProgress?.({
       phase: "running",
       done: idx,
@@ -229,6 +325,7 @@ export async function runSpecForge(
       act,
       actIndex: PHASE_ORDER.indexOf(act) + 1,
       actTotal: PHASE_ORDER.length,
+      engineStatuses: snapshotStatuses(),
     });
 
     // Prepend the accumulated constraint strip so this engine sees the
@@ -238,18 +335,51 @@ export async function runSpecForge(
     const threaded = constraintStrip
       ? [`[constraints]\n${constraintStrip}`, ...contextParts].join("\n\n")
       : contextParts.join("\n\n");
-    const response = await fetchEngine(engine, idea, threaded);
+    const persist =
+      runId && opts.spaceId
+        ? { runId, spaceId: opts.spaceId, sequence: idx }
+        : null;
+    const response = await fetchEngine(engine, idea, threaded, persist);
     if (response) {
       if (response.critic) critics.push(response.critic);
+      // Record the engine_run UUID so the constraint accumulator can
+      // resolve each constraint's textual origin to a real FK at
+      // /run/complete time.
+      if (response.engineRunId) {
+        engineRunIdByEngine[engine] = response.engineRunId;
+      }
       const summary = summarizeForContext(engine, response.result);
       if (summary) contextParts.push(`[${engine}]\n${summary}`);
 
+      // Shape id of this engine's first reasoning card — captured here
+      // so the Operation Lane can click-to-focus it.
+      let engineFirstShapeId: string | undefined;
+      // Derive the gate status BEFORE placement so it can be written into
+      // shape.meta in one pass (no later .updateShape race).
+      const placementGateStatus: "passed" | "repaired" | "failed" | undefined =
+        response.critic?.repaired
+          ? "repaired"
+          : response.critic && !response.critic.passed
+            ? "failed"
+            : response.critic
+              ? "passed"
+              : undefined;
       const cards = resultToCards(engine, response.result);
       if (cards.length) {
-        const batch = placeBatch(editor, cards, engine, anchorMidX, cursorY, stamp);
+        const batch = placeBatch(
+          editor,
+          cards,
+          engine,
+          anchorMidX,
+          cursorY,
+          stamp,
+          response.engineRunId ?? "",
+          placementGateStatus,
+        );
         cursorY = batch.cursorY;
         allPlaced.push(...batch.placed);
         createdAny = true;
+        engineFirstShapeId = batch.placed[0]?.id;
         // Remember the recommendation's hero card as the focus target for the
         // "jump to first build" affordance.
         if (engine === "recommendation" && batch.placed.length > 0) {
@@ -286,12 +416,58 @@ export async function runSpecForge(
           anchorMidX,
           cursorY,
           stamp,
+          // depth-selection is deterministic + has no engine_run row.
+          "",
         );
         cursorY = batch.cursorY;
         allPlaced.push(...batch.placed);
         createdAny = true;
       }
+
+      // Update the Operation Lane snapshot for THIS engine. Reads from the
+      // already-computed critic + placement; no extra work. Order matters:
+      // repaired wins over passed (the spec wants repair visible), failed
+      // is exclusive.
+      const critic = response.critic;
+      const status: EngineLaneStatus["status"] = critic?.repaired
+        ? "repaired"
+        : critic && !critic.passed
+          ? "failed"
+          : "passed";
+      // Pull this engine's own confidence (engines that emit one).
+      let confidence: number | undefined;
+      if (response.result && typeof response.result === "object") {
+        const conf = (response.result as { confidence?: unknown }).confidence;
+        if (typeof conf === "number" && Number.isFinite(conf)) {
+          confidence = Math.max(0, Math.min(100, Math.round(conf)));
+        }
+      }
+      engineStatuses[engine] = {
+        status,
+        shapeId: engineFirstShapeId,
+        issueCount: critic?.issues.length ?? 0,
+        confidence,
+        outputSummary: outputSummaryFor(engine, response.result),
+      };
+    } else {
+      // Engine returned null (timeout / error / soft-fail). Mark failed so
+      // the lane shows it, downstream engines still run with whatever
+      // context exists (legacy behavior preserved).
+      engineStatuses[engine] = { status: "failed" };
     }
+
+    // Always emit after the engine resolves — lane re-renders with new
+    // status, output summary, or failure marker.
+    opts.onProgress?.({
+      phase: "running",
+      done: idx + 1,
+      total,
+      label: ENGINE_LABEL[engine],
+      act,
+      actIndex: PHASE_ORDER.indexOf(act) + 1,
+      actTotal: PHASE_ORDER.length,
+      engineStatuses: snapshotStatuses(),
+    });
   }
 
   const constraintCard = constraintAccumulationToCard(
@@ -306,6 +482,9 @@ export async function runSpecForge(
       anchorMidX,
       cursorY,
       stamp,
+      // Constraint accumulator is deterministic — no engine_run row.
+      // The persisted constraint rows themselves carry origin_engine_run_id.
+      "",
     );
     cursorY = batch.cursorY;
     allPlaced.push(...batch.placed);
@@ -321,6 +500,9 @@ export async function runSpecForge(
       anchorMidX,
       cursorY,
       stamp,
+      // Quality critic card aggregates per-engine critic verdicts —
+      // each engine_run row carries its own critic_pass + critic_score.
+      "",
     );
     cursorY = batch.cursorY;
     allPlaced.push(...batch.placed);
@@ -339,6 +521,31 @@ export async function runSpecForge(
     );
   }
 
+  // ── KG state-model: close the pipeline_run + persist constraints ──
+  // Fire-and-forget — the chain is finished, the cards are on the board,
+  // and persistence completion is a background fact for the user. Doing
+  // this AFTER connectSpecCards keeps the visible progress chip alive
+  // until the user can see the connected graph.
+  if (runId && opts.spaceId) {
+    void (async () => {
+      try {
+        await fetch("/api/canvas/specforge/run/complete", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            runId,
+            spaceId: opts.spaceId,
+            status: createdAny ? "completed" : "failed",
+            constraints,
+            engineRunIdByEngine,
+          }),
+        });
+      } catch (err) {
+        console.warn("[specforge-runner] run/complete failed:", err);
+      }
+    })();
+  }
+
   opts.onProgress?.({
     phase: "done",
     done: total,
@@ -349,6 +556,7 @@ export async function runSpecForge(
     actIndex: 0,
     actTotal: PHASE_ORDER.length,
     focusShapeId: recommendationShapeId,
+    engineStatuses: snapshotStatuses(),
   });
 
   // Reveal the whole unfurl without yanking the zoom too hard.
@@ -363,7 +571,11 @@ export async function runSpecForge(
 }
 
 /** Place one engine's cards and return the new Y cursor. Diverge batches lay
- *  out three-across; spine + hero stack centered. */
+ *  out three-across; spine + hero stack centered. `engineRunId` (when present)
+ *  is written onto every placed card as the durable pointer back to the
+ *  specforge_engine_runs row that produced them. `gateStatus` (when present)
+ *  is written into shape.meta so the renderer can show a subtle pass/repair/
+ *  fail badge — surfaces Phase A's critic data without a new tldraw prop. */
 function placeBatch(
   editor: Editor,
   cards: SpecForgeCard[],
@@ -371,6 +583,8 @@ function placeBatch(
   anchorMidX: number,
   startY: number,
   stamp: number,
+  engineRunId: string,
+  gateStatus?: "passed" | "repaired" | "failed",
 ): { cursorY: number; placed: PlacedCard[] } {
   let cursorY = startY;
   const placed: PlacedCard[] = [];
@@ -382,7 +596,7 @@ function placeBatch(
     const card = stacked[i];
     const w = card.layout === "hero" ? HERO_W : SPINE_W;
     const h = cardHeight(card);
-    const id = create(editor, card, engine, anchorMidX - w / 2, cursorY, w, h, stamp, i);
+    const id = create(editor, card, engine, anchorMidX - w / 2, cursorY, w, h, stamp, i, engineRunId, gateStatus);
     if (id) placed.push({ id, layout: card.layout });
     cursorY += h + ROW_GAP;
   }
@@ -395,7 +609,7 @@ function placeBatch(
     const left = anchorMidX - rowWidth / 2;
     diverge.forEach((card, i) => {
       const x = left + i * (MVP_W + MVP_GAP);
-      const id = create(editor, card, engine, x, cursorY, MVP_W, rowH, stamp, i);
+      const id = create(editor, card, engine, x, cursorY, MVP_W, rowH, stamp, i, engineRunId, gateStatus);
       if (id) placed.push({ id, layout: card.layout });
     });
     cursorY += rowH + ROW_GAP;
@@ -414,6 +628,8 @@ function create(
   h: number,
   stamp: number,
   i: number,
+  engineRunId: string,
+  gateStatus?: "passed" | "repaired" | "failed",
 ): TLShapeId | null {
   try {
     const id = createShapeId();
@@ -432,8 +648,16 @@ function create(
         body: card.body ?? "",
         modelJson: card.modelJson ?? "",
         entityId: `specforge-${engine}-${stamp}-${i}`,
+        engineRunId,
       },
-      meta: { specforge: true, engine, stage: card.stage },
+      meta: {
+        specforge: true,
+        engine,
+        stage: card.stage,
+        // Surfaces Phase A's critic data on the card itself (no new prop).
+        // Omitted when unknown so the renderer falls back to clean styling.
+        ...(gateStatus ? { gateStatus } : {}),
+      },
     });
     return id;
   } catch {

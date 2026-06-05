@@ -119,8 +119,8 @@ import {
   getDirectionEngine,
 } from "@/lib/objective-canvas/converge-diverge";
 import { getAiSettings } from "@/lib/objective-canvas/ai-settings";
-import { CanvasTopControls } from "./canvas-interactions/canvas-top-controls";
-import { LibraryLauncher } from "./canvas-interactions/library-rail";
+import { setPanel } from "@/lib/objective-canvas/board-panel-signal";
+import { BoardTopRightBar } from "./canvas-interactions/board-top-right-bar";
 import { ObjectDetailMount } from "./canvas-interactions/object-detail-drawer";
 import { GoalLauncher } from "./canvas-interactions/goal-ranking-sidebar";
 import { BoardHistoryLauncher } from "./canvas-interactions/board-history";
@@ -136,9 +136,10 @@ import {
   runSpecForge,
   type SpecForgeProgress,
 } from "./canvas-interactions/specforge-runner";
+import { OperationLane } from "./canvas-interactions/operation-lane";
+import { SpecForgeDetailPanel } from "./canvas-interactions/specforge-detail-panel";
 import { ConvergeDivergePopup } from "./canvas-interactions/converge-diverge-popup";
 import {
-  PowerupRail,
   FORGE_REQUEST_EVENT,
   FORGE_STATE_EVENT,
 } from "./canvas-interactions/powerup-rail";
@@ -165,7 +166,6 @@ import {
   colorForUser,
   type BoardIdentity,
 } from "./use-board-collaboration";
-import { ShareBoardLauncher } from "./share-board-modal";
 import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   DEPLOY_ARTIFACT_EVENT,
@@ -204,6 +204,7 @@ import {
 import { SharpeningConnectorsOverlay } from "./canvas-interactions/sharpening-connectors";
 import { SpecForgeConnectorsOverlay } from "./canvas-interactions/specforge-connectors";
 import { CommentStrandsOverlay } from "./canvas-interactions/comment-strands";
+import { GroupForkConnectorsOverlay } from "./canvas-interactions/group-fork-connectors";
 import {
   deployChatboxOnBoard,
   deployObjectiveOnBoard,
@@ -690,6 +691,7 @@ const BOARD_COMPONENTS: TLComponents = {
         <SharpeningConnectorsOverlay />
         <SpecForgeConnectorsOverlay />
         <CommentStrandsOverlay />
+        <GroupForkConnectorsOverlay />
       </>
     );
   },
@@ -1852,103 +1854,18 @@ export function WhiteboardBase({
         inferDarkMode={false}
         hideUi={!showUi}
       />
-      {/* Autosave status pill — green = saved, amber = saving, red = failed.
-          Gives the user explicit save feedback. */}
+      {/* Unified top-right toolbar — one glass pill holding collaborators ·
+          Saved · AI · style · Actions · Library · Share in a single row. It
+          also mounts the Actions + Library rails (headless until opened) and
+          the AI / Share popovers. Replaces the old scatter of independent
+          floating pills. Mirrors BoardNavBar on the top-left. */}
       {editor && showUi && (
-        <div
-          style={{
-            // Unified right toolbar baseline (top:16) — fifth stop in the row:
-            // palette · Share · Powerups · Library · Saved · collaborators.
-            // Passive (pointer-events:none); tucks behind a launcher panel
-            // when one is open.
-            position: "absolute",
-            top: 16,
-            right: 390,
-            zIndex: 69,
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "5px 11px",
-            borderRadius: 999,
-            pointerEvents: "none",
-            fontFamily: appleVibe.font.stack,
-            fontSize: 11,
-            fontWeight: 600,
-            color:
-              saveStatus === "error"
-                ? "#DC2626"
-                : appleVibe.text.secondary,
-            // Translucent — sits behind everything else, status-only.
-            background: "rgba(255,255,255,0.45)",
-            border: "1px solid rgba(255,255,255,0.55)",
-            backdropFilter: "blur(var(--blur-float)) saturate(1.5)",
-            WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.5)",
-            boxShadow: "0 4px 14px -10px rgba(11,18,40,0.18)",
-            opacity: 0.85,
-          }}
-        >
-          <span
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: 999,
-              background:
-                saveStatus === "error"
-                  ? "#DC2626"
-                  : saveStatus === "saving"
-                    ? "#F59E0B"
-                    : "#16A34A",
-            }}
-          />
-          {saveStatus === "saving"
-            ? "Saving…"
-            : saveStatus === "error"
-              ? "Save failed"
-              : "Saved"}
-        </div>
-      )}
-      {/* Share button — invite collaborators by email (owner) / see roster. */}
-      {editor && showUi && <ShareBoardLauncher spaceId={spaceId} />}
-      {/* Live-collaboration avatar stack — who else is on the board now. */}
-      {editor && showUi && collab.collaborators.length > 0 && (
-        <div
-          style={{
-            // Unified right toolbar baseline (top:16) — sixth/leftmost stop;
-            // only present while others are on the board.
-            position: "absolute",
-            top: 16,
-            right: 478,
-            zIndex: 70,
-            display: "inline-flex",
-            alignItems: "center",
-          }}
-        >
-          {collab.collaborators.slice(0, 5).map((c, i) => (
-            <div
-              key={c.clientId}
-              title={`${c.name}${c.role === "viewer" ? " (viewer)" : ""}`}
-              style={{
-                width: 26,
-                height: 26,
-                borderRadius: 999,
-                marginLeft: i === 0 ? 0 : -8,
-                background: c.color,
-                color: "#fff",
-                fontSize: 11,
-                fontWeight: 700,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                border: "2px solid #fff",
-                boxShadow: "0 2px 8px -2px rgba(11,18,40,0.3)",
-                fontFamily: appleVibe.font.stack,
-                textTransform: "uppercase",
-              }}
-            >
-              {(c.name || "?").trim().charAt(0)}
-            </div>
-          ))}
-        </div>
+        <BoardTopRightBar
+          spaceId={spaceId}
+          editor={editor}
+          saveStatus={saveStatus}
+          collaborators={collab.collaborators}
+        />
       )}
       {/* Contextual AI action — only while the board chrome is showing and
           we're NOT unfurling (the selection toolbar is for the normal board). */}
@@ -2081,6 +1998,77 @@ function cardSaveable(s: TLShape): SaveableCard | null {
     return { objectType: "insight", title: p.headline };
   }
   return null;
+}
+
+/** The descriptor the /converge/publish route lands as a categorized
+ *  library_object. oc-cards already ARE objects (carry props.objectId → the
+ *  route commits, never duplicates); everything else becomes a NEW object
+ *  keyed on the shape id. */
+interface ConvergeCardInput {
+  shapeId: string;
+  objectId?: string;
+  objectType: "feature" | "variable" | "insight";
+  title: string;
+  summary?: string | null;
+}
+
+/** Project a KEPT board shape into a ConvergeCardInput. `label` is the node
+ *  label already computed by boardShapesToNodes (resolves note richText →
+ *  title), so notes/text carry a real title here. Returns null for chrome or
+ *  empty shapes. Categorization is the whiteboard's own lingo: oc-cards keep
+ *  their feature/variable kind, insights stay insights, and loose
+ *  notes/text/artifacts default to "feature" (the primary building block). */
+function convergeCardFor(s: TLShape, label: string): ConvergeCardInput | null {
+  const p = s.props as Record<string, unknown>;
+  const clean = (v: unknown): string | null => {
+    const t = typeof v === "string" ? v.trim() : "";
+    return t.length > 0 ? t : null;
+  };
+  const titled = (primary: unknown, fallbackName: string): string =>
+    (clean(primary) ?? label.trim() ?? "").slice(0, 200) || fallbackName;
+  const shapeId = s.id as string;
+
+  switch (s.type) {
+    case "oc-card":
+      return {
+        shapeId,
+        objectId: clean(p.objectId) ?? undefined,
+        objectType: p.kind === "variable" ? "variable" : "feature",
+        title: titled(p.name, "Card"),
+        summary: clean(p.body),
+      };
+    case "insight-card":
+      return {
+        shapeId,
+        objectType: "insight",
+        title: titled(p.headline, "Insight"),
+        summary: clean(p.body),
+      };
+    case "artifact-card":
+      return {
+        shapeId,
+        objectType: "feature",
+        title: titled(p.title, "Item"),
+        summary: clean(p.subtitle),
+      };
+    case "room-card":
+      return {
+        shapeId,
+        objectType: "feature",
+        title: titled(p.title, "Room"),
+        summary: clean(p.subtitle),
+      };
+    case "note":
+    case "text":
+    case "geo": {
+      const title = label.trim();
+      return title
+        ? { shapeId, objectType: "feature", title: title.slice(0, 200), summary: null }
+        : null;
+    }
+    default:
+      return null;
+  }
 }
 
 /** Drop (or refocus) an artifact card on the board. Deduped by source
@@ -2796,12 +2784,24 @@ function BoardOverlay({
       act: "frame",
       actIndex: 1,
       actTotal: PHASE_ORDER.length,
+      // Seed every engine as not_started so the Operation Lane renders the
+      // full chain immediately (rather than starting empty and filling in).
+      engineStatuses: Object.fromEntries(
+        SPECFORGE_CHAIN.map((e) => [e, { status: "not_started" as const }]),
+      ),
     });
     void (async () => {
       // 1) Run the SpecForge unfurl — full causal chain.
       let forge;
       try {
-        forge = await runSpecForge(editor, target, { onProgress: setForging });
+        // Pass spaceId so the runner opens a `pipeline=specforge` row +
+        // persists every engine artifact + the constraint set (KG state
+        // model Phase A, migration 20260924). Soft-fails to in-memory
+        // behavior if any persistence call fails.
+        forge = await runSpecForge(editor, target, {
+          onProgress: setForging,
+          spaceId,
+        });
       } catch (err) {
         console.warn("[board] specforge failed:", err);
         setForging(null);
@@ -2953,20 +2953,65 @@ function BoardOverlay({
     }
   }
 
-  // Publish the converged set: persist the kept board cards to the
-  // Library as objects (they then flow into the Strategy Brief / spec).
+  // Converge → Publish confirmation toast (centered glass chip). Auto-clears
+  // so the commit is always visible — it used to close the panel silently
+  // ("nothing happened").
+  const [publishMsg, setPublishMsg] = useState<string | null>(null);
+  function flashPublish(msg: string) {
+    setPublishMsg(msg);
+    window.setTimeout(() => setPublishMsg(null), 4000);
+  }
+
+  // Publish the converged set: turn the KEPT board cards into categorized
+  // new-layer objects (library_objects) via /converge/publish — oc-cards are
+  // committed in place, loose notes/insights become fresh feature/insight
+  // objects. They then flow to everything that reads library_objects (the
+  // Library rail, the glossary/KG, summarize-space-card, the spec compiler).
   async function handlePublishConverged(keptIds: string[]) {
-    const saveables = keptIds
-      .map((id) => editor.getShape(id as TLShapeId))
-      .filter((s): s is TLShape => !!s)
-      .map(cardSaveable)
-      .filter((c): c is SaveableCard => c !== null);
+    // Project each kept shape → a categorized object descriptor. Node labels
+    // (boardShapesToNodes) already resolve note richText into a usable title.
+    const labelById = new Map(view.nodes.map((n) => [n.id, n.label] as const));
+    const cards = keptIds
+      .map((id) => {
+        const s = editor.getShape(id as TLShapeId);
+        return s ? convergeCardFor(s, labelById.get(id) ?? "") : null;
+      })
+      .filter((c): c is ConvergeCardInput => c !== null);
+
+    let published = 0;
     try {
-      if (saveables.length > 0) await saveCardsToLibrary(spaceId, saveables);
+      if (cards.length > 0) {
+        const res = await fetch(`/api/objective/${spaceId}/converge/publish`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ cards }),
+        });
+        if (res.ok) {
+          const j = (await res.json().catch(() => null)) as { published?: number } | null;
+          published = typeof j?.published === "number" ? j.published : 0;
+        }
+      }
     } catch (err) {
       console.warn("[board] converge publish failed:", err);
     } finally {
       focus.endPublishing();
+    }
+
+    if (published > 0) {
+      // Fold the freshly-committed objects into the glossary / KG concept
+      // layer. generateGlossary is LLM-backed, so fire-and-forget — the
+      // objects are already saved; this just enriches the next read. Soft-fail.
+      void fetch(`/api/brainstorm/space/${spaceId}/glossary`, {
+        method: "POST",
+      }).catch(() => {});
+      // Surface the result where these objects actually live: the Library rail
+      // reads library_objects. Confirm so the commit is never invisible.
+      setPanel("library", true);
+      flashPublish(
+        `Published ${published} ${published === 1 ? "card" : "cards"} to your Library`,
+      );
+    } else {
+      flashPublish("Nothing to publish — keep at least one card.");
     }
   }
 
@@ -2994,6 +3039,24 @@ function BoardOverlay({
         sourceIds: ids,
         color: appleVibe.accent.primary,
       });
+      // Persist a REAL object_link so a 2-card Connect shows up in the object
+      // cluster graph (the detail rail) — Connect was visual-only before. Only
+      // when both shapes are oc-cards (carry props.objectId). Fire-and-forget,
+      // soft-fail; the visual insight + arrows already landed above.
+      if (mode === "connect" && ids.length === 2) {
+        const oidOf = (sid: TLShapeId) =>
+          (editor.getShape(sid)?.props as { objectId?: string } | undefined)
+            ?.objectId;
+        const fromObjectId = oidOf(ids[0]);
+        const toObjectId = oidOf(ids[1]);
+        if (fromObjectId && toObjectId && fromObjectId !== toObjectId) {
+          void fetch(`/api/objective/${spaceId}/link-objects`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fromObjectId, toObjectId, relation: headline }),
+          }).catch(() => {});
+        }
+      }
     } catch (err) {
       console.warn("[board] AI link failed:", err);
       // Soft-fail — nothing destructive; the user can retry.
@@ -3126,16 +3189,8 @@ function BoardOverlay({
           rail ("New objective + refine") and the Home nav. */}
       {/* Decompose (and every other op) now lives in the Powerups rail — no
           stray bottom-left float. Converge/Diverge are the inline verbs. */}
-      {/* Top-center AI thinking-settings cluster (depth · complexity · temp ·
-          web search) — global knobs the ‹ › verbs + scanner ops read. */}
-      <CanvasTopControls />
-      {/* Dedicated Library rail (glossary + knowledge graph), launched from a
-          right-edge pill; expandable to full screen. Reads the space glossary
-          + focuses board cards. */}
-      <LibraryLauncher spaceId={spaceId} editor={editor} />
-      {/* Powerups + Artifacts rail — the persistent right-edge home for every
-          AI op (run on the live selection) + the finished tech-specs/artifacts. */}
-      <PowerupRail spaceId={spaceId} editor={editor} />
+      {/* AI settings · Actions rail · Library rail are all part of the unified
+          BoardTopRightBar now (mounted above), not separate floating pills. */}
       {/* Artifact Dock — left-edge gradient circles for TERMINAL deliverables
           (Prototype, Notebook, …). Select objects → tap a circle → the engine
           runs plan→create and drops a persistent artifact. */}
@@ -3223,12 +3278,26 @@ function BoardOverlay({
 
       {/* SpecForge progress — a calm glass chip while the causal-spec chain
           runs, so the user knows the cards are streaming in below the idea. */}
-      {forging && <SpecForgeProgressChip progress={forging} />}
+      {forging && <SpecForgeProgressChip progress={forging} editor={editor} />}
+
+      {/* Operation Lane — per-engine status map on the right edge. Lets the
+          user see what passed/failed across the 20-engine chain and jump
+          straight to any reasoning card. Cooperates with the chip:
+          chip = "now/next" overlay, lane = "where am I in the chain" map.
+          Per specforge_operation_card_system.md §8 + §21. */}
+      {forging && <OperationLane progress={forging} editor={editor} />}
+
+      {/* SpecForge Side Panel — opens on click of any specforge-card OR
+          any lane row. Per specforge_side_panel_interaction_system.md §5.
+          Mounted unconditionally (controls its own visibility via the
+          OPEN_SPECFORGE_DETAIL_EVENT it listens for). */}
+      <SpecForgeDetailPanel editor={editor} />
 
       {/* Deep Synthesize progress — calm glass chip while pro Claude reads
           the selection, searches the web, and weaves the cross-link map. */}
       {deepBusy && <DeepSynthProgressChip label={deepStage} />}
       {deepError && !deepBusy && <DeepSynthErrorChip message={deepError} />}
+      {publishMsg && <ConvergePublishChip message={publishMsg} />}
 
       {/* Tech-spec progress — the SpecForge → Tech Spec hand-off chip. */}
       {techSpecBusy && (
@@ -3298,8 +3367,13 @@ function BoardOverlay({
 // "12/20" alone is high-arousal and low-information — we show the act
 // (Frame / Interweave / Decide / Build / Validate) so the user knows which
 // scene of the play they're in.
-function SpecForgeProgressChip({ progress }: { progress: SpecForgeProgress }) {
-  const editor = useEditor();
+function SpecForgeProgressChip({
+  progress,
+  editor,
+}: {
+  progress: SpecForgeProgress;
+  editor: Editor;
+}) {
   const done = progress.phase === "done";
   const pct = Math.round((progress.done / Math.max(1, progress.total)) * 100);
   const actLabel = progress.act ? PHASE_LABEL[progress.act] : null;
@@ -3555,6 +3629,61 @@ function DeepSynthErrorChip({ message }: { message: string }) {
         }}
       >
         <AlertTriangle style={{ width: 14, height: 14 }} strokeWidth={2.3} />
+      </span>
+      <span
+        style={{
+          fontSize: 12.5,
+          fontWeight: 600,
+          letterSpacing: "-0.01em",
+          color: appleVibe.text.primary,
+        }}
+      >
+        {message}
+      </span>
+    </div>
+  );
+}
+
+/** Brief, centered glass confirmation toast for Converge → Publish — so the
+ *  commit is visible (the panel used to close silently). Same glass language
+ *  as DeepSynthErrorChip, neutral/accent tone with the Converge icon. */
+function ConvergePublishChip({ message }: { message: string }) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+        zIndex: 88,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "12px 16px",
+        borderRadius: 16,
+        background: "var(--glass-float-bg)",
+        backdropFilter: "blur(var(--blur-float)) saturate(1.8)",
+        WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.8)",
+        border: "1px solid var(--glass-border)",
+        boxShadow:
+          "inset 0 1px 0 var(--glass-highlight), 0 30px 70px -26px rgba(11,18,40,0.46)",
+        fontFamily: appleVibe.font.stack,
+      }}
+    >
+      <span
+        style={{
+          display: "inline-flex",
+          width: 24,
+          height: 24,
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: 999,
+          background: `${appleVibe.accent.primary}1f`,
+          color: appleVibe.accent.primary,
+          flexShrink: 0,
+        }}
+      >
+        <ListChecks style={{ width: 14, height: 14 }} strokeWidth={2.3} />
       </span>
       <span
         style={{

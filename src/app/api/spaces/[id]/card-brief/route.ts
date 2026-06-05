@@ -13,6 +13,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { safeAuth, verifySpaceOwnership } from "@/lib/api-helpers";
 import {
   summarizeSpaceCard,
+  BRIEF_VERSION,
   type SpaceCardBrief,
 } from "@/lib/objective-canvas/summarize-space-card";
 
@@ -44,10 +45,12 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
   const cached = space?.card_brief as SpaceCardBrief | null | undefined;
   const updatedAt = space?.updated_at as string | null | undefined;
 
-  // Fresh = a well-formed cached brief whose source updated_at is at or
-  // after the space's current updated_at.
+  // Fresh = a current-version, well-formed cached brief whose source
+  // updated_at is at or after the space's current updated_at. Older-version
+  // briefs (e.g. pre-AI-refined-title) regenerate once.
   const fresh =
     !!cached &&
+    cached.v === BRIEF_VERSION &&
     typeof cached.name === "string" &&
     Array.isArray(cached.points) &&
     (!updatedAt ||

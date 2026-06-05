@@ -18,8 +18,8 @@
 import { useEditor, useValue, type Editor } from "tldraw";
 import type { CommentCardShape } from "../shapes/comment-card-shape";
 
-const STROKE_QUIET = "rgba(180,115,74,0.35)"; // soft kraft, mostly invisible
-const STROKE_HOT = "rgba(180,115,74,0.95)"; // lit when comment selected/hovered
+const STROKE_QUIET = "rgba(99,102,241,0.32)"; // soft indigo, mostly invisible
+const STROKE_HOT = "rgba(99,102,241,0.95)"; // lit when comment selected/hovered
 
 interface Seg {
   id: string;

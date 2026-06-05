@@ -7,7 +7,7 @@
 
 import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
-import { BEST_TUNABLE_CLAUDE_MODEL } from "@/lib/llm";
+import { BEST_FAST_CLAUDE_MODEL } from "@/lib/llm";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 import { composeUiPlans } from "@/lib/objective-canvas/tech-spec/compose-ui-plans";
 
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
         userId: auth.user.id,
         spaceId,
         callSite: "objective:ui-plan-variants",
-        modelHint: BEST_TUNABLE_CLAUDE_MODEL,
+        modelHint: BEST_FAST_CLAUDE_MODEL,
         metadata: { count, temperature: temperature ?? null },
       },
       () => composeUiPlans({ sourceText, count, temperature }),

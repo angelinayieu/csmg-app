@@ -16,6 +16,7 @@ import {
   PRIOR_CONCEPTS_RULE,
   type RelevantCanonicalConcept,
 } from "./canonical-concept-lookup";
+import type { ContextConcept } from "./context-frontier";
 
 export interface BuildDecomposeArgs {
   objective: string;
@@ -69,6 +70,18 @@ export interface BuildDecomposeArgs {
    *  this, the proposer behaves identically to pre-11.A — proposals
    *  are emitted without layer tags. Back-compat preserved. */
   objectiveStack?: import("./layer-model").ObjectiveStack;
+  /** Context-frontier (CONTEXT_FRONTIER_PLAN.md) — the user's PRIOR
+   *  ideas (role=prior_ideas). When non-empty, a COVERED FRONTIER block
+   *  is injected: the model must NOT re-propose these — it must EXTEND,
+   *  COMBINE, or ATTACK GAPS between them, and emit frontier_relation.
+   *  This is the anti-echo lever pointed at the user's OWN input (the
+   *  EXISTING PROPOSALS block only guards against prior generations).
+   *  Empty/undefined → block omitted, legacy behavior. */
+  coveredFrontier?: ContextConcept[];
+  /** Context-frontier — the user's reference material / constraints
+   *  (role=reference). Injected as grounding to HONOR — distinct from
+   *  the covered frontier to surpass. Empty/undefined → omitted. */
+  contextGrounding?: ContextConcept[];
 }
 
 /** Intent-specific mixins appended to the base system prompt. Each
@@ -226,6 +239,8 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
     priorConcepts,
     recentConcepts,
     objectiveStack,
+    coveredFrontier,
+    contextGrounding,
   } = args;
 
   const clarifyingBlock =
@@ -358,10 +373,44 @@ export function buildUserPrompt(args: BuildDecomposeArgs): string {
           .join("\n")}`
       : "";
 
+  // Context-frontier — the user's PRIOR ideas as a COVERED FRONTIER to
+  // SURPASS. Mirrors the EXISTING PROPOSALS anti-duplicate block, but pointed
+  // at the user's OWN input rather than prior generations — the single biggest
+  // lever against handing the user back ideas they already had. The slug tags
+  // are the same concept_slug namespace as the glossary, so frontier_relation
+  // is machine-resolvable downstream (provenance label + dedupe).
+  const frontierIdeas = (coveredFrontier ?? []).filter(
+    (c) => c.role === "prior_ideas",
+  );
+  const coveredFrontierBlock =
+    frontierIdeas.length > 0
+      ? `\n\nCOVERED FRONTIER (ideas the user has ALREADY considered — do NOT re-propose, trivially paraphrase, or restate at a different abstraction level):\n${frontierIdeas
+          .map(
+            (c) =>
+              `  - [${c.concept_slug}] ${c.concept}${c.summary ? ` — ${c.summary}` : ""}`,
+          )
+          .join(
+            "\n",
+          )}\n\nHARD RULES (anti-echo):\n  1. Treat the frontier above as DONE. A proposal that merely re-states one of them is wasted output.\n  2. Every new proposal must EXTEND one entry, COMBINE two into something neither covers, or ATTACK A GAP between them.\n  3. For EACH proposal emit frontier_relation, one of: "extends:<slug>" | "combines:<slugA>+<slugB>" | "gap_between:<slugA>,<slugB>" | "novel" — using the bracketed slugs above. "novel" only when the proposal is genuinely unrelated to the frontier.`
+      : "";
+
+  // Context-frontier — reference material / constraints the user supplied, to
+  // HONOR (not surpass). Kept separate from the frontier so the model respects
+  // facts while still going beyond ideas.
+  const grounding = (contextGrounding ?? []).filter(
+    (c) => c.role === "reference",
+  );
+  const contextGroundingBlock =
+    grounding.length > 0
+      ? `\n\nUSER CONTEXT TO HONOR (constraints + reference facts the user supplied — respect these; never contradict them):\n${grounding
+          .map((c) => `  - ${c.concept}${c.summary ? ` — ${c.summary}` : ""}`)
+          .join("\n")}`
+      : "";
+
   return `REFINED OBJECTIVE:
 """
 ${objective.slice(0, 4000)}
-"""${clarifyingBlock}${researchBlock}${lensBlock}${layerBlock}${priorConceptsBlock}${recentConceptsBlock}${existingBlock}${uncoveredBlock}${lensCoverageRule}${priorConceptsRule}
+"""${clarifyingBlock}${researchBlock}${lensBlock}${layerBlock}${priorConceptsBlock}${recentConceptsBlock}${existingBlock}${uncoveredBlock}${contextGroundingBlock}${coveredFrontierBlock}${lensCoverageRule}${priorConceptsRule}
 
 Propose 4–5 sub-objectives per the system instructions. Mark exactly 3 as recommended=true (the ones most load-bearing for delivering the parent).`;
 }
@@ -373,6 +422,7 @@ Propose 4–5 sub-objectives per the system instructions. Mark exactly 3 as reco
 export function buildResponseSchema(
   hasLens: boolean,
   hasLayerStack: boolean = false,
+  hasFrontier: boolean = false,
 ) {
   const proposalProps: Record<string, unknown> = {
     title: { type: "string" },
@@ -394,6 +444,13 @@ export function buildResponseSchema(
       items: { type: "number" },
     };
     proposalRequired.push("lens_coverage");
+  }
+  if (hasFrontier) {
+    // Context-frontier — provenance string tying each proposal to the
+    // covered frontier (extends/combines/gap_between/novel). Required so
+    // strict-mode forces the model to declare its relation to prior ideas.
+    proposalProps.frontier_relation = { type: "string" };
+    proposalRequired.push("frontier_relation");
   }
   if (hasLayerStack) {
     proposalProps.layer_ordinals = {

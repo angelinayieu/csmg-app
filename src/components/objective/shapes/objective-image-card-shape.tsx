@@ -3,11 +3,14 @@
 // ── ObjectiveImageCardShapeUtil ──
 //
 // A pasted image, auto-analyzed by the vision pass, rendered as a card on
-// the objective board: the real image + a green "analyzed" light, expandable
-// to the AI description + extracted-entity chips. Lands connected below the
+// the objective board: the FULL image (never cropped) + a small green
+// glowing "analyzed" dot, expandable to the AI description + extracted-entity
+// chips. The card is translucent glass and hugs the image's aspect ratio so
+// it carries as little visual weight as possible. Lands connected below the
 // objective card (the file-card shape elsewhere only renders icons/text, so
 // this is a dedicated image card).
 
+import { useEffect, useState } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
@@ -18,13 +21,20 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { ChevronDown, Sparkles } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 const CARD_W = 240;
-const COLLAPSED_H = 172;
-const EXPANDED_H = 320;
+const FOOTER_H = 44;
+const PANEL_H = 150; // expanded description + chips panel
+const MIN_IMG_H = 116;
+const MAX_IMG_H = 320;
+const DEFAULT_H = MIN_IMG_H + FOOTER_H;
 const GREEN = appleVibe.stage.outcomes;
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
 
 interface ImgEntity {
   name?: string;
@@ -77,7 +87,7 @@ export class ObjectiveImageCardShapeUtil extends BaseBoxShapeUtil<ObjectiveImage
   getDefaultProps(): ObjectiveImageCardShape["props"] {
     return {
       w: CARD_W,
-      h: COLLAPSED_H,
+      h: DEFAULT_H,
       expanded: false,
       imageFileId: "",
       imageName: "",
@@ -115,17 +125,44 @@ function ImageCardRenderer({
   util: ObjectiveImageCardShapeUtil;
 }) {
   const editor = util.editor;
-  const { expanded, imageName, imageUrl, description, entityCount } = shape.props;
+  const { expanded, imageName, imageUrl, description, w } = shape.props;
   const entities = parseEntities(shape.props.entitiesJson);
   const hasMeta = !!description || entities.length > 0;
 
+  // Natural aspect ratio (height / width) of the loaded image. Until it
+  // loads, fall back to whatever height the shape was persisted at.
+  const [ratio, setRatio] = useState<number | null>(null);
+
+  const imageH = ratio
+    ? clamp(Math.round(w * ratio), MIN_IMG_H, MAX_IMG_H)
+    : clamp(shape.props.h - FOOTER_H - (expanded ? PANEL_H : 0), MIN_IMG_H, MAX_IMG_H);
+
+  // Keep the card height locked to the image's aspect ratio (+ chrome) so the
+  // whole image always fits and the card never carries dead space. Runs on
+  // load, on width resize, and on expand/collapse.
+  useEffect(() => {
+    if (ratio == null) return;
+    const target = clamp(Math.round(w * ratio), MIN_IMG_H, MAX_IMG_H) + FOOTER_H + (expanded ? PANEL_H : 0);
+    if (Math.abs(target - shape.props.h) > 1) {
+      editor.updateShape<ObjectiveImageCardShape>({
+        id: shape.id,
+        type: "objective-image-card",
+        props: { h: target },
+      });
+    }
+  }, [ratio, w, expanded, shape.props.h, shape.id, editor]);
+
+  function onImgLoad(e: React.SyntheticEvent<HTMLImageElement>) {
+    const img = e.currentTarget;
+    if (img.naturalWidth > 0) setRatio(img.naturalHeight / img.naturalWidth);
+  }
+
   function toggle(e: React.MouseEvent) {
     e.stopPropagation();
-    const next = !expanded;
     editor.updateShape<ObjectiveImageCardShape>({
       id: shape.id,
       type: "objective-image-card",
-      props: { expanded: next, h: next ? EXPANDED_H : COLLAPSED_H },
+      props: { expanded: !expanded },
     });
   }
 
@@ -133,22 +170,34 @@ function ImageCardRenderer({
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
     >
+      <style>{`@keyframes objImgPulse{0%,100%{box-shadow:0 0 0 3px ${GREEN}22,0 0 8px 1px ${GREEN}aa}50%{box-shadow:0 0 0 4px ${GREEN}14,0 0 13px 2px ${GREEN}}}`}</style>
       <div
         style={{
           width: "100%",
           height: "100%",
           borderRadius: 18,
           overflow: "hidden",
-          background: appleVibe.surface.card,
-          border: `1px solid ${GREEN}45`,
-          boxShadow: `0 0 0 1px ${GREEN}1f, 0 12px 28px -12px ${GREEN}73, 0 6px 16px -10px rgba(11,18,40,0.18)`,
+          // Translucent glass — sits light on the canvas, low visual weight.
+          background: "rgba(255,255,255,0.55)",
+          backdropFilter: "blur(20px) saturate(160%)",
+          WebkitBackdropFilter: "blur(20px) saturate(160%)",
+          border: "1px solid rgba(255,255,255,0.6)",
+          boxShadow:
+            "0 1px 0 rgba(255,255,255,0.6) inset, 0 10px 30px -18px rgba(11,18,40,0.28)",
           display: "flex",
           flexDirection: "column",
           fontFamily: appleVibe.font.stack,
         }}
       >
-        {/* Image */}
-        <div style={{ position: "relative", width: "100%", height: 110, background: "rgba(15,23,42,0.05)" }}>
+        {/* Image — full, never cropped (contain), area hugs its aspect ratio */}
+        <div
+          style={{
+            width: "100%",
+            height: imageH,
+            flexShrink: 0,
+            background: "rgba(15,23,42,0.03)",
+          }}
+        >
           {imageUrl && (
             // External Storage URL — next/image can't optimize it; plain img is correct.
             // eslint-disable-next-line @next/next/no-img-element
@@ -156,51 +205,45 @@ function ImageCardRenderer({
               src={imageUrl}
               alt={imageName}
               draggable={false}
-              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+              onLoad={onImgLoad}
+              style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
             />
           )}
-          {/* Green "analyzed" light */}
+        </div>
+
+        {/* Footer — green glowing dot (analyzed), title, expand chevron */}
+        <div
+          style={{
+            height: FOOTER_H,
+            flexShrink: 0,
+            padding: "0 11px",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
           <span
             aria-label="Analyzed"
             style={{
-              position: "absolute",
-              top: 7,
-              right: 7,
-              width: 10,
-              height: 10,
+              width: 8,
+              height: 8,
+              flexShrink: 0,
               borderRadius: 999,
               background: GREEN,
-              boxShadow: `0 0 0 2px rgba(255,255,255,0.92), 0 0 10px ${GREEN}`,
+              animation: "objImgPulse 2.4s ease-in-out infinite",
             }}
           />
-        </div>
-
-        {/* Footer */}
-        <div
-          style={{
-            padding: "8px 10px",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-          }}
-        >
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div
-              className="truncate"
-              style={{
-                fontSize: 12,
-                fontWeight: 600,
-                color: appleVibe.text.primary,
-              }}
-            >
-              {imageName || "Image"}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 1 }}>
-              <Sparkles style={{ width: 11, height: 11, color: GREEN }} strokeWidth={2.4} />
-              <span style={{ fontSize: 10, fontWeight: 600, color: GREEN }}>
-                Analyzed{entityCount > 0 ? ` · ${entityCount}` : ""}
-              </span>
-            </div>
+          <div
+            className="truncate"
+            style={{
+              minWidth: 0,
+              flex: 1,
+              fontSize: 12,
+              fontWeight: 600,
+              color: appleVibe.text.primary,
+            }}
+          >
+            {imageName || "Image"}
           </div>
           {hasMeta && (
             <button
@@ -236,10 +279,11 @@ function ImageCardRenderer({
         {expanded && hasMeta && (
           <div
             style={{
-              padding: "0 10px 10px",
+              height: PANEL_H,
+              flexShrink: 0,
+              padding: "9px 11px 11px",
               overflowY: "auto",
               borderTop: `1px solid ${appleVibe.stroke.hairline}`,
-              paddingTop: 9,
             }}
           >
             {description && (

@@ -17,12 +17,13 @@ import {
   HTMLContainer,
   T,
   stopEventPropagation,
+  useEditor,
   type RecordProps,
   type TLBaseShape,
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { Paperclip, Plus, FileText } from "lucide-react";
+import { Paperclip, Plus, FileText, Lightbulb } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { PROMOTE_TO_OBJECTIVE_EVENT } from "@/components/objective/board-bus";
 
@@ -80,6 +81,16 @@ function deriveTitle(text: string): string {
   return t.length <= 70 ? t : t.slice(0, 69).trimEnd() + "…";
 }
 
+/** Lite mirror of ContextConcept for the GET /context payload — defined
+ *  locally so this client shape never imports the server-side module. */
+interface ContextConceptLite {
+  concept: string;
+  concept_slug: string;
+  kind: "idea" | "constraint" | "fact" | "question";
+  role: "prior_ideas" | "reference";
+  summary: string;
+}
+
 function ChatboxCardRenderer({ shape }: { shape: ChatboxCardShape }) {
   const { spaceId } = shape.props;
   const [value, setValue] = useState(shape.props.seedText ?? "");
@@ -89,6 +100,80 @@ function ChatboxCardRenderer({ shape }: { shape: ChatboxCardShape }) {
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // ── Context-frontier pane (CONTEXT_FRONTIER_PLAN.md) ──
+  // A collapsible "prior context / ideas" channel. Pasted blocks POST to
+  // /api/objective/[spaceId]/context — stored as rows, extracted into the
+  // metadata frontier so downstream decomposition AUGMENTS rather than
+  // repeats. Distinct from the objective (the optimization target).
+  const editor = useEditor();
+  const [showContext, setShowContext] = useState(false);
+  const [contextRole, setContextRole] = useState<"prior_ideas" | "reference">(
+    "prior_ideas",
+  );
+  const [contextText, setContextText] = useState("");
+  const [contextCount, setContextCount] = useState(0);
+  const [addingContext, setAddingContext] = useState(false);
+  // Extracted concepts (the "we turned your text into metadata" proof). GET
+  // /context returns the frontier; we show them back as chips so the user
+  // literally watches their context become structured, addressable metadata.
+  const [concepts, setConcepts] = useState<ContextConceptLite[]>([]);
+  const collapsedHRef = useRef(shape.props.h);
+
+  async function loadConcepts() {
+    try {
+      const res = await fetch(`/api/objective/${spaceId}/context`);
+      if (!res.ok) return;
+      const json = (await res.json()) as {
+        priorIdeas?: ContextConceptLite[];
+        reference?: ContextConceptLite[];
+      };
+      setConcepts([...(json.priorIdeas ?? []), ...(json.reference ?? [])]);
+    } catch {
+      /* soft-fail */
+    }
+  }
+
+  function toggleContext() {
+    setShowContext((open) => {
+      const next = !open;
+      editor.updateShape<ChatboxCardShape>({
+        id: shape.id,
+        type: "chatbox-card",
+        props: { h: next ? collapsedHRef.current + 200 : collapsedHRef.current },
+      });
+      if (next) void loadConcepts();
+      return next;
+    });
+  }
+
+  const canAddContext = contextText.trim().length >= 8 && !addingContext;
+
+  async function addContext() {
+    if (!canAddContext) return;
+    const text = contextText.trim();
+    setAddingContext(true);
+    try {
+      const res = await fetch(`/api/objective/${spaceId}/context`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text, role: contextRole }),
+      });
+      if (res.ok) {
+        setContextCount((n) => n + 1);
+        setContextText("");
+        // Extraction runs post-response (after()), so concepts land a beat
+        // later — poll a few times to surface them as they're written.
+        [1500, 3500, 6000].forEach((ms) =>
+          setTimeout(() => void loadConcepts(), ms),
+        );
+      }
+    } catch {
+      /* soft-fail — context is supplemental, never blocks intake */
+    } finally {
+      setAddingContext(false);
+    }
+  }
 
   // Autofocus + put the cursor at the end of the carried-over text.
   useEffect(() => {
@@ -239,6 +324,182 @@ function ChatboxCardRenderer({ shape }: { shape: ChatboxCardShape }) {
           </div>
         )}
 
+        {/* Context-frontier pane */}
+        {showContext && (
+          <div
+            onPointerDown={stopEventPropagation}
+            style={{
+              margin: "0 12px 6px",
+              padding: 10,
+              borderRadius: 14,
+              background: "rgba(15,23,42,0.03)",
+              border: `1px solid ${appleVibe.stroke.soft}`,
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {(["prior_ideas", "reference"] as const).map((r) => {
+                const active = contextRole === r;
+                return (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setContextRole(r)}
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      padding: "3px 9px",
+                      borderRadius: 999,
+                      border: `1px solid ${active ? appleVibe.accent.primary : appleVibe.stroke.soft}`,
+                      background: active
+                        ? `${appleVibe.accent.primary}14`
+                        : "transparent",
+                      color: active
+                        ? appleVibe.accent.primary
+                        : appleVibe.text.tertiary,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {r === "prior_ideas" ? "Ideas I've had" : "Reference"}
+                  </button>
+                );
+              })}
+              {contextCount > 0 && (
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    fontSize: 10.5,
+                    color: appleVibe.text.tertiary,
+                  }}
+                >
+                  {contextCount} added
+                </span>
+              )}
+            </div>
+            <textarea
+              value={contextText}
+              onChange={(e) => setContextText(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  void addContext();
+                }
+              }}
+              placeholder={
+                contextRole === "prior_ideas"
+                  ? "Ideas you've already considered — we turn these into metadata so new features build on them, not repeat them."
+                  : "Reference facts or constraints the AI should honor — background, not ideas."
+              }
+              rows={2}
+              maxLength={8000}
+              style={{
+                resize: "none",
+                border: "none",
+                outline: "none",
+                background: "transparent",
+                fontSize: 12.5,
+                lineHeight: 1.4,
+                color: appleVibe.text.primary,
+                fontFamily: appleVibe.font.stack,
+              }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => void addContext()}
+                disabled={!canAddContext}
+                style={{
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  padding: "5px 12px",
+                  borderRadius: 999,
+                  border: "none",
+                  background: canAddContext
+                    ? appleVibe.accent.primary
+                    : "rgba(15,23,42,0.06)",
+                  color: canAddContext ? "white" : appleVibe.text.faint,
+                  cursor: canAddContext ? "pointer" : "not-allowed",
+                }}
+              >
+                {addingContext ? "Adding…" : "Add to context"}
+              </button>
+            </div>
+
+            {/* "We read your text as metadata" — extracted concept chips.
+                The visible proof the context became addressable metadata. */}
+            {concepts.length > 0 && (
+              <div
+                style={{
+                  borderTop: `1px solid ${appleVibe.stroke.soft}`,
+                  paddingTop: 8,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 9.5,
+                    fontWeight: 700,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    color: appleVibe.text.tertiary,
+                  }}
+                >
+                  Read as {concepts.length} concept
+                  {concepts.length === 1 ? "" : "s"}
+                </span>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 4,
+                    maxHeight: 56,
+                    overflowY: "auto",
+                  }}
+                >
+                  {concepts.map((c) => {
+                    const tone =
+                      c.kind === "constraint"
+                        ? "rgba(217,119,6,0.95)"
+                        : c.kind === "question"
+                          ? "rgba(124,58,237,0.95)"
+                          : c.kind === "fact"
+                            ? appleVibe.text.tertiary
+                            : appleVibe.accent.primary;
+                    return (
+                      <span
+                        key={c.concept_slug}
+                        title={`${c.kind}${c.summary ? ` — ${c.summary}` : ""}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          maxWidth: "100%",
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          fontSize: 10.5,
+                          fontWeight: 600,
+                          background: "rgba(15,23,42,0.04)",
+                          color: tone,
+                          border: `1px solid ${appleVibe.stroke.soft}`,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {c.concept}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Toolbar */}
         <div
           style={{
@@ -284,6 +545,33 @@ function ChatboxCardRenderer({ shape }: { shape: ChatboxCardShape }) {
                   : `${assetIds.length} attached`}
               </span>
             )}
+            <button
+              type="button"
+              onClick={toggleContext}
+              aria-label="Add prior context or ideas"
+              title="Add prior context / ideas you've already had"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                height: 32,
+                padding: "0 10px",
+                borderRadius: 999,
+                border: `1px solid ${showContext ? appleVibe.accent.primary : "transparent"}`,
+                background: showContext
+                  ? `${appleVibe.accent.primary}10`
+                  : "transparent",
+                color: showContext
+                  ? appleVibe.accent.primary
+                  : appleVibe.text.tertiary,
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            >
+              <Lightbulb style={{ width: 15, height: 15 }} strokeWidth={1.9} />
+              Context{contextCount > 0 ? ` · ${contextCount}` : ""}
+            </button>
           </div>
 
           <button

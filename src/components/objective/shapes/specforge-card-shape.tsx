@@ -78,11 +78,18 @@ export type SpecForgeCardShape = TLBaseShape<
     modelJson: string;
     /** Stable id so Save → Library + the saved-confirm echo work. */
     entityId: string;
+    /** specforge_engine_runs.id — the durable engine_run this card was
+     *  produced from (KG state model Phase A, migration 20260924).
+     *  Empty string when the card pre-dates persistence or when the
+     *  forge ran without a spaceId. Enables future "click card → see
+     *  this artifact's run / pipeline / quality verdict" UX. */
+    engineRunId: string;
   }
 >;
 
 const Versions = createShapePropsMigrationIds("specforge-card", {
   addModelJson: 1,
+  addEngineRunId: 2,
 });
 
 export const specForgeCardMigrations = createShapePropsMigrationSequence({
@@ -96,6 +103,17 @@ export const specForgeCardMigrations = createShapePropsMigrationSequence({
       down(props) {
         const p = props as Record<string, unknown>;
         delete p.modelJson;
+      },
+    },
+    {
+      id: Versions.addEngineRunId,
+      up(props) {
+        const p = props as Record<string, unknown>;
+        if (p.engineRunId === undefined) p.engineRunId = "";
+      },
+      down(props) {
+        const p = props as Record<string, unknown>;
+        delete p.engineRunId;
       },
     },
   ],
@@ -119,12 +137,33 @@ export class SpecForgeCardShapeUtil extends BaseBoxShapeUtil<SpecForgeCardShape>
     body: T.string,
     modelJson: T.string,
     entityId: T.string,
+    engineRunId: T.string,
   };
 
   static override migrations = specForgeCardMigrations;
 
   override canResize = () => true;
   override canEdit = () => false;
+
+  // Single-click opens the Side Panel — matches the oc-card pattern
+  // (double-click raced tldraw's edit and felt unreliable). Modifier-
+  // clicks (shift/ctrl/alt) skip the panel so multi-select for
+  // Connect/Synthesize/Converge still works. The detail panel fires
+  // OPEN_SPECFORGE_DETAIL_EVENT — listener is the SpecForgeDetailPanel
+  // mounted once at the board level.
+  override onClick = (shape: SpecForgeCardShape) => {
+    const i = this.editor.inputs;
+    if (i.shiftKey || i.ctrlKey || i.altKey) return;
+    try {
+      window.dispatchEvent(
+        new CustomEvent("objective-board:open-specforge-detail", {
+          detail: { shapeId: String(shape.id) },
+        }),
+      );
+    } catch {
+      /* SSR / no window — board never runs there but be defensive */
+    }
+  };
 
   override onResize = (
     shape: SpecForgeCardShape,
@@ -142,6 +181,7 @@ export class SpecForgeCardShapeUtil extends BaseBoxShapeUtil<SpecForgeCardShape>
       body: "",
       modelJson: "",
       entityId: "",
+      engineRunId: "",
     };
   }
 
@@ -160,6 +200,15 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
   const color = meta.color;
   const eyebrowLabel = eyebrow || meta.label;
   const isHero = stage === "recommendation";
+  // Gate badge — written into shape.meta by the runner from Phase A's
+  // critic result. "passed" shows a subtle green dot only (we don't shout
+  // for clean passes); "repaired" / "failed" show a tiny pill so the user
+  // immediately sees which engines need attention. Per spec §21.
+  const gateStatus = (shape.meta as { gateStatus?: unknown })?.gateStatus as
+    | "passed"
+    | "repaired"
+    | "failed"
+    | undefined;
 
   const lines = body
     ? body.split("\n").map((l) => l.replace(/^•\s*/, "").trim()).filter(Boolean)
@@ -406,7 +455,78 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
                 {eyebrowLabel}
               </span>
             </span>
-            <button
+            <span
+              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            >
+              {gateStatus === "passed" && (
+                <span
+                  title="Quality gate passed"
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: 999,
+                    background: "#22C55E",
+                    boxShadow: "0 0 0 2px rgba(34,197,94,0.18)",
+                  }}
+                />
+              )}
+              {gateStatus === "repaired" && (
+                <span
+                  title="Output repaired after critic flagged issues"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: "2px 7px",
+                    borderRadius: 999,
+                    background: "rgba(245,158,11,0.12)",
+                    border: "1px solid rgba(245,158,11,0.32)",
+                    fontSize: 9.5,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    color: "#B45309",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 5,
+                      height: 5,
+                      borderRadius: 999,
+                      background: "#F59E0B",
+                    }}
+                  />
+                  REPAIRED
+                </span>
+              )}
+              {gateStatus === "failed" && (
+                <span
+                  title="Quality gate flagged this output; downstream engines may be affected"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: "2px 7px",
+                    borderRadius: 999,
+                    background: "rgba(239,68,68,0.10)",
+                    border: "1px solid rgba(239,68,68,0.32)",
+                    fontSize: 9.5,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    color: "#B91C1C",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 5,
+                      height: 5,
+                      borderRadius: 999,
+                      background: "#EF4444",
+                    }}
+                  />
+                  FLAGGED
+                </span>
+              )}
+              <button
               type="button"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
@@ -429,6 +549,7 @@ function SpecForgeCardRenderer({ shape }: { shape: SpecForgeCardShape }) {
             >
               <MoreHorizontal style={{ width: 15, height: 15 }} />
             </button>
+            </span>
           </div>
 
           {/* Title */}
