@@ -188,14 +188,12 @@ export function LibraryGrid({ spaces }: { spaces: LibrarySpace[] }) {
         confirmSpace.name?.trim())) ||
     "this whiteboard";
 
-  console.log("[DLG] render, confirmId=", confirmId, "open=", !!confirmSpace);
   const removeDialog = (
     <RemoveDialog
       open={!!confirmSpace}
       title={confirmTitle}
       busy={!!confirmSpace && busyId === confirmSpace.id}
       onCancel={() => {
-        console.log("[DLG] onCancel fired, busyId=", busyId);
         if (!busyId) setConfirmId(null);
       }}
       onConfirm={() => {
@@ -409,6 +407,12 @@ export function LibraryGrid({ spaces }: { spaces: LibrarySpace[] }) {
 // Soft-dimmed backdrop + a centered white card with a destructive accent.
 // Clicking the backdrop or pressing Escape (handled by the parent) cancels;
 // the primary button archives the space.
+//
+// We render conditionally (not via AnimatePresence) so the dialog reliably
+// unmounts the moment `open` flips false — AnimatePresence was holding the
+// node mounted indefinitely after exit in this tree, so Cancel/Escape/backdrop
+// "did nothing". The enter animation still plays via initial→animate on mount;
+// closing is instant, which is the right feel for a confirm prompt anyway.
 function RemoveDialog({
   open,
   title,
@@ -423,96 +427,91 @@ function RemoveDialog({
   onConfirm: () => void;
 }) {
   const danger = appleVibe.stage.pain; // #DC2626
+  if (!open) return null;
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          className="fixed inset-0 z-[120] grid place-items-center p-5"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.16 }}
-          onClick={onCancel}
+    <motion.div
+      className="fixed inset-0 z-[120] grid place-items-center p-5"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.16 }}
+      onClick={onCancel}
+      style={{
+        background: "rgba(15,23,42,0.30)",
+        backdropFilter: "blur(5px)",
+        WebkitBackdropFilter: "blur(5px)",
+      }}
+    >
+      <motion.div
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="Remove from library"
+        onClick={(e) => e.stopPropagation()}
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+        className="w-full max-w-[330px] rounded-[24px] p-6"
+        style={{
+          background: appleVibe.surface.card,
+          border: `1px solid ${appleVibe.stroke.soft}`,
+          boxShadow: appleVibe.shadow.cardHover,
+        }}
+      >
+        {/* destructive glyph */}
+        <div
+          className="grid h-11 w-11 place-items-center rounded-full"
+          style={{ background: "rgba(220,38,38,0.10)", color: danger }}
+        >
+          <Trash2 className="h-[18px] w-[18px]" strokeWidth={2} />
+        </div>
+
+        <h2
+          className="mt-4 text-[17px] font-bold leading-tight"
           style={{
-            background: "rgba(15,23,42,0.30)",
-            backdropFilter: "blur(5px)",
-            WebkitBackdropFilter: "blur(5px)",
+            color: appleVibe.text.primary,
+            fontFamily: appleVibe.font.display,
           }}
         >
-          <motion.div
-            role="alertdialog"
-            aria-modal="true"
-            aria-label="Remove from library"
-            onClick={(e) => e.stopPropagation()}
-            initial={{ opacity: 0, scale: 0.95, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.97, y: 6 }}
-            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="w-full max-w-[330px] rounded-[24px] p-6"
+          Remove from library?
+        </h2>
+        <p
+          className="mt-1.5 text-[13px] font-light leading-relaxed"
+          style={{ color: appleVibe.text.secondary }}
+        >
+          <span style={{ fontWeight: 600 }}>{title}</span> will be archived. You
+          can restore it later.
+        </p>
+
+        <div className="mt-6 flex justify-end gap-2.5">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-full px-4 py-2 text-[13px] font-semibold transition-colors"
             style={{
-              background: appleVibe.surface.card,
-              border: `1px solid ${appleVibe.stroke.soft}`,
-              boxShadow: appleVibe.shadow.cardHover,
+              background: appleVibe.surface.chip,
+              color: appleVibe.text.secondary,
+              cursor: busy ? "default" : "pointer",
             }}
           >
-            {/* destructive glyph */}
-            <div
-              className="grid h-11 w-11 place-items-center rounded-full"
-              style={{ background: "rgba(220,38,38,0.10)", color: danger }}
-            >
-              <Trash2 className="h-[18px] w-[18px]" strokeWidth={2} />
-            </div>
-
-            <h2
-              className="mt-4 text-[17px] font-bold leading-tight"
-              style={{
-                color: appleVibe.text.primary,
-                fontFamily: appleVibe.font.display,
-              }}
-            >
-              Remove from library?
-            </h2>
-            <p
-              className="mt-1.5 text-[13px] font-light leading-relaxed"
-              style={{ color: appleVibe.text.secondary }}
-            >
-              <span style={{ fontWeight: 600 }}>{title}</span> will be archived.
-              You can restore it later.
-            </p>
-
-            <div className="mt-6 flex justify-end gap-2.5">
-              <button
-                type="button"
-                onClick={onCancel}
-                disabled={busy}
-                className="rounded-full px-4 py-2 text-[13px] font-semibold transition-colors"
-                style={{
-                  background: appleVibe.surface.chip,
-                  color: appleVibe.text.secondary,
-                  cursor: busy ? "default" : "pointer",
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={onConfirm}
-                disabled={busy}
-                className="inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-[13px] font-semibold text-white transition-opacity"
-                style={{
-                  background: danger,
-                  boxShadow: "0 8px 20px -10px rgba(220,38,38,0.6)",
-                  opacity: busy ? 0.7 : 1,
-                  cursor: busy ? "default" : "pointer",
-                }}
-              >
-                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                {busy ? "Removing…" : "Remove"}
-              </button>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-[13px] font-semibold text-white transition-opacity"
+            style={{
+              background: danger,
+              boxShadow: "0 8px 20px -10px rgba(220,38,38,0.6)",
+              opacity: busy ? 0.7 : 1,
+              cursor: busy ? "default" : "pointer",
+            }}
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {busy ? "Removing…" : "Remove"}
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }
