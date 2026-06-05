@@ -549,13 +549,43 @@ export async function llmJSON<T = unknown>(opts: {
   responseSchema?: { name: string; schema: Record<string, unknown> };
   validator?: (data: unknown) => T;
   fallback?: T;
+  /**
+   * Provider failover (default ON). When an `anthropic` call fails with a
+   * PROVIDER credit/quota error (the key is out of credits — distinct from the
+   * app's own credit system), transparently retry the SAME structured request
+   * on OpenAI so the call still succeeds instead of dead-ending. This is what
+   * keeps every Anthropic-backed canvas op (decompose / variations / clarify /
+   * action-plan / layers / data-flow / custom / converge-diverge) working when
+   * the Anthropic key runs dry. Set false to disable (used internally to stop
+   * an infinite failover loop, and available to callers that must NOT fail
+   * over, e.g. an Anthropic-only capability).
+   */
+  failover?: boolean;
 }): Promise<T> {
   assertWithinBudget();
   return withRetry(async () => {
     // Anthropic has no `response_format`; route to a forced tool call whose
     // arguments ARE the structured result, then validate identically.
     if (opts.provider === "anthropic") {
-      return applyJsonValidator<T>(await anthropicStructured(opts), opts);
+      try {
+        return applyJsonValidator<T>(await anthropicStructured(opts), opts);
+      } catch (err) {
+        // Provider key dry → fail over to OpenAI (funded) with the SAME schema
+        // (canvas-op schemas are OpenAI-strict-compatible). Only a credit/quota
+        // error triggers the swap; everything else propagates unchanged.
+        if (opts.failover !== false && detectCreditError(err).isCredit) {
+          console.warn(
+            "[llmJSON] Anthropic credit/quota error — failing over to OpenAI",
+          );
+          return llmJSON<T>({
+            ...opts,
+            provider: "openai",
+            model: undefined, // use the OpenAI default (gpt-4o)
+            failover: false, // guard against infinite failover if OpenAI is dry too
+          });
+        }
+        throw err;
+      }
     }
 
     const openai = getOpenAI();
