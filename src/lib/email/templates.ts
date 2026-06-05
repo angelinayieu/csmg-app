@@ -62,7 +62,7 @@ export function wrapEmail(attrs: EmailLayoutAttrs): string {
             <td style="padding: 24px 32px 0;">
               <div style="display: inline-block; vertical-align: middle;">
                 <span style="display: inline-block; width: 28px; height: 28px; border-radius: 8px; background-image: linear-gradient(135deg, #2563eb 0%, #06b6d4 100%); vertical-align: middle;"></span>
-                <span style="margin-left: 8px; font-size: 14px; font-weight: 600; color: #111827; vertical-align: middle;">Synergy</span>
+                <span style="margin-left: 8px; font-size: 14px; font-weight: 600; color: #111827; vertical-align: middle;">akiboe</span>
               </div>
             </td>
           </tr>
@@ -144,6 +144,47 @@ export function newRequestEmail(args: {
       preheader,
       body_html,
       cta: { label: "Review request", href: args.inbox_url },
+      unsubscribe_url: args.unsubscribe_url,
+      preferences_url: args.preferences_url,
+    }),
+  };
+}
+
+export function boardInviteEmail(args: {
+  inviter_name: string;
+  board_title: string;
+  role: "editor" | "viewer";
+  accept_url: string;
+  preferences_url: string;
+  unsubscribe_url: string;
+}): { subject: string; preheader: string; html: string } {
+  const roleWord = args.role === "editor" ? "edit" : "view";
+  const subject = `${args.inviter_name} shared a whiteboard with you`;
+  const preheader = `You've been invited to ${roleWord} "${args.board_title.slice(0, 60)}" on akiboe.`;
+
+  const body_html = `
+    <h1 style="margin: 8px 0 12px; font-size: 22px; font-weight: 600; color: #111827; line-height: 1.3;">
+      ${escapeHtml(args.inviter_name)} invited you to a whiteboard
+    </h1>
+    <p style="margin: 0; font-size: 14px; color: #374151; line-height: 1.6;">
+      You can now ${roleWord} <strong>${escapeHtml(args.board_title)}</strong> — a live, collaborative canvas with real-time cursors and AI augmentation.
+    </p>
+    <p style="margin: 16px 0 0; padding: 10px 14px; background-color: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; font-size: 13px; color: #0c4a6e;">
+      Your access level: <strong>${args.role === "editor" ? "Editor — can make changes" : "Viewer — read-only"}</strong>
+    </p>
+    <p style="margin: 20px 0 0; font-size: 12px; color: #6b7280;">
+      Sign in (or create a free account with this email) to open the board.
+    </p>
+  `;
+
+  return {
+    subject,
+    preheader,
+    html: wrapEmail({
+      subject,
+      preheader,
+      body_html,
+      cta: { label: "Open whiteboard", href: args.accept_url },
       unsubscribe_url: args.unsubscribe_url,
       preferences_url: args.preferences_url,
     }),

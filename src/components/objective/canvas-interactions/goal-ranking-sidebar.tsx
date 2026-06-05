@@ -274,27 +274,6 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
 }
 
 // ── styles ──
-const launcherPill: CSSProperties = {
-  position: "absolute",
-  top: 96,
-  left: 16,
-  zIndex: 66,
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 7,
-  padding: "7px 12px",
-  borderRadius: appleVibe.radius.pill,
-  border: "1px solid var(--glass-border)",
-  cursor: "pointer",
-  fontFamily: appleVibe.font.stack,
-  fontSize: 11.5,
-  fontWeight: 650,
-  color: appleVibe.text.secondary,
-  background: "var(--glass-float-bg)",
-  backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-  WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-  boxShadow: "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
-};
 const panel: CSSProperties = {
   position: "absolute",
   // Start below the top chrome (tldraw Page menu + AI settings bar) so the

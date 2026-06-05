@@ -7,6 +7,7 @@
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/server";
+import { verifySpaceAccess } from "@/lib/api-helpers";
 import { ObjectiveCanvasView } from "@/components/objective/objective-canvas-view";
 import { MinimalObjectiveRedirect } from "@/components/objective/minimal-objective-redirect";
 import { ModePill, type PipelineMode } from "@/components/objective/mode-pill";
@@ -68,7 +69,12 @@ export default async function ObjectiveCanvasPage({
     .eq("id", spaceId)
     .maybeSingle();
 
-  if (!space || space.user_id !== user.id) notFound();
+  if (!space) notFound();
+  // Owner OR a shared member (editor/viewer) may open the board.
+  if (space.user_id !== user.id) {
+    const role = await verifySpaceAccess(db, spaceId, user.id);
+    if (!role) notFound();
+  }
   if (space.archived) redirect("/app/objective");
 
   const objective: string =

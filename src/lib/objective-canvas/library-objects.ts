@@ -57,6 +57,9 @@ export interface UpsertObjectInput {
   cardFace?: unknown;
   /** Object-type-specific eval blob. For converge cards: the compression tree. */
   evaluation?: unknown;
+  /** The LLM-assigned subsystem cluster ("Onboarding", "Retention Loop", …).
+   *  Set only when provided so a non-decompose upsert can't clobber it. */
+  subsystem?: string | null;
 }
 
 export interface LibraryObjectRow {
@@ -85,6 +88,8 @@ export interface LibraryObjectRow {
   card_face?: unknown;
   /** Object-type-specific eval blob; for converge cards, the compression tree. */
   evaluation?: unknown;
+  /** The subsystem cluster this object belongs to (decompose-assigned). */
+  subsystem?: string | null;
 }
 
 /** A deferred sub-objective proposal, surfaced read-only in the
@@ -100,7 +105,7 @@ export interface DeferredProposalLite {
 }
 
 const SELECT_COLS =
-  "id, space_id, object_type, title, summary, source_entity_id, source_sub_objective_id, source_ref, blueprint_layer_ordinal, rank_score, selection_status, included_in_spec, in_strategy_brief, on_whiteboard, board_shape_id, content_snapshot, card_face, evaluation";
+  "id, space_id, object_type, title, summary, source_entity_id, source_sub_objective_id, source_ref, blueprint_layer_ordinal, rank_score, selection_status, included_in_spec, in_strategy_brief, on_whiteboard, board_shape_id, content_snapshot, card_face, evaluation, subsystem";
 
 /**
  * Lazy, idempotent upsert by the natural key. Re-"saving" the same blob item
@@ -138,6 +143,7 @@ export async function upsertLibraryObject(
     // name/summary refresh never clobbers an existing face or converge tree.
     if (input.cardFace !== undefined) patch.card_face = input.cardFace;
     if (input.evaluation !== undefined) patch.evaluation = input.evaluation;
+    if (input.subsystem !== undefined) patch.subsystem = input.subsystem ?? null;
 
     if (existing?.id) {
       await db.from("library_objects").update(patch).eq("id", existing.id);

@@ -17,7 +17,7 @@ export function LandingMarketingNav() {
       <Link href="/" className="flex items-center gap-2">
         <InterAxisLogo className="h-7 w-7" size={56} />
         <span className="text-[15px] font-semibold tracking-tight text-slate-900">
-          InterAxis
+          akiboe
         </span>
       </Link>
 

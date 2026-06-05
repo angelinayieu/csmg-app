@@ -37,7 +37,7 @@ export interface OntologyResearchInput {
 
 // ── System prompt ────────────────────────────────────────────────
 
-const ONTOLOGY_RESEARCH_SYSTEM = `You are the Ontology Research Agent for InterAxis Laboratory. Your single job: propose a per-space layer ontology for a knowledge graph that will be used to model + simulate the user's topic.
+const ONTOLOGY_RESEARCH_SYSTEM = `You are the Ontology Research Agent for akiboe Laboratory. Your single job: propose a per-space layer ontology for a knowledge graph that will be used to model + simulate the user's topic.
 
 A layer ontology is an ORDERED HIERARCHY of conceptual layers, most fundamental → most emergent. Examples:
 - Mind-body cognition: Molecular → Circuit → Cognitive → Behavioral → Performance

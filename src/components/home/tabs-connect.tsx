@@ -2,7 +2,7 @@
 
 // ── Tab-sync connect ──
 //
-// Shows the user's pairing token + the steps to load the InterAxis tab-sync
+// Shows the user's pairing token + the steps to load the akiboe tab-sync
 // extension. The token is pasted into the extension popup once; thereafter
 // "Sync tabs" pushes open tabs to /api/tabs/sync, which surfaces them in the
 // chatbox + the homepage "tabs synced" row.
@@ -53,7 +53,7 @@ export function TabsConnect({ pairingToken }: { pairingToken: string }) {
         className="mt-2 text-[14px] font-light leading-relaxed"
         style={{ color: appleVibe.text.secondary }}
       >
-        Install the InterAxis tab-sync extension and pull your open research
+        Install the akiboe tab-sync extension and pull your open research
         tabs straight into the objective chatbox as context.
       </p>
 
@@ -82,7 +82,7 @@ export function TabsConnect({ pairingToken }: { pairingToken: string }) {
         {[
           "Open chrome://extensions, enable Developer mode (top-right).",
           'Click "Load unpacked" and select the extension/ folder from this repo.',
-          "Open the InterAxis Tab Sync popup, paste the token + App URL above.",
+          "Open the akiboe Tab Sync popup, paste the token + App URL above.",
           'Click "Sync tabs" — your open tabs appear in the chatbox’s "tabs" chip.',
         ].map((step, i) => (
           <li key={i} className="flex gap-3">

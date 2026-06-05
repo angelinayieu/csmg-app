@@ -25,11 +25,16 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, RotateCcw } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
-import { forkAmbiguity, dispatchCardAction } from "@/components/objective/board-bus";
+import {
+  forkAmbiguity,
+  dispatchCardAction,
+  openResolutionStudio,
+  REFRESH_SHARPENING_EVENT,
+} from "@/components/objective/board-bus";
 import { useAutoFitHeight } from "@/components/objective/canvas-interactions/use-auto-fit-height";
 
 const COLLAPSED_H = 204;
-const EXPANDED_H = 452;
+const EXPANDED_H = 524;
 const CARD_W = 348;
 
 // Named generation stages shown while the artifact is in flight. The card
@@ -64,6 +69,17 @@ const SEV_COLOR: Record<string, string> = {
   low: "#94A3B8",
 };
 
+// Salience kind → accent + short tag. Tropical Punch palette: orange (pain),
+// teal (lever), pink (term), yellow (goal/limit). Pain & limit share the
+// warm-orange end of the palette since both signal "attention here".
+const KIND_STYLE: Record<string, { color: string; label: string }> = {
+  pain: { color: "#FF8243", label: "Pain" },
+  goal: { color: "#FCE883", label: "Goal" },
+  lever: { color: "#069494", label: "Lever" },
+  constraint: { color: "#FF8243", label: "Limit" },
+  concept: { color: "#FFC0CB", label: "Term" },
+};
+
 export const ZONE_LABEL: Record<string, string> = {
   intent: "Intent",
   target_user: "Target user",
@@ -87,6 +103,15 @@ interface RankedItem {
   ambiguity?: string;
   question_to_resolve?: string;
   severity?: string;
+}
+interface SalienceItem {
+  phrase: string;
+  kind: string;
+  leverage: number;
+  uncertainty: number;
+  why?: string;
+  candidate_readings?: string[];
+  priority?: number;
 }
 
 export type PromptSharpeningCardShape = TLBaseShape<
@@ -292,6 +317,132 @@ function PromptSharpeningRenderer({
     };
   }, [loading, spaceId, shape.id, editor, retryTick]);
 
+  // ── Depth & salience (lazy second pass) ──
+  // Once the fast artifact has landed (!loading), fetch the salience priority
+  // map; if it isn't generated yet, drive ONE awaited POST (its open request
+  // keeps the function alive for the whole pass) then poll. Kept in local
+  // state — it arrives after the card is already on the board, so it's display
+  // data, not a core shape prop (no migration needed).
+  const [salience, setSalience] = useState<SalienceItem[] | null>(null);
+  const [saliencePending, setSaliencePending] = useState(false);
+  useEffect(() => {
+    if (loading || !spaceId || salience !== null) return;
+    let cancelled = false;
+    let tries = 0;
+    let drove = false;
+    let timer: ReturnType<typeof setTimeout>;
+    setSaliencePending(true);
+
+    function done(items: SalienceItem[]) {
+      if (cancelled) return;
+      setSalience(items);
+      setSaliencePending(false);
+    }
+
+    async function tick() {
+      if (cancelled) return;
+      tries += 1;
+      try {
+        const res = await fetch(`/api/objective/${spaceId}/sharpening-depth`, {
+          cache: "no-store",
+        });
+        if (res.ok) {
+          const j = (await res.json()) as {
+            status?: string;
+            salience?: { annotations?: SalienceItem[] };
+          };
+          if (j.status === "ready" && j.salience?.annotations) {
+            done(j.salience.annotations);
+            return;
+          }
+        }
+      } catch {
+        /* transient — keep going */
+      }
+      // Not generated yet → drive ONE awaited generation, then keep polling.
+      if (!drove) {
+        drove = true;
+        try {
+          const r = await fetch(`/api/objective/${spaceId}/sharpening-depth`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}",
+          });
+          if (cancelled) return;
+          if (r.ok) {
+            const j = (await r.json()) as {
+              status?: string;
+              salience?: { annotations?: SalienceItem[] };
+            };
+            if (j.status === "ready" && j.salience?.annotations) {
+              done(j.salience.annotations);
+              return;
+            }
+          }
+        } catch {
+          /* fall through to polling */
+        }
+      }
+      if (cancelled) return;
+      if (tries < 8) {
+        timer = setTimeout(tick, 2000);
+      } else {
+        setSaliencePending(false);
+      }
+    }
+    timer = setTimeout(tick, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [loading, spaceId, salience]);
+
+  // Phase 3: re-fetch + re-render when resolutions are applied (the re-framed
+  // sharpened prompt). The card is past `loading`, so its self-heal poll is
+  // off — this event is how the re-framed objective reaches the card in place.
+  useEffect(() => {
+    if (!spaceId) return;
+    function onRefresh(e: Event) {
+      const d = (e as CustomEvent<{ spaceId?: string }>).detail;
+      if (d?.spaceId && d.spaceId !== spaceId) return;
+      void (async () => {
+        try {
+          const res = await fetch(`/api/objective/${spaceId}/prompt-sharpening`, {
+            cache: "no-store",
+          });
+          if (!res.ok) return;
+          const json = (await res.json()) as {
+            status?: string;
+            artifact?: { [k: string]: unknown };
+          };
+          if (json.status === "ready" && json.artifact) {
+            const a = json.artifact;
+            const rk = Array.isArray(a.ranked_ambiguities)
+              ? a.ranked_ambiguities
+              : [];
+            editor.updateShape<PromptSharpeningCardShape>({
+              id: shape.id,
+              type: "prompt-sharpening",
+              props: {
+                title: (a.distilled_title as string) ?? "",
+                sharpenedPrompt: (a.sharpened_prompt as string) ?? "",
+                chips: (rk as { ambiguity_type?: string }[])
+                  .slice(0, 3)
+                  .map(chipLabelOf),
+                heatmapJson: JSON.stringify(a.ambiguity_heatmap ?? {}),
+                rankedJson: JSON.stringify(rk),
+              },
+            });
+          }
+        } catch {
+          /* soft-fail */
+        }
+      })();
+    }
+    window.addEventListener(REFRESH_SHARPENING_EVENT, onRefresh);
+    return () => window.removeEventListener(REFRESH_SHARPENING_EVENT, onRefresh);
+  }, [spaceId, shape.id, editor]);
+
   // No-crop on spawn: grow the card to fit its content (the loading view's
   // title + activity + stage list, or long sharpened text). Disabled while
   // expanded — that state has a fixed height with an internal scroll.
@@ -354,6 +505,26 @@ function PromptSharpeningRenderer({
       if (it.headline)
         forkAmbiguity({ sourceId: shape.id, headline: it.headline, body: it.body, color });
     }
+  }
+
+  // Open the immersive Resolution Studio with the salience deck — the user
+  // resolves each high-leverage ambiguity (flashcards + voice + live AI).
+  function openStudio(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!salience || salience.length === 0) return;
+    openResolutionStudio({
+      spaceId,
+      objectiveTitle: title,
+      sharpenedPrompt,
+      concepts: salience.map((s) => ({
+        phrase: s.phrase,
+        kind: s.kind,
+        leverage: s.leverage,
+        uncertainty: s.uncertainty,
+        why: s.why,
+        candidate_readings: s.candidate_readings,
+      })),
+    });
   }
 
   // Retry after a failed generation: clear the failed state, re-trigger
@@ -489,6 +660,117 @@ function PromptSharpeningRenderer({
             <GenerationActivity color={color} />
           ))}
 
+        {/* Optimize for — the salience priority map (pain / goal / lever
+            weighting). Lands a beat after the card via the lazy depth pass;
+            shows a quiet "weighing…" hint until it does. Leads ABOVE the
+            ambiguities: the levers are the result, the ambiguities are the gaps. */}
+        {!loading && (salience?.length || saliencePending) ? (
+          <div style={{ marginTop: 11 }}>
+            <div
+              style={{
+                fontSize: 9.5,
+                fontWeight: 600,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                color: appleVibe.text.tertiary,
+                marginBottom: 6,
+              }}
+            >
+              Optimize for
+            </div>
+            {salience && salience.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {salience.slice(0, 3).map((s, i) => {
+                  const ks = KIND_STYLE[s.kind] ?? KIND_STYLE.concept;
+                  return (
+                    <div
+                      key={i}
+                      title={s.why || s.phrase}
+                      style={{ display: "flex", alignItems: "center", gap: 7 }}
+                    >
+                      <span
+                        style={{
+                          width: 7,
+                          height: 7,
+                          borderRadius: 999,
+                          background: ks.color,
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: appleVibe.text.primary,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {s.phrase}
+                      </span>
+                      <span
+                        style={{
+                          marginLeft: "auto",
+                          width: 34,
+                          height: 4,
+                          borderRadius: 999,
+                          background: `${ks.color}24`,
+                          overflow: "hidden",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: "block",
+                            height: "100%",
+                            width: `${Math.round(s.leverage * 100)}%`,
+                            background: ks.color,
+                            borderRadius: 999,
+                          }}
+                        />
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 500,
+                  color: appleVibe.text.faint,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <span
+                  className="animate-pulse"
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 999,
+                    background: appleVibe.text.faint,
+                  }}
+                />
+                Weighing leverage &amp; pain points…
+              </div>
+            )}
+            {salience && salience.length > 0 && (
+              <button
+                type="button"
+                onPointerDown={stopEventPropagation}
+                onClick={openStudio}
+                style={resolveBtnStyle(color)}
+              >
+                Resolve to sharpen
+                <span aria-hidden> →</span>
+              </button>
+            )}
+          </div>
+        ) : null}
+
         {/* Ambiguity chips (top ranked) */}
         {chips.length > 0 && (
           <div style={{ marginTop: 10 }}>
@@ -543,7 +825,7 @@ function PromptSharpeningRenderer({
           </div>
         )}
 
-        {/* Expanded: heatmap + actions */}
+        {/* Expanded: priority map + heatmap + actions */}
         {expanded && (
           <div
             style={{
@@ -554,28 +836,150 @@ function PromptSharpeningRenderer({
               display: "flex",
               flexDirection: "column",
               minHeight: 0,
+              flex: 1,
             }}
           >
+            {/* Scrolls as one; the actions below stay pinned. */}
             <div
               style={{
-                fontSize: 9.5,
-                fontWeight: 600,
-                letterSpacing: "0.06em",
-                textTransform: "uppercase",
-                color: appleVibe.text.tertiary,
-                marginBottom: 7,
-              }}
-            >
-              Ambiguity heatmap · tap to fork
-            </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 4,
+                flex: 1,
+                minHeight: 0,
                 overflowY: "auto",
+                display: "flex",
+                flexDirection: "column",
+                gap: 14,
               }}
             >
+              {/* Priority map — what to optimize for, ranked by leverage. The
+                  richer view of the collapsed "Optimize for" list: each row
+                  shows kind + a pair of MiniDots (leverage, uncertainty) whose
+                  opacity tracks the value. */}
+              {salience && salience.length > 0 && (
+                <div>
+                  <div
+                    style={{
+                      fontSize: 9.5,
+                      fontWeight: 600,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      color: appleVibe.text.tertiary,
+                      marginBottom: 7,
+                    }}
+                  >
+                    Priority map · what to optimize for
+                  </div>
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                  >
+                    {salience.map((s, i) => {
+                      const ks = KIND_STYLE[s.kind] ?? KIND_STYLE.concept;
+                      return (
+                        <div
+                          key={i}
+                          style={{
+                            padding: "7px 9px",
+                            borderRadius: 9,
+                            border: `1px solid ${appleVibe.stroke.soft}`,
+                            background: "#FFFFFF",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 7,
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: 8.5,
+                                fontWeight: 700,
+                                letterSpacing: "0.04em",
+                                textTransform: "uppercase",
+                                color: appleVibe.text.primary,
+                                padding: "1px 5px",
+                                borderRadius: 4,
+                                background: ks.color,
+                                flexShrink: 0,
+                              }}
+                            >
+                              {ks.label}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: 11.5,
+                                fontWeight: 650,
+                                color: appleVibe.text.primary,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {s.phrase}
+                            </span>
+                            <span
+                              title={`Leverage ${Math.round(s.leverage * 100)}% · Uncertainty ${Math.round(s.uncertainty * 100)}%`}
+                              style={{
+                                marginLeft: "auto",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                                flexShrink: 0,
+                              }}
+                            >
+                              <MiniDot value={s.leverage} color={ks.color} />
+                              <MiniDot value={s.uncertainty} color="#94A3B8" />
+                            </span>
+                          </div>
+                          {s.why && (
+                            <div
+                              style={{
+                                marginTop: 3,
+                                fontSize: 10.5,
+                                lineHeight: 1.4,
+                                color: appleVibe.text.tertiary,
+                              }}
+                            >
+                              {s.why}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    onPointerDown={stopEventPropagation}
+                    onClick={openStudio}
+                    style={resolveBtnStyle(color)}
+                  >
+                    Resolve to sharpen
+                    <span aria-hidden> →</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Ambiguity heatmap */}
+              <div>
+                <div
+                  style={{
+                    fontSize: 9.5,
+                    fontWeight: 600,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    color: appleVibe.text.tertiary,
+                    marginBottom: 7,
+                  }}
+                >
+                  Ambiguity heatmap · tap to fork
+                </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 4,
+                  }}
+                >
               {Object.keys(ZONE_LABEL).map((key) => {
                 const z = heatmap[key] ?? {};
                 const sev = (z.severity as string) || "low";
@@ -625,6 +1029,8 @@ function PromptSharpeningRenderer({
                   </button>
                 );
               })}
+                </div>
+              </div>
             </div>
 
             {/* Diverge / Converge — the SAME verbs as the rest of the canvas
@@ -898,6 +1304,47 @@ function StageIcon({
       />
     </svg>
   );
+}
+
+/** Compact dot — value 0..1 maps to opacity. Two of these stand in for the
+ *  old labelled leverage + uncertainty bars in the priority map so the row
+ *  stays one line. The title attr (on the parent span) carries the exact %. */
+function MiniDot({ value, color }: { value: number; color: string }) {
+  const v = Math.max(0, Math.min(1, value));
+  return (
+    <span
+      style={{
+        width: 7,
+        height: 7,
+        borderRadius: 999,
+        background: color,
+        opacity: 0.25 + v * 0.75,
+        display: "inline-block",
+      }}
+    />
+  );
+}
+
+/** Full-width primary pill that opens the Resolution Studio. */
+function resolveBtnStyle(color: string): React.CSSProperties {
+  return {
+    marginTop: 9,
+    width: "100%",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    padding: "8px 12px",
+    borderRadius: 999,
+    border: "none",
+    background: color,
+    color: "white",
+    fontSize: 11.5,
+    fontWeight: 650,
+    cursor: "pointer",
+    fontFamily: appleVibe.font.stack,
+    boxShadow: `0 6px 16px -5px ${color}80`,
+  };
 }
 
 function actionBtn(color: string, primary: boolean): React.CSSProperties {

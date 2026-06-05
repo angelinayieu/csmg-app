@@ -2,7 +2,7 @@ import { getAuthUser, createClient } from "@/lib/supabase/server";
 import { PricingClient } from "./pricing-client";
 
 export const metadata = {
-  title: "Pricing — Intersice",
+  title: "Pricing — akiboe",
   description:
     "Plans that refill every week. One round is a single diverge → converge loop on the canvas.",
 };

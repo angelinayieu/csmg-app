@@ -663,7 +663,7 @@ export function ImmersiveHome({
           ) : (
             <div className="mb-5 text-center">
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--home-text-faint)]">
-                InterAxis
+                akiboe
               </div>
               <h1 className="text-[32px] font-light leading-tight text-[color:var(--home-text)]">
                 Welcome, {greetingName}.

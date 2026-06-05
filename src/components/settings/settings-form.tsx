@@ -263,7 +263,7 @@ export function SettingsForm({
         </div>
         <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <p className="mb-4 text-sm text-gray-600">
-            Choose which kinds of personal data InterAxis can track in your strategies.
+            Choose which kinds of personal data akiboe can track in your strategies.
             When you confirm a strategy, metrics tied to categories you haven&apos;t
             allowed will be skipped automatically. You can change these anytime.
           </p>

@@ -21,6 +21,7 @@ import {
 } from "tldraw";
 import type { OcCardShape, OcCardKind } from "../shapes/oc-card-shape";
 import { layoutSystemsGraph } from "@/lib/objective-canvas/layout-systems-graph";
+import { lowestClearTop } from "./placement";
 
 /** Fire to ask the board to decompose the current objective into cards. */
 export const DECOMPOSE_INTO_CARDS_EVENT = "objective-board:decompose-into-cards";
@@ -49,6 +50,9 @@ export interface DeployLink {
 
 const CARD_W = 248;
 const CARD_H = 176;
+/** Vertical breathing room between a new decompose cluster and whatever sits
+ *  above it — the objective head, or a previous generation. */
+const GAP_BELOW = 120;
 
 /** Lay the cards out as a swimlane × causal-layer systems graph, wire their
  *  directed connections, label the lanes, frame the result. Returns the
@@ -78,10 +82,13 @@ export function deployOcCards(
     { cardW: CARD_W, cardH: CARD_H, startX: 0, startY: 0 },
   );
 
-  // Anchor the cluster horizontally centered, BELOW the objective + sharpening
-  // cards so it reads as a downstream layer (not piling on top of them).
+  // Anchor the cluster horizontally centered on the viewport.
   const vp = editor.getViewportPageBounds();
-  const existingBottoms = editor
+  const anchorX = vp.center.x - layout.sinkX / 2;
+
+  // Baseline: drop the cluster BELOW the objective + sharpening head cards so it
+  // reads as a downstream layer (not piling on top of them).
+  const headBottoms = editor
     .getCurrentPageShapes()
     .filter(
       (s) =>
@@ -91,9 +98,19 @@ export function deployOcCards(
     )
     .map((s) => editor.getShapePageBounds(s.id)?.maxY)
     .filter((v): v is number => typeof v === "number");
-  const anchorX = vp.center.x - layout.sinkX / 2;
-  const anchorY =
-    existingBottoms.length > 0 ? Math.max(...existingBottoms) + 110 : vp.center.y;
+  const preferredTop =
+    headBottoms.length > 0 ? Math.max(...headBottoms) + GAP_BELOW : vp.center.y;
+
+  // STRICT no-overlap rule: never spawn on top of an earlier generation (or any
+  // shape) sharing this cluster's horizontal span — drop below the lowest one
+  // with a margin. Lane labels sit a touch left of the cards, so pad the span's
+  // left edge; sinkX is one layer-pitch past the rightmost card, covering it.
+  const anchorY = lowestClearTop(
+    editor,
+    { left: anchorX - 16, right: anchorX + layout.sinkX },
+    preferredTop,
+    GAP_BELOW,
+  );
 
   const idByObject = new Map<string, TLShapeId>();
   const cardIds: TLShapeId[] = [];

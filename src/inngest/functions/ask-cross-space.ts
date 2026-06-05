@@ -126,7 +126,7 @@ export const askCrossSpace = inngest.createFunction(
       if (retrieved.length === 0) {
         const text = await llmGenerate({
           system:
-            "You are InterAxis, a knowledge-graph reasoning assistant. The user asked a question, but no relevant entities were found across their whiteboards. Answer helpfully from general knowledge and note that this topic isn't yet mapped in their workspace — suggest starting a new analysis to build one.",
+            "You are akiboe, a knowledge-graph reasoning assistant. The user asked a question, but no relevant entities were found across their whiteboards. Answer helpfully from general knowledge and note that this topic isn't yet mapped in their workspace — suggest starting a new analysis to build one.",
           user: query,
           temperature: 0.4,
           maxTokens: 1200,
@@ -155,7 +155,7 @@ export const askCrossSpace = inngest.createFunction(
         })
         .join("\n\n");
 
-      const system = `You are InterAxis, a knowledge-graph reasoning assistant with read access to every whiteboard the user has built. The user is asking a question and you have retrieved the ${retrieved.length} most relevant entities across all their whiteboards.
+      const system = `You are akiboe, a knowledge-graph reasoning assistant with read access to every whiteboard the user has built. The user is asking a question and you have retrieved the ${retrieved.length} most relevant entities across all their whiteboards.
 
 Your job: answer the question crisply, grounded in the retrieved context. When you reference an entity, cite it inline as [^ENTITY_ID] using the UUIDs from the context. Cite only entities you actually used.
 

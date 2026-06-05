@@ -12,7 +12,7 @@ import { NextResponse } from "next/server";
 import {
   safeAuth,
   safeJsonParse,
-  verifySpaceOwnership,
+  verifySpaceAccess,
   sanitizeErrorMessage,
 } from "@/lib/api-helpers";
 
@@ -27,10 +27,10 @@ export async function GET(_req: Request, { params }: Ctx) {
   const { spaceId } = await params;
   const { supabase, user, error: authError } = await safeAuth();
   if (authError) return authError;
-  if (!(await verifySpaceOwnership(supabase, spaceId, user.id)))
+  if (!(await verifySpaceAccess(supabase, spaceId, user.id)))
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
 
-   
+
   const db = supabase as any;
   try {
     const { data } = await db
@@ -52,8 +52,11 @@ export async function POST(req: Request, { params }: Ctx) {
   const { spaceId } = await params;
   const { supabase, user, error: authError } = await safeAuth();
   if (authError) return authError;
-  if (!(await verifySpaceOwnership(supabase, spaceId, user.id)))
-    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+  {
+    const role = await verifySpaceAccess(supabase, spaceId, user.id);
+    if (role !== "owner" && role !== "editor")
+      return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+  }
 
   const { data: body, error: parseError } = await safeJsonParse<{
     snapshot: unknown;

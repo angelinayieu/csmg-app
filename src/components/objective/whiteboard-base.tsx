@@ -39,6 +39,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type RoomCardShape } from "./shapes/room-card-shape";
 import { type InsightCardShape } from "./shapes/insight-card-shape";
 import { type ArtifactCardShape } from "./shapes/artifact-card-shape";
+import { type OcCardShape } from "./shapes/oc-card-shape";
 import { type SubsystemKgShape } from "./shapes/subsystem-kg-shape";
 import {
   OPEN_CAUSAL_MODEL_EVENT,
@@ -54,6 +55,12 @@ import {
   type PrototypeCardShape,
   type PrototypeRefineDetail,
 } from "./shapes/prototype-card-shape";
+import {
+  BUILD_UI_PLANS_EVENT,
+  type BuildUiPlansDetail,
+  type UiPlanCardShape,
+} from "./shapes/ui-plan-card-shape";
+import { lowestClearTop } from "./canvas-interactions/placement";
 import { TechSpecPanel } from "./tech-spec-panel";
 import { CausalModelPanel } from "./causal-model-panel";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
@@ -91,6 +98,9 @@ import { ObjectDetailMount } from "./canvas-interactions/object-detail-drawer";
 import { GoalLauncher } from "./canvas-interactions/goal-ranking-sidebar";
 import { BoardHistoryLauncher } from "./canvas-interactions/board-history";
 import { BoardSettingsLauncher } from "./canvas-interactions/board-settings";
+import { BoardNavBar } from "./canvas-interactions/board-nav-bar";
+import { WhiteboardChatPanel } from "./canvas-interactions/whiteboard-chat-panel";
+import { CommentBoardMount } from "./canvas-interactions/comment-board-mount";
 import {
   forkSynthesisMap,
   type SynthesisBranch,
@@ -100,7 +110,11 @@ import {
   type SpecForgeProgress,
 } from "./canvas-interactions/specforge-runner";
 import { ConvergeDivergePopup } from "./canvas-interactions/converge-diverge-popup";
-import { PowerupRail, FORGE_REQUEST_EVENT } from "./canvas-interactions/powerup-rail";
+import {
+  PowerupRail,
+  FORGE_REQUEST_EVENT,
+  FORGE_STATE_EVENT,
+} from "./canvas-interactions/powerup-rail";
 import { CollapsibleStylePanel } from "./canvas-interactions/collapsible-style-panel";
 import type { TLComponents, TLPageId } from "tldraw";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
@@ -109,6 +123,13 @@ import { ListChecks, Wand2, Loader2, Check, Globe, AlertTriangle } from "lucide-
 import { BoardHint } from "./board-hint";
 import { FavoritesSidebar } from "./favorites-sidebar";
 import { useObjectiveBoardPersistence } from "./use-objective-board-persistence";
+import {
+  useBoardCollaboration,
+  colorForUser,
+  type BoardIdentity,
+} from "./use-board-collaboration";
+import { ShareBoardLauncher } from "./share-board-modal";
+import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   DEPLOY_ARTIFACT_EVENT,
   OPEN_UNFURL_EVENT,
@@ -142,6 +163,7 @@ import {
   clearLegacySharpeningArrows,
 } from "./canvas-interactions/prompt-sharpening-board";
 import { SharpeningConnectorsOverlay } from "./canvas-interactions/sharpening-connectors";
+import { CommentStrandsOverlay } from "./canvas-interactions/comment-strands";
 import {
   deployChatboxOnBoard,
   deployObjectiveOnBoard,
@@ -183,7 +205,7 @@ import { mockRoomGraph } from "./unfurl/render-room-unfurl";
 import type { UnfurlAnchor } from "./unfurl/anchor-from-path";
 import { buildRoomGraph } from "./causal-map/lib/build-room-graph";
 import type { CanvasGraph } from "./causal-map/lib/types";
-import { X, Home } from "lucide-react";
+import { X } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 /** Detail payload for a collapse-to-card request. */
@@ -326,11 +348,20 @@ function PageTabs() {
     <>
       <div
         style={{
+          // Escape tldraw's TopPanel slot (which anchors top-left) and pin
+          // ourselves to the top-CENTER of the viewport, directly above the
+          // CanvasTopControls AI settings pill (top: 56). Fixed positioning
+          // keeps us off the slot's flex flow so the slot wrapper can't drag
+          // us back left.
+          position: "fixed",
+          top: 14,
+          left: "50%",
+          transform: "translateX(-50%)",
+          zIndex: 60,
           pointerEvents: "all",
           display: "flex",
           alignItems: "center",
           gap: 8,
-          marginTop: 10,
           fontFamily: appleVibe.font.stack,
         }}
       >
@@ -607,9 +638,17 @@ const BOARD_COMPONENTS: TLComponents = {
   // the duplicate "Page 1 ▾" from the top-left cluster.
   PageMenu: null,
   // Custom flow-builder connectors (bezier + handles) for the sharpening
-  // graph — replaces the default tldraw arrows. Derived live from card
-  // positions; see canvas-interactions/sharpening-connectors.tsx.
-  InFrontOfTheCanvas: SharpeningConnectorsOverlay,
+  // graph AND comment strands (soft beziers from comment-card to its
+  // target shapes). Both derive live from card positions; tldraw's
+  // InFrontOfTheCanvas slot only takes one component, so we compose.
+  InFrontOfTheCanvas: function ComposedConnectors() {
+    return (
+      <>
+        <SharpeningConnectorsOverlay />
+        <CommentStrandsOverlay />
+      </>
+    );
+  },
 };
 
 export function WhiteboardBase({
@@ -642,6 +681,16 @@ export function WhiteboardBase({
   // True once server persistence has restored. Gates the minimal-mode
   // seed so a late restore can't wipe the seeded objective card.
   const [restoreSettled, setRestoreSettled] = useState(false);
+  // Ref mirror so the once-registered deploy listeners (deps: []) read the
+  // LATEST settled state synchronously, plus a buffer for any deploy event
+  // that fires DURING the ~100–500ms async restore window. Restore ends with
+  // `loadSnapshot`, which REPLACES the whole store — so a card created before
+  // it lands is silently wiped. This is the main "cards disappear / glitch on
+  // load" cause: intake seed/promote and the polling mounts all fire right as
+  // the board mounts. We buffer those deploys and replay them once restore
+  // settles instead of letting the restore eat them.
+  const restoreSettledRef = useRef(false);
+  const pendingDeployRef = useRef<Array<() => void>>([]);
   // Ref so handleMount stays stable while still seeing the latest callback.
   const onEditorReadyRef = useRef(onEditorReady);
   onEditorReadyRef.current = onEditorReady;
@@ -674,15 +723,85 @@ export function WhiteboardBase({
     [onAiLink, spaceId],
   );
 
+  // ── Live collaboration wiring ──────────────────────────────────
+  // Identity + shared-flag come from /members. Collaboration spins up only
+  // when the board is shared with ≥1 other participant; otherwise the hook
+  // is a complete no-op (zero change to the solo case).
+  const [collabIdentity, setCollabIdentity] = useState<BoardIdentity | null>(
+    null,
+  );
+  const [collabEnabled, setCollabEnabled] = useState(false);
+  const [collabRole, setCollabRole] = useState<BoardIdentity["role"] | null>(
+    null,
+  );
+  // Refs read at save-time by the persistence single-writer gate so the
+  // saver election can change without re-subscribing.
+  const collabStateRef = useRef({ enabled: false, isSaver: true });
+  const canSave = useCallback(() => {
+    const s = collabStateRef.current;
+    return !s.enabled || s.isSaver;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [meRes, membersRes] = await Promise.all([
+          createSupabaseBrowserClient().auth.getUser(),
+          fetch(`/api/objective/${spaceId}/members`, { cache: "no-store" }),
+        ]);
+        if (cancelled) return;
+        const user = meRes.data.user;
+        if (!user || !membersRes.ok) return;
+        const m = (await membersRes.json()) as {
+          myRole: BoardIdentity["role"];
+          shared: boolean;
+        };
+        const name =
+          (user.user_metadata?.display_name as string | undefined) ||
+          (user.email ? user.email.split("@")[0] : "Guest");
+        setCollabIdentity({
+          userId: user.id,
+          name,
+          color: colorForUser(user.id),
+          role: m.myRole,
+        });
+        setCollabRole(m.myRole);
+        setCollabEnabled(Boolean(m.shared));
+      } catch {
+        /* soft-fail — board still works solo */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [spaceId]);
+
   // Server-backed persistence (canvases table, scope='objective') with a
   // localStorage mirror — replaces tldraw's local-only persistenceKey so
   // the board survives reload AND syncs across devices.
-  const { status: saveStatus } = useObjectiveBoardPersistence(editor, spaceId, () => {
+  const { status: saveStatus } = useObjectiveBoardPersistence(
+    editor,
+    spaceId,
+    () => {
     // Restore settled — now safe to drop in any cross-page queued
     // artifacts (e.g. sent from the lab) without a late restore wiping them.
+    restoreSettledRef.current = true;
     setRestoreSettled(true);
     const ed = editorRef.current;
     if (!ed) return;
+    // Replay any deploy events that arrived mid-restore (their shapes would
+    // otherwise have been wiped by the restore's loadSnapshot). Drain a copy
+    // so a handler that re-buffers can't loop.
+    const buffered = pendingDeployRef.current;
+    pendingDeployRef.current = [];
+    for (const replay of buffered) {
+      try {
+        replay();
+      } catch (err) {
+        console.warn("[objective-board] buffered deploy replay failed", err);
+      }
+    }
     // Older boards persisted real tldraw arrows for the sharpening graph;
     // the bezier overlay now draws those, so the persisted arrows show as a
     // straight-line duplicate under each curve. Sweep them once the board is
@@ -694,7 +813,29 @@ export function WhiteboardBase({
     for (const d of drainPendingArtifacts(spaceId)) createArtifactCard(ed, d);
     for (const d of drainPendingSubsystemKgs(spaceId))
       createSubsystemKgCard(ed, d);
+    },
+    canSave,
+  );
+
+  // Live multiplayer — presence cursors + real-time shape deltas over a
+  // private Supabase Realtime channel. Gated on a shared board + restore
+  // having settled (so we never broadcast/merge onto a store that's about
+  // to be replaced by loadSnapshot).
+  const collab = useBoardCollaboration(editor, spaceId, {
+    enabled: collabEnabled,
+    ready: restoreSettled,
+    identity: collabIdentity,
   });
+  // Keep the single-writer gate's refs current (read by `canSave`).
+  collabStateRef.current = { enabled: collabEnabled, isSaver: collab.isSaver };
+
+  // Viewers are read-only: tldraw blocks local edits, and the collaboration
+  // hook additionally refuses to broadcast for the viewer role.
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ed || !collabRole) return;
+    ed.updateInstanceState({ isReadonly: collabRole === "viewer" });
+  }, [collabRole, editor]);
 
   // Minimal mode — seed the objective as a card on the board once restore
   // has settled. Idempotent (skips if a card for this roomId already
@@ -966,15 +1107,19 @@ export function WhiteboardBase({
   // from the heavy rooms pipeline. Single-flight via the ref.
   const decomposingRef = useRef(false);
   useEffect(() => {
-    async function onDecompose() {
+    async function onDecompose(e: Event) {
       const ed = editorRef.current;
       if (!ed || decomposingRef.current) return;
       decomposingRef.current = true;
+      // Optional objective override (e.g. the re-framed objective after the
+      // Resolution Studio applies answers); bare triggers decompose space text.
+      const objective = (e as CustomEvent<{ objective?: string }>)?.detail
+        ?.objective;
       try {
         const res = await fetch(`/api/objective/${spaceId}/decompose-cards`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: "{}",
+          body: JSON.stringify(objective ? { objective } : {}),
         });
         if (res.ok) {
           const json = (await res.json()) as {
@@ -1287,33 +1432,57 @@ export function WhiteboardBase({
       });
     }
 
-    window.addEventListener(DEPLOY_CARD_EVENT, onDeploy);
+    // Until restore settles, buffer any shape-CREATING deploy so the restore's
+    // loadSnapshot can't wipe it; replayed in the onRestored callback above.
+    // (REMOVE / CARD_ACTION pass through — they target shapes that, by
+    // definition, only exist after restore.)
+    const buffered = (handler: (e: Event) => void) => (e: Event) => {
+      if (!restoreSettledRef.current) {
+        pendingDeployRef.current.push(() => handler(e));
+        return;
+      }
+      handler(e);
+    };
+
+    const onDeployB = buffered(onDeploy);
+    const onArtifactB = buffered(onArtifact);
+    const onSubsystemKgB = buffered(onSubsystemKg);
+    const onDeploySharpeningB = buffered(onDeploySharpening);
+    const onForkAmbiguityB = buffered(onForkAmbiguity);
+    const onDeployImageCardB = buffered(onDeployImageCard);
+    const onDeployVoiceNoteB = buffered(onDeployVoiceNote);
+    const onDeployJournalB = buffered(onDeployJournal);
+    const onSeedChatboxB = buffered(onSeedChatbox);
+    const onSeedObjectiveB = buffered(onSeedObjective);
+    const onPromoteToObjectiveB = buffered(onPromoteToObjective);
+
+    window.addEventListener(DEPLOY_CARD_EVENT, onDeployB);
     window.addEventListener(REMOVE_CARD_EVENT, onRemove);
-    window.addEventListener(DEPLOY_ARTIFACT_EVENT, onArtifact);
-    window.addEventListener(DEPLOY_SUBSYSTEM_KG_EVENT, onSubsystemKg);
+    window.addEventListener(DEPLOY_ARTIFACT_EVENT, onArtifactB);
+    window.addEventListener(DEPLOY_SUBSYSTEM_KG_EVENT, onSubsystemKgB);
     window.addEventListener(CARD_ACTION_EVENT, onCardAction);
-    window.addEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpening);
-    window.addEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguity);
-    window.addEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCard);
-    window.addEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNote);
-    window.addEventListener(DEPLOY_JOURNAL_EVENT, onDeployJournal);
-    window.addEventListener(SEED_CHATBOX_EVENT, onSeedChatbox);
-    window.addEventListener(SEED_OBJECTIVE_EVENT, onSeedObjective);
-    window.addEventListener(PROMOTE_TO_OBJECTIVE_EVENT, onPromoteToObjective);
+    window.addEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpeningB);
+    window.addEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguityB);
+    window.addEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCardB);
+    window.addEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNoteB);
+    window.addEventListener(DEPLOY_JOURNAL_EVENT, onDeployJournalB);
+    window.addEventListener(SEED_CHATBOX_EVENT, onSeedChatboxB);
+    window.addEventListener(SEED_OBJECTIVE_EVENT, onSeedObjectiveB);
+    window.addEventListener(PROMOTE_TO_OBJECTIVE_EVENT, onPromoteToObjectiveB);
     return () => {
-      window.removeEventListener(DEPLOY_CARD_EVENT, onDeploy);
+      window.removeEventListener(DEPLOY_CARD_EVENT, onDeployB);
       window.removeEventListener(REMOVE_CARD_EVENT, onRemove);
-      window.removeEventListener(DEPLOY_ARTIFACT_EVENT, onArtifact);
-      window.removeEventListener(DEPLOY_SUBSYSTEM_KG_EVENT, onSubsystemKg);
+      window.removeEventListener(DEPLOY_ARTIFACT_EVENT, onArtifactB);
+      window.removeEventListener(DEPLOY_SUBSYSTEM_KG_EVENT, onSubsystemKgB);
       window.removeEventListener(CARD_ACTION_EVENT, onCardAction);
-      window.removeEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpening);
-      window.removeEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguity);
-      window.removeEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCard);
-      window.removeEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNote);
-      window.removeEventListener(DEPLOY_JOURNAL_EVENT, onDeployJournal);
-      window.removeEventListener(SEED_CHATBOX_EVENT, onSeedChatbox);
-      window.removeEventListener(SEED_OBJECTIVE_EVENT, onSeedObjective);
-      window.removeEventListener(PROMOTE_TO_OBJECTIVE_EVENT, onPromoteToObjective);
+      window.removeEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpeningB);
+      window.removeEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguityB);
+      window.removeEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCardB);
+      window.removeEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNoteB);
+      window.removeEventListener(DEPLOY_JOURNAL_EVENT, onDeployJournalB);
+      window.removeEventListener(SEED_CHATBOX_EVENT, onSeedChatboxB);
+      window.removeEventListener(SEED_OBJECTIVE_EVENT, onSeedObjectiveB);
+      window.removeEventListener(PROMOTE_TO_OBJECTIVE_EVENT, onPromoteToObjectiveB);
     };
   }, []);
 
@@ -1370,17 +1539,16 @@ export function WhiteboardBase({
         inferDarkMode={false}
         hideUi={!showUi}
       />
-      {/* Autosave status pill (top-left, beside Home) — green = saved, amber =
-          saving, red = save failed. Gives the user explicit save feedback. */}
+      {/* Autosave status pill — green = saved, amber = saving, red = failed.
+          Gives the user explicit save feedback. */}
       {editor && showUi && (
         <div
           style={{
-            // Top-right of the board — out of the crowded left menu zone. Sits
-            // just left of the style palette (top-right corner) and above the
-            // Powerups launcher; tucks behind the Powerups panel when it's open
-            // (it's a passive, pointer-events:none status).
+            // Top-right corner — the consolidated nav pill now lives on the
+            // left, so Saved gets the right edge to itself. Tucks behind the
+            // Powerups panel when it's open (it's a passive, pointer-events:none status).
             position: "absolute",
-            top: 16,
+            top: 18,
             right: 64,
             zIndex: 69,
             display: "inline-flex",
@@ -1396,12 +1564,13 @@ export function WhiteboardBase({
               saveStatus === "error"
                 ? "#DC2626"
                 : appleVibe.text.secondary,
-            background: "var(--glass-float-bg)",
-            border: "1px solid var(--glass-border)",
-            backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-            WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-            boxShadow:
-              "inset 0 1px 0 var(--glass-highlight), 0 8px 22px -14px rgba(11,18,40,0.28)",
+            // Translucent — sits behind everything else, status-only.
+            background: "rgba(255,255,255,0.45)",
+            border: "1px solid rgba(255,255,255,0.55)",
+            backdropFilter: "blur(var(--blur-float)) saturate(1.5)",
+            WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.5)",
+            boxShadow: "0 4px 14px -10px rgba(11,18,40,0.18)",
+            opacity: 0.85,
           }}
         >
           <span
@@ -1424,12 +1593,54 @@ export function WhiteboardBase({
               : "Saved"}
         </div>
       )}
+      {/* Share button — invite collaborators by email (owner) / see roster. */}
+      {editor && showUi && <ShareBoardLauncher spaceId={spaceId} />}
+      {/* Live-collaboration avatar stack — who else is on the board now. */}
+      {editor && showUi && collab.collaborators.length > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            top: 18,
+            right: 224,
+            zIndex: 70,
+            display: "inline-flex",
+            alignItems: "center",
+          }}
+        >
+          {collab.collaborators.slice(0, 5).map((c, i) => (
+            <div
+              key={c.clientId}
+              title={`${c.name}${c.role === "viewer" ? " (viewer)" : ""}`}
+              style={{
+                width: 26,
+                height: 26,
+                borderRadius: 999,
+                marginLeft: i === 0 ? 0 : -8,
+                background: c.color,
+                color: "#fff",
+                fontSize: 11,
+                fontWeight: 700,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "2px solid #fff",
+                boxShadow: "0 2px 8px -2px rgba(11,18,40,0.3)",
+                fontFamily: appleVibe.font.stack,
+                textTransform: "uppercase",
+              }}
+            >
+              {(c.name || "?").trim().charAt(0)}
+            </div>
+          ))}
+        </div>
+      )}
       {/* Contextual AI action — only while the board chrome is showing and
           we're NOT unfurling (the selection toolbar is for the normal board). */}
       {editor && showUi && (
         <BoardOverlay editor={editor} runAiLink={runAiLink} spaceId={spaceId} />
       )}
       {editor && <PrototypeEventBridge editor={editor} spaceId={spaceId} />}
+      {editor && <UiPlanEventBridge editor={editor} spaceId={spaceId} />}
       {/* Favorites sidebar — pans to hearted cards; hidden until ≥1 favorite. */}
       {editor && <FavoritesSidebar editor={editor} />}
 
@@ -1505,7 +1716,8 @@ function isBoardCard(s: TLShape): boolean {
   return (
     s.type === "room-card" ||
     s.type === "insight-card" ||
-    s.type === "artifact-card"
+    s.type === "artifact-card" ||
+    s.type === "oc-card"
   );
 }
 
@@ -1520,6 +1732,14 @@ function cardPayload(s: TLShape): BoardCardPayload {
       title: p.title,
       chips: p.subtitle ? [p.subtitle] : [],
       roomId: p.roomId,
+    };
+  }
+  if (s.type === "oc-card") {
+    const p = (s as OcCardShape).props;
+    const body = p.body ? p.body.slice(0, 200) : "";
+    return {
+      title: p.name,
+      chips: body ? [p.kind, body] : [p.kind],
     };
   }
   const p = (s as InsightCardShape).props;
@@ -1934,6 +2154,185 @@ function PrototypeEventBridge({
   return null;
 }
 
+// ── UiPlanEventBridge ──
+// The "Build prototype" fork: from any selected card, drop N ui-plan-cards
+// below it (tldraw arrows from source → each card), then POST /api/canvas/ui-plan
+// and fill each card with one variant. Each card's footer then fires
+// BUILD_PROTOTYPE_EVENT to commit that variant to a real prototype.
+function UiPlanEventBridge({
+  editor,
+  spaceId,
+}: {
+  editor: Editor;
+  spaceId: string;
+}) {
+  useEffect(() => {
+    const CARD_W = 280;
+    const CARD_H = 340;
+    const GAP_X = 18;
+    const GAP_BELOW = 90;
+
+    async function onBuild(e: Event) {
+      const d = (e as CustomEvent<BuildUiPlansDetail>).detail;
+      if (!d || !d.sourceText?.trim()) return;
+      const count = Math.max(1, Math.min(5, Math.round(d.count || 3)));
+
+      const anchor = d.sourceShapeId
+        ? editor.getShapePageBounds(d.sourceShapeId as TLShapeId)
+        : undefined;
+      const vp = editor.getViewportPageBounds();
+      const totalW = count * CARD_W + (count - 1) * GAP_X;
+      const left = anchor
+        ? anchor.midX - totalW / 2
+        : vp.center.x - totalW / 2;
+      const preferredTop = anchor ? anchor.maxY + GAP_BELOW : vp.center.y - CARD_H / 2;
+      const top = lowestClearTop(
+        editor,
+        { left, right: left + totalW },
+        preferredTop,
+        GAP_BELOW,
+      );
+
+      // Create N placeholder cards + arrows from the source.
+      const cardIds: TLShapeId[] = [];
+      for (let i = 0; i < count; i++) {
+        const id = createShapeId();
+        cardIds.push(id);
+        editor.createShape<UiPlanCardShape>({
+          id,
+          type: "ui-plan-card",
+          x: left + i * (CARD_W + GAP_X),
+          y: top,
+          props: {
+            w: CARD_W,
+            h: CARD_H,
+            title: d.sourceLabel || "UI plan",
+            variantLabel: "",
+            overview: "",
+            sourceText: d.sourceText,
+            uiPlanJson: "",
+            status: "generating",
+          },
+          meta: { sourceShapeId: d.sourceShapeId, variantIndex: i },
+        });
+        if (d.sourceShapeId) {
+          const arrowId = createShapeId();
+          const arrow: TLShapePartial<TLArrowShape> = {
+            id: arrowId,
+            type: "arrow",
+            props: {
+              color: "grey",
+              size: "s",
+              dash: "solid",
+              arrowheadStart: "none",
+              arrowheadEnd: "arrow",
+              bend: 0,
+            },
+            meta: { uiPlanLink: true },
+          };
+          editor.createShapes([arrow]);
+          editor.createBindings([
+            {
+              fromId: arrowId,
+              toId: d.sourceShapeId as TLShapeId,
+              type: "arrow",
+              props: {
+                terminal: "start",
+                normalizedAnchor: { x: 0.5, y: 1 },
+                isExact: false,
+                isPrecise: true,
+              },
+              meta: {},
+            },
+            {
+              fromId: arrowId,
+              toId: id,
+              type: "arrow",
+              props: {
+                terminal: "end",
+                normalizedAnchor: { x: 0.5, y: 0 },
+                isExact: false,
+                isPrecise: true,
+              },
+              meta: {},
+            },
+          ]);
+        }
+      }
+
+      // Focus the new row.
+      editor.select(...cardIds);
+      const bounds = editor.getSelectionPageBounds();
+      if (bounds) {
+        editor.zoomToBounds(bounds, { inset: 160, animation: { duration: 300 } });
+      }
+      editor.selectNone();
+
+      try {
+        const res = await fetch(`/api/canvas/ui-plan`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            spaceId,
+            sourceText: d.sourceText,
+            count,
+            temperature: d.temperature,
+          }),
+        });
+        if (!res.ok) throw new Error(`ui-plan failed: ${res.status}`);
+        const json = (await res.json()) as {
+          title: string;
+          overview: string;
+          variants: Array<{ label: string; plan: unknown }>;
+        };
+        const variants = json.variants || [];
+        for (let i = 0; i < cardIds.length; i++) {
+          const v = variants[i];
+          const id = cardIds[i];
+          if (!editor.getShape(id)) continue;
+          if (!v || !v.plan) {
+            editor.updateShape<UiPlanCardShape>({
+              id,
+              type: "ui-plan-card",
+              props: { status: "error" },
+            });
+            continue;
+          }
+          editor.updateShape<UiPlanCardShape>({
+            id,
+            type: "ui-plan-card",
+            props: {
+              status: "ready",
+              title: json.title || d.sourceLabel || "UI plan",
+              overview: json.overview || "",
+              variantLabel: v.label || `Variant ${i + 1}`,
+              uiPlanJson: JSON.stringify(v.plan),
+            },
+          });
+        }
+      } catch (err) {
+        console.warn("[board] ui-plan build failed:", err);
+        for (const id of cardIds) {
+          try {
+            editor.updateShape<UiPlanCardShape>({
+              id,
+              type: "ui-plan-card",
+              props: { status: "error" },
+            });
+          } catch {
+            /* card may have been deleted */
+          }
+        }
+      }
+    }
+
+    window.addEventListener(BUILD_UI_PLANS_EVENT, onBuild);
+    return () => window.removeEventListener(BUILD_UI_PLANS_EVENT, onBuild);
+  }, [editor, spaceId]);
+
+  return null;
+}
+
 // DecomposeCardsButton (the bottom-left float) was removed — the objective
 // decompose now lives in the Powerups rail (requestDecomposeIntoCards).
 
@@ -1969,11 +2368,18 @@ function BoardOverlay({
         .getSelectedShapes()
         .map(shapeToScanTarget)
         .filter((t): t is OperationTarget => !!t);
-      if (targets.length === 0) return;
-      handleForge({
-        text: targets.map((t) => t.text).join("\n\n"),
-        shapeId: targets[0].shapeId,
-      });
+      // Rail flips its button to busy optimistically on click. If we bail
+      // here (no selection / empty text) we MUST clear that — otherwise the
+      // button stays disabled with the spinner stuck on. handleForge below
+      // also flips to running which broadcasts true again on a real run.
+      const text = targets.map((t) => t.text).join("\n\n");
+      if (targets.length === 0 || !text.trim()) {
+        window.dispatchEvent(
+          new CustomEvent(FORGE_STATE_EVENT, { detail: { running: false } }),
+        );
+        return;
+      }
+      handleForge({ text, shapeId: targets[0].shapeId });
     }
     window.addEventListener(FORGE_REQUEST_EVENT, onForgeReq);
     return () => window.removeEventListener(FORGE_REQUEST_EVENT, onForgeReq);
@@ -1994,6 +2400,17 @@ function BoardOverlay({
   // Which forge verb is running, so only the clicked toolbar button spins:
   // "spec" (Spec) vs "prototype" (Prototype = forge → spec → auto-build).
   const [forgeKind, setForgeKind] = useState<"spec" | "prototype" | null>(null);
+
+  // Mirror Forge busy-state out to the Powerup rail (which renders the hero
+  // button) so it can disable + spinner the click target. Covers BOTH stages
+  // of the chain — the 9-engine unfurl AND the follow-up tech-spec — so a
+  // second click is blocked end-to-end, not just during the unfurl.
+  useEffect(() => {
+    const running = !!(forging && forging.phase === "running") || techSpecBusy;
+    window.dispatchEvent(
+      new CustomEvent(FORGE_STATE_EVENT, { detail: { running } }),
+    );
+  }, [forging, techSpecBusy]);
 
   // Run the SpecForge chain for the selected idea — streams decision cards
   // below the source. Guarded so a second click can't double-run.
@@ -2324,41 +2741,11 @@ function BoardOverlay({
 
   return (
     <>
-      {/* Return to home (/app). Top-left, sits over the hover-revealed tldraw
-          menu cluster. */}
-      <button
-        type="button"
-        title="Back to home"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={() => window.location.assign("/app")}
-        style={{
-          // Below the (hover-revealed) tldraw top-left menu zone so the menu
-          // never covers this button when it appears.
-          position: "absolute",
-          top: 54,
-          left: 16,
-          zIndex: 70,
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "7px 12px",
-          borderRadius: appleVibe.radius.pill,
-          border: "1px solid var(--glass-border)",
-          cursor: "pointer",
-          fontFamily: appleVibe.font.stack,
-          fontSize: 11.5,
-          fontWeight: 650,
-          color: appleVibe.text.secondary,
-          background: "var(--glass-float-bg)",
-          backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-          WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
-          boxShadow:
-            "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
-        }}
-      >
-        <Home style={{ width: 13, height: 13 }} strokeWidth={2.2} />
-        Home
-      </button>
+      {/* Consolidated nav — one white icon pill (Home · Goal · History ·
+          Settings) in the top-right, replacing the old left-side stack of
+          labelled glass pills. Home navigates; the rest open their launcher
+          panels (mounted below) via events. */}
+      <BoardNavBar />
       {/* RoomPill removed — it duplicated the objective name the centered
           PageTabs already shows; "+ new objective" now lives in the Powerups
           rail ("New objective + refine") and the Home nav. */}
@@ -2374,6 +2761,15 @@ function BoardOverlay({
       {/* Powerups + Artifacts rail — the persistent right-edge home for every
           AI op (run on the live selection) + the finished tech-specs/artifacts. */}
       <PowerupRail spaceId={spaceId} editor={editor} />
+      {/* AI Chat — bottom-right card overlay. Opens on OPEN_BOARD_CHAT_EVENT
+          (dispatched by the toolbox sphere's "AI Chat" pill). Reads the live
+          board snapshot every send; cross-board scope is a header toggle. */}
+      <WhiteboardChatPanel spaceId={spaceId} editor={editor} />
+      {/* Comments — orchestrator for the comment-card shape. Listens for
+          OPEN_BOARD_COMMENT (toolbox sphere), body/resolve/delete patches,
+          and the "Analyze on board" extension. Hydrates existing rows on
+          mount so comments survive a page refresh. */}
+      <CommentBoardMount spaceId={spaceId} editor={editor} />
       {/* Object detail drawer — listens for OPEN_CARD_DETAIL_EVENT (oc-card
           double-click + Library clicks) → metadata + object-graph modal. */}
       <ObjectDetailMount spaceId={spaceId} editor={editor} />

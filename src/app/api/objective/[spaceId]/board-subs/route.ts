@@ -9,7 +9,7 @@
 // per-room entity/chain rollup (that lives in the heavier page loader).
 
 import { NextResponse } from "next/server";
-import { safeAuth } from "@/lib/api-helpers";
+import { safeAuth, verifySpaceAccess } from "@/lib/api-helpers";
 
 export const runtime = "nodejs";
 
@@ -26,13 +26,19 @@ export async function GET(_req: Request, ctx: RouteContext) {
     return NextResponse.json({ error: "Missing spaceId" }, { status: 400 });
   }
 
-  // Ownership + objective text + cached analysis in one read.
+  // Access (owner or shared member) + objective text + cached analysis.
   const { data: space } = await auth.supabase
     .from("spaces")
     .select("id, user_id, description, input_text, synthesis_data")
     .eq("id", spaceId)
     .maybeSingle();
-  if (!space || space.user_id !== auth.user.id) {
+  if (!space) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  if (
+    space.user_id !== auth.user.id &&
+    !(await verifySpaceAccess(auth.supabase, spaceId, auth.user.id))
+  ) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   const objectiveTitle =

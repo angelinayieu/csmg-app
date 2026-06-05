@@ -24,7 +24,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   safeAuth,
   safeJsonParse,
-  verifySpaceOwnership,
+  verifySpaceAccess,
   sanitizeErrorMessage,
 } from "@/lib/api-helpers";
 
@@ -58,8 +58,9 @@ export async function GET(
   const { supabase, user, error: authError } = await safeAuth();
   if (authError) return authError;
 
-  const isOwner = await verifySpaceOwnership(supabase, spaceId, user.id);
-  if (!isOwner)
+  // Any participant (owner / editor / viewer) may load the board.
+  const role = await verifySpaceAccess(supabase, spaceId, user.id);
+  if (!role)
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
 
   const db = supabase as AnyDb;
@@ -116,8 +117,9 @@ export async function PUT(
   const { supabase, user, error: authError } = await safeAuth();
   if (authError) return authError;
 
-  const isOwner = await verifySpaceOwnership(supabase, spaceId, user.id);
-  if (!isOwner)
+  // Writes require owner or editor — viewers are read-only.
+  const role = await verifySpaceAccess(supabase, spaceId, user.id);
+  if (role !== "owner" && role !== "editor")
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
 
   const { data: body, error: parseError } = await safeJsonParse<{

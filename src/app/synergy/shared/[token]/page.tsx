@@ -125,12 +125,12 @@ export default async function SharedStrategyPage({ params }: PageProps) {
           <Link
             href="/"
             className="inline-flex items-center gap-2 text-sm font-semibold text-gray-700 transition hover:text-gray-900"
-            aria-label="InterAxis home"
+            aria-label="akiboe home"
           >
             <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-blue-600 text-[10px] font-bold text-white">
-              IA
+              ak
             </span>
-            InterAxis
+            akiboe
           </Link>
           <div className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1 text-[11px] font-medium text-gray-700">
             <ShieldCheck className="h-3 w-3 text-emerald-600" />
@@ -267,7 +267,7 @@ export default async function SharedStrategyPage({ params }: PageProps) {
             Build your own living strategy
           </h3>
           <p className="mx-auto mt-1 max-w-md text-[13px] leading-relaxed text-gray-600">
-            InterAxis turns scattered brainstorms into structured plans, then
+            akiboe turns scattered brainstorms into structured plans, then
             matches you with collaborators whose components complement yours.
           </p>
           <Link
@@ -541,7 +541,7 @@ function UnavailableCard({
           href="/"
           className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:scale-[1.02]"
         >
-          Back to InterAxis
+          Back to akiboe
         </Link>
       </div>
     </div>

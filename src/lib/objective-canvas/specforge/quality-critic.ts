@@ -23,6 +23,8 @@ import type {
   RecommendationResult,
   FeatureCardsResult,
   FeatureCard,
+  FeatureMechanismsResult,
+  FeatureMechanism,
   ValidationResult,
   ValidationExperiment,
   ValidationAssumption,
@@ -447,6 +449,50 @@ export function evaluateSpecForgeQuality(
       add(issues, !Number.isFinite(Number(r.confidence)), "medium", "evidence honesty", "missing confidence", "state confidence 0–100 honestly on this decomposition");
 
       const ctx = mustHave.slice(0, 3).map((f) => clean(f.name)).filter(Boolean);
+      return finalize(engine, issues, repaired, ctx);
+    }
+
+    case "feature_mechanisms": {
+      const r = result as FeatureMechanismsResult;
+      const mechs = arr<FeatureMechanism>(r.mechanisms);
+      // Spec §19 quality gates — critical first.
+      add(issues, !mechs.length, "critical", "downstream usefulness", "no feature mechanisms produced", "design at least 2 mechanisms tied to features in feature_cards");
+      const missingFeatureLink = mechs.filter((m) => !clean(m?.feature_name)).length;
+      add(issues, missingFeatureLink > 0, "critical", "constraint satisfaction", `${missingFeatureLink} mechanism${missingFeatureLink === 1 ? "" : "s"} not linked to a feature_card`, "every mechanism must echo a feature_cards.features[i].name");
+      const missingProcess = mechs.filter(
+        (m) => arr<string>(m?.system_process).filter(Boolean).length < 3,
+      ).length;
+      add(issues, missingProcess > 0, "critical", "downstream usefulness", `${missingProcess} mechanism${missingProcess === 1 ? "" : "s"} have fewer than 3 ordered process steps`, "decompose each mechanism into trigger → input → ordered steps → output (spec §6 layers)");
+      const missingOutputs = mechs.filter(
+        (m) => arr<string>(m?.outputs).filter(Boolean).length === 0,
+      ).length;
+      add(issues, missingOutputs > 0, "critical", "downstream usefulness", `${missingOutputs} mechanism${missingOutputs === 1 ? "" : "s"} produce no outputs`, "every mechanism must transform inputs into a named output artifact (spec §12)");
+
+      // High severity — mechanism rigor.
+      const missingTrigger = mechs.filter((m) => !clean(m?.trigger)).length;
+      add(issues, missingTrigger > 0, "high", "downstream usefulness", `${missingTrigger} mechanism${missingTrigger === 1 ? "" : "s"} have no trigger`, "name what starts each mechanism (user action, event, or upstream artifact)");
+      const fewAlternatives = mechs.filter(
+        (m) => arr(m?.alternatives).length < 2,
+      ).length;
+      add(issues, fewAlternatives > 0, "high", "evidence honesty", `${fewAlternatives} mechanism${fewAlternatives === 1 ? "" : "s"} compared fewer than 2 alternatives`, "per spec §16, compare at least 2 alternatives and state why the selected one won");
+      const missingFailures = mechs.filter(
+        (m) => arr<string>(m?.failure_modes).filter(Boolean).length === 0,
+      ).length;
+      add(issues, missingFailures > 0, "high", "evidence honesty", `${missingFailures} mechanism${missingFailures === 1 ? "" : "s"} have no failure modes`, "per spec §15, name 2+ ways each mechanism can fail and 1+ risk control");
+      const shallowTest = mechs.filter((m) => {
+        const t = clean(m?.test_method).toLowerCase();
+        return !t || t === "user feedback" || t === "feedback" || t.length < 20;
+      }).length;
+      add(issues, shallowTest > 0, "high", "downstream usefulness", `${shallowTest} mechanism${shallowTest === 1 ? "" : "s"} have shallow test_method`, "name a specific test the validation lab could lift as an experiment (not 'user feedback')");
+
+      // Medium severity.
+      const missingBehavior = mechs.filter((m) => !clean(m?.user_behavior_changed)).length;
+      add(issues, missingBehavior > 0, "medium", "downstream usefulness", `${missingBehavior} mechanism${missingBehavior === 1 ? "" : "s"} don't change user behavior`, "spec §13: if no behavior changes, the mechanism is weak — name what the user does differently");
+      const missingDifficulty = mechs.filter((m) => !clean(m?.implementation_difficulty)).length;
+      add(issues, missingDifficulty > 0, "medium", "buildability", `${missingDifficulty} mechanism${missingDifficulty === 1 ? "" : "s"} missing implementation_difficulty`, "rate each mechanism low/medium/high based on whether net-new infra is needed");
+      add(issues, !Number.isFinite(Number(r.confidence)), "medium", "evidence honesty", "missing confidence", "state confidence 0–100 honestly on this mechanism plan");
+
+      const ctx = mechs.slice(0, 3).map((m) => clean(m?.mechanism_name)).filter(Boolean);
       return finalize(engine, issues, repaired, ctx);
     }
 

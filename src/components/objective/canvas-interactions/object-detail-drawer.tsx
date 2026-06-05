@@ -15,6 +15,7 @@ import type { Editor, TLShape, TLShapeId } from "tldraw";
 import { X, Loader2, Boxes, ArrowRight, ArrowLeft, MapPin, Target, Star } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { labelFor, panToShape } from "../favorites-sidebar";
+import { ObjectClusterGraph } from "./object-cluster-graph";
 
 export const OPEN_CARD_DETAIL_EVENT = "objective-board:open-card-detail";
 
@@ -24,6 +25,7 @@ interface ObjectLinkRef {
   direction: "out" | "in";
   title: string;
   type: string;
+  subsystem?: string | null;
 }
 interface LibObjectFull {
   id: string;
@@ -36,6 +38,7 @@ interface LibObjectFull {
   on_whiteboard?: boolean;
   board_shape_id?: string | null;
   source_entity_id?: string | null;
+  subsystem?: string | null;
 }
 interface DetailResponse {
   object: LibObjectFull | null;
@@ -153,9 +156,7 @@ function ObjectDetailDrawer({
   }
 
   return (
-    <>
-      <div onPointerDown={onClose} style={backdrop} />
-      <div onPointerDown={(e) => e.stopPropagation()} style={modal}>
+    <div onPointerDown={(e) => e.stopPropagation()} style={rail}>
         {/* header */}
         <div style={header}>
           <Boxes style={{ width: 15, height: 15, color: appleVibe.text.secondary }} strokeWidth={2.2} />
@@ -182,11 +183,40 @@ function ObjectDetailDrawer({
                   <span style={statusPill}>{titleCase(obj.selection_status)}</span>
                 )}
                 {obj.on_whiteboard && <span style={statusPill}>On board</span>}
+                {obj.subsystem && <span style={subsystemPill}>{obj.subsystem}</span>}
               </div>
 
               {body && <p style={{ ...bodyText, marginTop: 10 }}>{body}</p>}
 
               <Gallery snapshot={obj.content_snapshot} />
+
+              {/* cluster graph — this object + its linked neighborhood */}
+              {links.length > 0 && (
+                <section style={{ marginTop: 14 }}>
+                  <div style={sectionLabel}>Cluster</div>
+                  <div
+                    style={{
+                      marginTop: 6,
+                      borderRadius: appleVibe.radius.sm,
+                      background: appleVibe.surface.chip,
+                      padding: "8px 4px",
+                    }}
+                  >
+                    <ObjectClusterGraph
+                      centerTitle={name}
+                      centerType={obj.object_type}
+                      neighbors={links.map((l) => ({
+                        id: l.id,
+                        title: l.title,
+                        type: l.type,
+                        relation: l.relation,
+                        direction: l.direction,
+                      }))}
+                      onNavigate={onNavigate}
+                    />
+                  </div>
+                </section>
+              )}
 
               {/* object graph — the back-half links */}
               {links.length > 0 && (
@@ -234,8 +264,7 @@ function ObjectDetailDrawer({
             </>
           )}
         </div>
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -343,15 +372,29 @@ function ObjectiveNode({
     };
   }, [spaceId]);
 
+  // Space images (stored binaries) — so analyzed images stay visible in the
+  // storage area, not only on the board. Safe route (guaranteed columns only).
+  const [images, setImages] = useState<{ id: string; name: string; url: string }[]>([]);
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/objective/${spaceId}/stored-images`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (alive && Array.isArray(j?.images)) setImages(j.images);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [spaceId]);
+
   function goTo(id: TLShapeId) {
     onClose();
     panToShape(editor, id);
   }
 
   return (
-    <>
-      <div onPointerDown={onClose} style={backdrop} />
-      <div onPointerDown={(e) => e.stopPropagation()} style={modal}>
+    <div onPointerDown={(e) => e.stopPropagation()} style={rail}>
         <div style={header}>
           <Target style={{ width: 15, height: 15, color: appleVibe.text.secondary }} strokeWidth={2.2} />
           <span style={titleStyle}>{title}</span>
@@ -423,9 +466,48 @@ function ObjectiveNode({
               </div>
             )}
           </section>
+
+          {images.length > 0 && (
+            <section style={{ marginTop: 14 }}>
+              <div style={sectionLabel}>Images · {images.length}</div>
+              <div
+                style={{
+                  marginTop: 6,
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 6,
+                }}
+              >
+                {images.map((im) => (
+                  <a
+                    key={im.id}
+                    href={im.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={im.name}
+                    style={{
+                      display: "block",
+                      borderRadius: appleVibe.radius.sm,
+                      overflow: "hidden",
+                      border: "1px solid var(--glass-border)",
+                      aspectRatio: "4 / 3",
+                      background: appleVibe.surface.chip,
+                    }}
+                  >
+                    {/* External Storage URL — plain img (next/image can't optimize it). */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={im.url}
+                      alt={im.name}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    />
+                  </a>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -443,6 +525,16 @@ export function ObjectDetailMount({ spaceId, editor }: { spaceId: string; editor
     window.addEventListener(OPEN_CARD_DETAIL_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_CARD_DETAIL_EVENT, onOpen);
   }, []);
+
+  // Esc closes the rail (there's no backdrop to click — it's non-occluding).
+  useEffect(() => {
+    if (!objectId) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setObjectId(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [objectId]);
 
   if (!objectId) return null;
   if (objectId === OBJECTIVE_MARKER) {
@@ -467,21 +559,16 @@ export function ObjectDetailMount({ spaceId, editor }: { spaceId: string; editor
 }
 
 // ── styles ──
-const backdrop: CSSProperties = {
+// Docked, NON-OCCLUDING right rail (no backdrop) — stays open while the user
+// keeps working the whiteboard. Closes via the X button or Esc only. Sits
+// above board chrome (z 90) but below true modals (Resolution Studio z 200).
+const rail: CSSProperties = {
   position: "fixed",
-  inset: 0,
-  zIndex: 100,
-  background: "rgba(11,18,40,0.28)",
-  backdropFilter: "blur(2px)",
-};
-const modal: CSSProperties = {
-  position: "fixed",
-  top: "50%",
-  left: "50%",
-  transform: "translate(-50%, -50%)",
-  zIndex: 101,
-  width: "min(560px, calc(100vw - 32px))",
-  maxHeight: "82vh",
+  top: 16,
+  right: 16,
+  bottom: 16,
+  zIndex: 90,
+  width: "min(380px, calc(100vw - 32px))",
   display: "flex",
   flexDirection: "column",
   minHeight: 0,
@@ -490,8 +577,19 @@ const modal: CSSProperties = {
   backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
   WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
   border: "1px solid var(--glass-border)",
-  boxShadow: "inset 0 1px 0 var(--glass-highlight), 0 32px 70px -24px rgba(11,18,40,0.45)",
+  boxShadow: "inset 0 1px 0 var(--glass-highlight), 0 24px 60px -22px rgba(11,18,40,0.40)",
   fontFamily: appleVibe.font.stack,
+};
+const subsystemPill: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  height: 19,
+  padding: "0 9px",
+  borderRadius: appleVibe.radius.pill,
+  background: "rgba(6,148,148,0.12)",
+  color: "#069494",
+  fontSize: 10.5,
+  fontWeight: 650,
 };
 const header: CSSProperties = {
   display: "flex",

@@ -21,6 +21,7 @@ export interface ObjectLinkRef {
   direction: "out" | "in";
   title: string;
   type: string;
+  subsystem?: string | null;
 }
 
 export async function GET(_req: NextRequest, ctx: Ctx) {
@@ -56,14 +57,19 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
       ),
     );
 
-    const meta = new Map<string, { title: string; type: string }>();
+    const meta = new Map<string, { title: string; type: string; subsystem: string | null }>();
     if (otherIds.length) {
       const { data: others } = await db
         .from("library_objects")
-        .select("id, title, object_type")
+        .select("id, title, object_type, subsystem")
         .in("id", otherIds);
-      for (const o of (others ?? []) as Array<{ id: string; title: string; object_type: string }>) {
-        meta.set(o.id, { title: o.title, type: o.object_type });
+      for (const o of (others ?? []) as Array<{
+        id: string;
+        title: string;
+        object_type: string;
+        subsystem: string | null;
+      }>) {
+        meta.set(o.id, { title: o.title, type: o.object_type, subsystem: o.subsystem ?? null });
       }
     }
 
@@ -77,6 +83,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
         direction: outgoing ? "out" : "in",
         title: m?.title ?? "Untitled",
         type: m?.type ?? "object",
+        subsystem: m?.subsystem ?? null,
       } as ObjectLinkRef;
     });
   } catch {

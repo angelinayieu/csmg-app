@@ -1,7 +1,7 @@
 // ── /app/welcome — first-sign-in onboarding ──
 //
 // Two-section page:
-//   1. Welcome card explaining InterAxis Synergy + the anonymity promise
+//   1. Welcome card explaining akiboe Synergy + the anonymity promise
 //   2. Optional profile setup (display_name + bio + matching toggle)
 //
 // Both "Save & start brainstorming" and "Skip to whiteboard" set

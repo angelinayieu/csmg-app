@@ -96,7 +96,7 @@ export function TopBar({
         <Link
           href="/app"
           className="flex items-center gap-2 rounded-full px-1 py-1 transition-opacity hover:opacity-80"
-          title="InterAxis home"
+          title="akiboe home"
         >
           <InterAxisLogo
             className="h-7 w-7 flex-shrink-0"
@@ -107,7 +107,7 @@ export function TopBar({
             }}
           />
           <span className="text-[13px] font-bold tracking-tight text-[color:var(--home-text)]">
-            InterAxis
+            akiboe
           </span>
         </Link>
 

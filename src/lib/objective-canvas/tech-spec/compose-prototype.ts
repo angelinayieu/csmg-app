@@ -8,11 +8,12 @@
 // in an iframe with sandbox="" — belt + suspenders.
 
 import { getAnthropicClient } from "@/lib/anthropic";
+import { BEST_CLAUDE_MODEL } from "@/lib/llm";
 import { loadUiSkillSystem } from "@/lib/objective-canvas/ui-skill-system";
 import { sanitizeHtml } from "@/lib/objective-canvas/generate-mockup";
 import type { TechSpec } from "./types";
 
-const OPUS_MODEL = "claude-opus-4-20250514";
+const OPUS_MODEL = BEST_CLAUDE_MODEL;
 
 const BASE_RULES =
   "Hard rules: ONE self-contained <!DOCTYPE html> document with a single inline <style> block. NO JavaScript, NO <script>, NO external resources (no CDN, web fonts, or image URLs) — system fonts + CSS only. Make it feel REAL: concrete copy and realistic placeholder data (never lorem ipsum), the key components from the UI plan, and CSS-only interactivity (hover/focus states, label-driven :checked tabs/toggles, <details>). Honor the design language (glass tier, density, motion intent, accent, hero pattern) and surface at least one non-happy-path state (empty/loading) somewhere. Return ONLY the HTML document — no prose, no markdown fence.";

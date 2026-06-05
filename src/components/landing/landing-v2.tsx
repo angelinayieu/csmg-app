@@ -42,15 +42,19 @@ export interface LandingCard {
   name: string;
   tagline: string;
   category: string;
-  /** Template accent_color — drives the colored category tag + image wash. */
+  /** Drives the card's monochrome ink (glyph, chips, pills, Generates, CTA).
+   *  In the B&W scheme this is ink; everything but the banner reads from it. */
   accent: string;
+  /** Real per-template color — used ONLY for the banner wash, so the banners
+   *  carry color while the rest of the card stays black. Falls back to `accent`. */
+  bannerAccent?: string;
 }
 
 const NAV = ["Plans", "About", "Blog"];
 
 const INK = "#0B0B0C";
 
-// Small monochrome "verified by Intersice" seal — drawn with the same pen
+// Small monochrome "verified by akiboe" seal — drawn with the same pen
 // as the hero starburst + card glyphs (round-cap ink), so it reads as the
 // same hand, NOT a borrowed blue social-network check.
 function VerifiedSeal() {
@@ -59,7 +63,7 @@ function VerifiedSeal() {
       width={11}
       height={11}
       viewBox="0 0 12 12"
-      aria-label="Verified by Intersice"
+      aria-label="Verified by akiboe"
       role="img"
       style={{ display: "block" }}
     >
@@ -81,7 +85,16 @@ function openSignup() {
   if (typeof window !== "undefined") window.location.hash = "signup";
 }
 
-export function LandingV2({ cards }: { cards: LandingCard[] }) {
+export function LandingV2({
+  cards,
+  surface = "flat",
+}: {
+  cards: LandingCard[];
+  /** "flat" = solid #F7F8FA (default, ships). "whiteboard" = the tldraw-style
+   *  dot-grid surface, same pattern used by MinimalHome when composing — turns
+   *  the whole landing into a whiteboard for preview. */
+  surface?: "flat" | "whiteboard";
+}) {
   function pickTemplate(id: string) {
     // Stash the intent, then open signup — /app resumes it after auth.
     stashPendingIntake({ kind: "template", templateId: id });
@@ -125,7 +138,19 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
   return (
     <div
       className="flex min-h-screen flex-col overflow-hidden"
-      style={{ background: "#F7F8FA", fontFamily: appleVibe.font.stack }}
+      style={{
+        background: "#F7F8FA",
+        // Whiteboard surface = tldraw-style dot grid on top of the base. Same
+        // pattern MinimalHome uses when the user starts composing.
+        backgroundImage:
+          surface === "whiteboard"
+            ? // 1.3px dot, slightly stronger than MinimalHome's behind-text use,
+              // so the whole landing clearly reads as a tldraw-style whiteboard.
+              "radial-gradient(circle, rgba(15,23,42,0.18) 1.3px, transparent 1.6px)"
+            : undefined,
+        backgroundSize: surface === "whiteboard" ? "26px 26px" : undefined,
+        fontFamily: appleVibe.font.stack,
+      }}
     >
       {/* ── Header ── */}
       <header className="flex items-start justify-between px-6 pt-7 sm:px-10">
@@ -134,7 +159,7 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
             className="text-[22px] font-bold leading-none tracking-tight"
             style={{ color: INK }}
           >
-            intersice
+            akiboe
           </div>
           <div
             className="mt-1.5 text-[12.5px] leading-none"
@@ -267,7 +292,9 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
                     <div
                       className="relative h-[76px] w-full"
                       style={{
-                        background: `linear-gradient(155deg, ${card.accent}26 0%, ${card.accent}0d 55%, #ffffff 100%)`,
+                        // Banner carries the real per-template color again;
+                        // everything else on the card stays ink.
+                        background: `linear-gradient(155deg, ${card.bannerAccent ?? card.accent}26 0%, ${card.bannerAccent ?? card.accent}0d 55%, #ffffff 100%)`,
                       }}
                     >
                       <div
@@ -278,12 +305,17 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
                             "radial-gradient(120% 80% at 80% 0%, rgba(255,255,255,0.7), rgba(255,255,255,0) 60%)",
                         }}
                       />
-                      <div className="absolute left-3.5 top-3 h-9 w-14">
-                        <CardGlyph
-                          templateId={card.id}
-                          accent={card.accent}
-                          animated
-                        />
+                      {/* Glyph on a white rounded "icon tile" — the base fits
+                          the graph with a little margin so it reads as an app
+                          icon sitting on the colored banner. */}
+                      <div className="absolute left-3.5 top-3 flex items-center justify-center rounded-xl bg-white p-1.5 shadow-[0_2px_8px_-3px_rgba(11,18,40,0.18)] ring-1 ring-black/[0.06]">
+                        <div className="h-9 w-14">
+                          <CardGlyph
+                            templateId={card.id}
+                            accent={card.accent}
+                            animated
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -326,7 +358,7 @@ export function LandingV2({ cards }: { cards: LandingCard[] }) {
                             className="whitespace-nowrap text-[11px] font-semibold tracking-[-0.01em]"
                             style={{ color: appleVibe.text.secondary }}
                           >
-                            Intersice Team
+                            akiboe Team
                           </span>
                           <VerifiedSeal />
                         </div>

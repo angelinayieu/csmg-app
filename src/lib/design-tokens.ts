@@ -300,7 +300,7 @@ export function getEntityColor(
 // scope dots, proposal rail, inline span underlines (Sprint 3), universal
 // canvas frame chrome (Sprint 4), and synthesis cross-area headers.
 //
-//   universal = teal (InterAxis primary, spans everything)
+//   universal = teal (akiboe primary, spans everything)
 //   project   = purple (one level down from universal)
 //   objective = blue (sub-objective layer)
 //   app       = amber (leaf, most concrete)
@@ -312,7 +312,7 @@ export const canvasScopeColors: Record<
   { dot: string; tintBg: string; tintBorder: string; text: string; label: string }
 > = {
   universal: {
-    dot: "#00ACC1",      // InterAxis teal
+    dot: "#00ACC1",      // akiboe teal
     tintBg: "#E0F7FA",
     tintBorder: "#B2EBF2",
     text: "#00838F",

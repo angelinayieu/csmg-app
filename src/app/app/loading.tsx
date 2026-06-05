@@ -1,5 +1,5 @@
-import { ImmersiveLoader } from "@/components/ui/immersive-loader";
+import { CornerLoader } from "@/components/ui/corner-loader";
 
 export default function DashboardLoading() {
-  return <ImmersiveLoader label="Loading your intelligence system…" />;
+  return <CornerLoader label="Loading your intelligence system…" />;
 }

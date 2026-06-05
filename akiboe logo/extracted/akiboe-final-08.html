@@ -1,0 +1,55 @@
+<!-- akiboe — final lockup, light + dark -->
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@800&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0;}
+  .stage{font-family:'Plus Jakarta Sans',sans-serif;background:#e9e7e2;padding:24px;min-height:100%;}
+  .grid{max-width:1000px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:24px;}
+  @media (max-width:640px){ .grid{grid-template-columns:1fr;} }
+  .tile{aspect-ratio:1/1;border-radius:6px;display:flex;align-items:center;justify-content:center;padding:16%;}
+  .light{background:#ffffff;}
+  .dark{background:#1a1815;}
+  .word{font-weight:800;letter-spacing:-.035em;line-height:1;display:inline-flex;align-items:center;white-space:nowrap;}
+  .lock-h{display:flex;align-items:center;gap:0.32em;}
+</style>
+
+<div class="stage">
+  <div class="grid">
+
+    <!-- light -->
+    <div class="tile light">
+      <div class="lock-h">
+        <svg width="0.95em" height="0.95em" viewBox="0 0 100 100" style="font-size:48px;">
+          <g fill="none" stroke="#1b1a18" stroke-width="6" stroke-linecap="round">
+            <circle cx="50" cy="50" r="8"/>
+            <line x1="34" y1="50" x2="20" y2="50"/>
+            <line x1="38.7" y1="38.7" x2="28.8" y2="28.8"/>
+            <line x1="61.3" y1="38.7" x2="71.2" y2="28.8"/>
+            <line x1="38.7" y1="61.3" x2="28.8" y2="71.2"/>
+            <line x1="61.3" y1="61.3" x2="71.2" y2="71.2"/>
+          </g>
+          <line x1="66" y1="50" x2="80" y2="50" stroke="#c2593b" stroke-width="6" stroke-linecap="round"/>
+        </svg>
+        <span class="word" style="font-size:48px;color:#1b1a18;">akiboe<span style="color:#c2593b;">.</span></span>
+      </div>
+    </div>
+
+    <!-- dark -->
+    <div class="tile dark">
+      <div class="lock-h">
+        <svg width="0.95em" height="0.95em" viewBox="0 0 100 100" style="font-size:48px;">
+          <g fill="none" stroke="#f3ede2" stroke-width="6" stroke-linecap="round">
+            <circle cx="50" cy="50" r="8"/>
+            <line x1="34" y1="50" x2="20" y2="50"/>
+            <line x1="38.7" y1="38.7" x2="28.8" y2="28.8"/>
+            <line x1="61.3" y1="38.7" x2="71.2" y2="28.8"/>
+            <line x1="38.7" y1="61.3" x2="28.8" y2="71.2"/>
+            <line x1="61.3" y1="61.3" x2="71.2" y2="71.2"/>
+          </g>
+          <line x1="66" y1="50" x2="80" y2="50" stroke="#d98b6f" stroke-width="6" stroke-linecap="round"/>
+        </svg>
+        <span class="word" style="font-size:48px;color:#f3ede2;">akiboe<span style="color:#d98b6f;">.</span></span>
+      </div>
+    </div>
+
+  </div>
+</div>

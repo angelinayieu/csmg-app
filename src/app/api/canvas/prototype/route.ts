@@ -6,6 +6,7 @@
 
 import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
+import { BEST_CLAUDE_MODEL } from "@/lib/llm";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 import { composePrototypeHtml } from "@/lib/objective-canvas/tech-spec/compose-prototype";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
@@ -54,7 +55,7 @@ export async function POST(req: Request) {
         userId: auth.user.id,
         spaceId,
         callSite: "objective:prototype",
-        modelHint: "claude-opus-4-20250514",
+        modelHint: BEST_CLAUDE_MODEL,
         metadata: { mode: "generate" },
       },
       () => composePrototypeHtml(spec),

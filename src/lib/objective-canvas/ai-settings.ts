@@ -9,12 +9,14 @@
 //   depth       — 1..5 reasoning rigor (quick → deep / probe-assumptions)
 //   complexity  — number of questions a diverge/converge pass generates
 //   webSearch   — ground the pass with live web search (light, ~4 searches)
+//   uiPlanCount — how many UI-plan variants the "Build prototype" fork spawns
 
 export interface AiSettings {
   temperature: number;
   depth: number;
   complexity: number;
   webSearch: boolean;
+  uiPlanCount: number;
 }
 
 /** Shared with ai-scanner-panel's slider + converge-diverge.getAnalysisTemperature. */
@@ -22,6 +24,7 @@ export const TEMPERATURE_KEY = "oc:analysis-temperature";
 export const DEPTH_KEY = "oc:thinking-depth";
 export const COMPLEXITY_KEY = "oc:complexity";
 export const WEB_SEARCH_KEY = "oc:web-search";
+export const UI_PLAN_COUNT_KEY = "oc:ui-plan-count";
 
 export const AI_SETTINGS_EVENT = "oc:ai-settings-changed";
 
@@ -30,6 +33,7 @@ export const DEFAULTS: AiSettings = {
   depth: 3,
   complexity: 5,
   webSearch: false,
+  uiPlanCount: 3,
 };
 
 /** Bounds the knobs share with the route validators. */
@@ -37,6 +41,8 @@ export const DEPTH_MIN = 1;
 export const DEPTH_MAX = 5;
 export const COMPLEXITY_MIN = 3;
 export const COMPLEXITY_MAX = 10;
+export const UI_PLAN_COUNT_MIN = 1;
+export const UI_PLAN_COUNT_MAX = 5;
 
 function readNumber(key: string, fallback: number, min: number, max: number): number {
   try {
@@ -55,6 +61,14 @@ export function getAiSettings(): AiSettings {
     depth: Math.round(readNumber(DEPTH_KEY, DEFAULTS.depth, DEPTH_MIN, DEPTH_MAX)),
     complexity: Math.round(
       readNumber(COMPLEXITY_KEY, DEFAULTS.complexity, COMPLEXITY_MIN, COMPLEXITY_MAX),
+    ),
+    uiPlanCount: Math.round(
+      readNumber(
+        UI_PLAN_COUNT_KEY,
+        DEFAULTS.uiPlanCount,
+        UI_PLAN_COUNT_MIN,
+        UI_PLAN_COUNT_MAX,
+      ),
     ),
     webSearch: (() => {
       try {
@@ -78,7 +92,9 @@ export function setAiSetting<K extends keyof AiSettings>(
         ? DEPTH_KEY
         : key === "complexity"
           ? COMPLEXITY_KEY
-          : WEB_SEARCH_KEY;
+          : key === "uiPlanCount"
+            ? UI_PLAN_COUNT_KEY
+            : WEB_SEARCH_KEY;
   try {
     const raw =
       typeof value === "boolean" ? (value ? "1" : "0") : String(value);

@@ -31,6 +31,7 @@ export type SpecForgeStage =
   | "recommendation" // recommended first build (green)
   | "features" // feature card system (forest-green)
   | "mechanisms" // feature mechanism generator (sage-green)
+  | "data" // data point optimization model (jade-teal)
   | "validation" // experimentation / validation lab (rose-red)
   | "deepening" // iteration timeline / situation-model deepening (deep purple)
   | "constraints" // accumulated constraint strip (warm amber)
@@ -61,6 +62,7 @@ export const STAGE_META: Record<SpecForgeStage, StageMeta> = {
   recommendation: { label: "Recommended first build", color: "#2FA968" },
   features: { label: "Feature card", color: "#3C8B5A" },
   mechanisms: { label: "Feature mechanism", color: "#5A9E70" },
+  data: { label: "Data point", color: "#2E9B8C" },
   validation: { label: "Validation plan", color: "#D9486F" },
   deepening: { label: "Iteration deepening", color: "#7C4DFF" },
   constraints: { label: "Constraint accumulation", color: "#B5743B" },
@@ -83,6 +85,7 @@ export type SpecForgeEngineId =
   | "recommendation"
   | "feature_cards"
   | "feature_mechanisms"
+  | "data_points"
   | "validation"
   | "deepening";
 
@@ -106,6 +109,7 @@ export const SPECFORGE_CHAIN: SpecForgeEngineId[] = [
   "recommendation",
   "feature_cards",
   "feature_mechanisms",
+  "data_points",
   "validation",
   "deepening",
 ];
@@ -126,6 +130,7 @@ export const ENGINE_LABEL: Record<SpecForgeEngineId, string> = {
   recommendation: "Choosing the first build",
   feature_cards: "Decomposing the build into features",
   feature_mechanisms: "Designing the feature mechanisms",
+  data_points: "Optimizing the data points",
   validation: "Designing the validation plan",
   deepening: "Recording the iteration baseline",
 };
@@ -593,6 +598,141 @@ export interface FeatureCardsResult {
   confidence: number; // 0..100
 }
 
+/** Feature Mechanism Generator — per specforge_feature_mechanism_generator.md.
+ *  Sits AFTER feature_cards, BEFORE validation. Takes each feature's shallow
+ *  `mechanism` field and deepens it into a full input → process → output spec
+ *  with alternatives compared. Does NOT generate features (feature_cards's job),
+ *  does NOT design experiments (validation's job — though each mechanism's
+ *  test_method is lifted as a candidate), does NOT pick the recommendation
+ *  (recommendation's job). Hard rule from spec §19: every mechanism MUST link
+ *  to a feature in the feature_cards list by name and MUST transform inputs
+ *  into outputs with explicit ordered processing steps. */
+export interface MechanismAlternative {
+  name: string;
+  why_rejected: string;
+}
+
+export interface FeatureMechanism {
+  /** Must match a feature_cards.features[i].name — linkage guard. */
+  feature_name: string;
+  mechanism_name: string;
+  mechanism_thesis: string;
+  /** What starts the mechanism (per spec §7 Trigger Layer). */
+  trigger: string;
+  /** Per spec §8 Input Layer. */
+  inputs: string[];
+  /** Per spec §10 Processing Layer — ordered, explicit steps. */
+  system_process: string[];
+  /** Per spec §12 Output Layer — structured artifacts created. */
+  outputs: string[];
+  /** Per spec §13 User Behavior Layer — what changes for the user. */
+  user_behavior_changed: string;
+  /** Per spec §11 Transformation Layer — input → output shape changes. */
+  data_transformations: string[];
+  /** Downstream effects on later mechanisms or artifacts. */
+  downstream_effects: string[];
+  /** Per spec §16 — 2–3 alternative mechanisms compared. */
+  alternatives: MechanismAlternative[];
+  selected_mechanism_reason: string;
+  /** Per spec §15 Failure / Repair Layer. */
+  failure_modes: string[];
+  /** Per spec §15 — repair paths for failures. */
+  risk_controls: string[];
+  /** How to test that the mechanism works. */
+  test_method: string;
+  implementation_difficulty: "low" | "medium" | "high";
+  /** Which accumulated constraints this mechanism satisfies. */
+  constraints_satisfied: string[];
+}
+
+export interface FeatureMechanismsResult {
+  /** The MVP this mechanism set serves — must echo recommendation.recommendation. */
+  selected_mvp: string;
+  mechanisms: FeatureMechanism[];
+  /** Features from feature_cards that couldn't be mechanized yet, with reason. */
+  features_not_mechanized: string[];
+  /** Cross-mechanism dependencies (mechanism A's output feeds mechanism B's input). */
+  cross_mechanism_dependencies: string[];
+  confidence: number; // 0..100
+}
+
+/** Data Point Optimization Model — per specforge_data_point_optimization_model.md.
+ *  Sits AFTER feature_mechanisms, BEFORE validation. Each mechanism declared
+ *  `inputs` (raw data names). This engine deepens those into optimization
+ *  objects: concept definition, variable decomposition, collection methods,
+ *  friction/reliability/privacy risk, downstream uses, lower-friction proxies,
+ *  selected handling, and constraints. Does NOT regenerate features
+ *  (feature_cards's job), NOT regenerate mechanisms (feature_mechanisms's job),
+ *  NOT design experiments (validation's job). */
+export type DataPointSource =
+  | "user_input"
+  | "inferred"
+  | "integration"
+  | "system_generated"
+  | "research"
+  | "analytics";
+
+export type DataPointDisposition =
+  | "required"
+  | "optional"
+  | "inferred"
+  | "progressive"
+  | "proxy"
+  | "removed";
+
+export type RiskLevel = "low" | "medium" | "high";
+
+export interface DataPoint {
+  /** Short stable id used for cross-references (kebab-case). */
+  data_point_id: string;
+  name: string;
+  /** What concept does this data represent? */
+  concept_definition: string;
+  /** The decomposed variables inside the concept. */
+  variables: string[];
+  /** Which feature/mechanism needs it. */
+  used_by_feature: string;
+  used_by_mechanism: string;
+  /** Why it exists — must reference a downstream decision/mechanism/eval/validation. */
+  why_it_exists: string;
+  when_needed: string;
+  source: DataPointSource;
+  collection_methods: string[];
+  collection_friction: RiskLevel;
+  reliability_risk: RiskLevel;
+  privacy_risk: RiskLevel;
+  /** Which downstream consumer(s) use this. */
+  downstream_uses: string[];
+  /** How raw collection becomes the form the mechanism consumes. */
+  transformation_process: string;
+  /** Lower-friction substitutes considered. */
+  alternative_proxies: string[];
+  /** The chosen approach (required / optional / inferred / progressive / proxy). */
+  disposition: DataPointDisposition;
+  selected_handling_method: string;
+  why_selected: string;
+  /** Where this data point could fail (missing, wrong, sensitive). */
+  failure_modes: string[];
+  /** What needs to be validated about this data point. */
+  validation_needed: string[];
+  /** Constraints this data point imposes downstream. */
+  constraints_created: string[];
+}
+
+export interface DataPointsResult {
+  /** Echoes recommendation.recommendation for traceability. */
+  selected_mvp: string;
+  /** All data points, including removed ones. */
+  data_points: DataPoint[];
+  /** Data points removed from the spec (privacy/friction/no-downstream-value), with reason. */
+  removed_data: { name: string; reason: string }[];
+  /** Free-text summary: upstream → collection → transform → mechanism → downstream. */
+  data_flow_summary: string;
+  /** Overall data risks: privacy, reliability, friction, unavailability. */
+  risks: string[];
+  confidence: number; // 0..100
+}
+
 /** Experimentation / Validation Lab — per specforge_experimentation_validation_lab.md.
  *  Sits AFTER recommendation, BEFORE constraints. Consumes recommendation.
  *  assumptions_to_test + evaluation.assumptions_that_could_reverse_decision +
@@ -726,6 +866,7 @@ export interface EngineResultMap {
   evaluation: EvaluationResult;
   recommendation: RecommendationResult;
   feature_cards: FeatureCardsResult;
+  feature_mechanisms: FeatureMechanismsResult;
   validation: ValidationResult;
   deepening: DeepeningResult;
 }

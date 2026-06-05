@@ -21,6 +21,7 @@ export function ToolboxSphere({ onOpenComment }: ToolboxSphereProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const onSpacePage = pathname?.startsWith("/app/space/") ?? false;
+  const onObjectivePage = pathname?.startsWith("/app/objective/") ?? false;
 
   // Filter tools: only show space-required tools when on a space page
   const visibleTools = TOOLS.filter((t) => !t.requiresSpace || onSpacePage);
@@ -91,11 +92,23 @@ export function ToolboxSphere({ onOpenComment }: ToolboxSphereProps) {
   function handleToolClick(tool: ToolDef) {
     switch (tool.id) {
       case "chat":
-        if (onSpacePage) dispatchToolboxEvent({ type: "open-chat" });
-        else router.push("/app");
+        if (onObjectivePage) {
+          // Objective canvas owns its own chat panel — fire its open-event.
+          window.dispatchEvent(new CustomEvent("board:open-chat"));
+        } else if (onSpacePage) {
+          dispatchToolboxEvent({ type: "open-chat" });
+        } else {
+          router.push("/app");
+        }
         break;
       case "comment":
-        onOpenComment();
+        if (onObjectivePage) {
+          // Objective canvas owns its own commenting model — drop a comment-
+          // card on whatever's currently selected (or floating).
+          window.dispatchEvent(new CustomEvent("board:open-comment"));
+        } else {
+          onOpenComment();
+        }
         break;
       case "reevaluate":
         dispatchToolboxEvent({ type: "reevaluate", depth: "deep" });

@@ -41,7 +41,7 @@ export async function POST(request: Request) {
           currency: "usd",
           product_data: {
             name: `${pack.name} — ${pack.credits} Credits`,
-            description: `${pack.credits} analysis credits for InterAxis`,
+            description: `${pack.credits} analysis credits for akiboe`,
           },
           unit_amount: pack.price,
         },

@@ -91,7 +91,15 @@ export async function runForgePipeline(
       inspirationImages: opts.inspirationImages ?? [],
     }),
   });
-  if (!res.ok) throw new Error(`tech-spec failed: ${res.status}`);
+  if (!res.ok) {
+    // Visible failure — drop an error tech-spec card on the board so the user
+    // sees that the chain ran but the spec step failed (no more silent
+    // disappearance). Skip the prototype branch on the way out.
+    const why = await safeErrorMessage(res);
+    placeErrorTechSpec(editor, opts.anchorShapeId, forge.idea, why);
+    opts.onProgress?.("Tech spec failed");
+    return;
+  }
   const data = (await res.json()) as { spec: TechSpec; markdown: string };
 
   opts.onProgress?.("Planning the UI…");
@@ -142,4 +150,58 @@ export async function runForgePipeline(
     );
     opts.onProgress?.("Tech spec ready");
   }
+}
+
+/** Read a useful one-liner from a failed response without throwing. */
+async function safeErrorMessage(res: Response): Promise<string> {
+  try {
+    const j = (await res.json()) as { error?: string };
+    if (j?.error) return `${res.status} — ${j.error}`;
+  } catch {
+    /* not JSON */
+  }
+  return `tech-spec request failed (${res.status})`;
+}
+
+/** Drop a visible "Tech Spec failed" card on the board so the user sees that
+ *  the chain ran but the spec step failed (instead of silent disappearance).
+ *  The card still lands in the Powerup rail's Artifacts section — clicking
+ *  Open spec reveals the error markdown explaining what happened. */
+function placeErrorTechSpec(
+  editor: Editor,
+  anchorShapeId: string | undefined,
+  idea: string,
+  why: string,
+): void {
+  const { x, y } = placementBelowForge(editor, anchorShapeId);
+  const cardId = createShapeId();
+  const ideaLine = idea.length > 120 ? idea.slice(0, 117).trimEnd() + "…" : idea;
+  const markdown =
+    `# Tech spec failed\n\n` +
+    `The forge engine cards generated, but the tech-spec stage couldn't complete.\n\n` +
+    `**Reason:** ${why}\n\n` +
+    (ideaLine ? `**Idea:** ${ideaLine}\n\n` : "") +
+    `Try again — if it keeps failing, the Anthropic model id in ` +
+    `\`src/lib/llm.ts\` (BEST_CLAUDE_MODEL) may need a bump.`;
+  editor.createShape<TechSpecCardShape>({
+    id: cardId,
+    type: "tech-spec-card",
+    x,
+    y,
+    props: {
+      w: CARD_W,
+      h: CARD_H,
+      title: "Tech spec failed",
+      specJson: "",
+      markdown,
+      featureCount: 0,
+      phaseCount: 0,
+    },
+    meta: { techSpec: true, error: true, sourceShapeId: anchorShapeId ?? "" },
+  });
+  editor.select(cardId);
+  editor.centerOnPoint(
+    { x: x + CARD_W / 2, y: y + CARD_H / 2 },
+    { animation: { duration: 320 } },
+  );
 }

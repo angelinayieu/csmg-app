@@ -5,7 +5,7 @@
 import { NextResponse } from "next/server";
 import {
   safeAuth,
-  verifySpaceOwnership,
+  verifySpaceAccess,
   sanitizeErrorMessage,
 } from "@/lib/api-helpers";
 
@@ -19,10 +19,10 @@ export async function GET(_req: Request, { params }: Ctx) {
   const { spaceId, snapshotId } = await params;
   const { supabase, user, error: authError } = await safeAuth();
   if (authError) return authError;
-  if (!(await verifySpaceOwnership(supabase, spaceId, user.id)))
+  if (!(await verifySpaceAccess(supabase, spaceId, user.id)))
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
 
-   
+
   const db = supabase as any;
   try {
     const { data } = await db

@@ -41,6 +41,7 @@ import { ObjectiveCanvasShell } from "@/components/objective/objective-canvas-sh
 import { PromptSharpeningMount } from "@/components/objective/prompt-sharpening-mount";
 import { ObjectiveImageMount } from "@/components/objective/objective-image-mount";
 import { VoiceRecordFab } from "@/components/objective/voice/voice-record-fab";
+import { ResolutionStudioMount } from "@/components/objective/resolution/resolution-studio-mount";
 import { AnnotationsVisibilityToggle } from "@/components/objective/annotations-visibility-toggle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
@@ -239,6 +240,11 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
           panel; committing drops a voice-note card + re-synthesizes the
           journal. Board-only (minimal), when the board is showing. */}
       {minimal && !isBrief && <VoiceRecordFab spaceId={spaceId} />}
+
+      {/* Immersive Resolution Studio — opened from the Prompt Sharpening Card
+          to resolve high-leverage ambiguities (flashcards + voice + live AI
+          assist). Headless until an open event fires. */}
+      {minimal && !isBrief && <ResolutionStudioMount spaceId={spaceId} />}
 
       {/* Collapsed pill — visible whenever the notebook is closed.
           Render WITHOUT the hydration gate so it's visible on first

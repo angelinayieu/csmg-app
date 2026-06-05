@@ -377,6 +377,15 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
   const [view, setView] = useState<View>("objects");
   const [objects, setObjects] = useState<LibObject[] | null>(null);
 
+  // While the panel is open, push the top-right style palette LEFT of it
+  // (rail is 384px at right:12) so the palette can't sit on top of the close
+  // X. Mirrors the same trick PowerupRail uses; reset on close/unmount.
+  useEffect(() => {
+    const el = document.documentElement;
+    el.style.setProperty("--oc-style-panel-right", open && !full ? "412px" : "12px");
+    return () => el.style.setProperty("--oc-style-panel-right", "12px");
+  }, [open, full]);
+
   // Fetch the space's library_objects once the rail opens (shared by both
   // views). Soft-fails to []. Loading is derived (no setState in effect body).
   useEffect(() => {
@@ -466,7 +475,7 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
 // ── styles ──
 const launcherPill: CSSProperties = {
   position: "absolute",
-  top: 64,
+  top: 56,
   right: 16,
   zIndex: 66,
   display: "inline-flex",

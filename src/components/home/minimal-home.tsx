@@ -24,6 +24,55 @@ import {
 } from "@/components/home/objective-chatbox";
 import { LibraryGrid, type LibrarySpace } from "@/components/home/library-grid";
 
+// ── Animated dotted-ring mark ──
+// A ring of small dots that gently rotates with a comet-tail opacity
+// gradient, while the whole mark floats softly above the greeting. Reads
+// as a quiet "thinking" pulse rather than a busy spinner.
+function DottedRingMark() {
+  const DOTS = 12;
+  const radius = 13; // px from center
+  const size = 38; // viewBox px
+  const center = size / 2;
+  return (
+    <motion.div
+      aria-hidden
+      className="mx-auto mb-5"
+      style={{ width: size, height: size }}
+      animate={{ y: [0, -5, 0] }}
+      transition={{ duration: 3.6, ease: "easeInOut", repeat: Infinity }}
+    >
+      <motion.svg
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        animate={{ rotate: 360 }}
+        transition={{ duration: 8, ease: "linear", repeat: Infinity }}
+        style={{ display: "block" }}
+      >
+        {Array.from({ length: DOTS }).map((_, i) => {
+          const angle = (i / DOTS) * Math.PI * 2 - Math.PI / 2;
+          const cx = center + radius * Math.cos(angle);
+          const cy = center + radius * Math.sin(angle);
+          // comet-tail: leading dots brighter/larger, trailing dots fade.
+          const t = i / DOTS;
+          const opacity = 0.18 + 0.82 * t;
+          const r = 1.1 + 1.2 * t;
+          return (
+            <circle
+              key={i}
+              cx={cx}
+              cy={cy}
+              r={r}
+              fill={appleVibe.text.primary}
+              opacity={opacity}
+            />
+          );
+        })}
+      </motion.svg>
+    </motion.div>
+  );
+}
+
 interface Props {
   displayName: string;
   email: string;
@@ -131,7 +180,7 @@ export function MinimalHome({
               className="text-[17px] font-semibold tracking-tight"
               style={{ color: appleVibe.text.primary }}
             >
-              Intersice
+              akiboe
             </span>
           </div>
 
@@ -285,22 +334,26 @@ export function MinimalHome({
             fades, so the chatbox never shifts when composing — it just
             expands in place. */}
         <section className="mx-auto mt-16 max-w-[760px]">
-          <motion.h1
+          <motion.div
             animate={{ opacity: composing ? 0 : 1 }}
             transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-            className="text-center text-[34px] font-semibold leading-tight tracking-tight"
-            style={{
-              color: appleVibe.text.primary,
-              fontFamily: appleVibe.font.display,
-              letterSpacing: "-0.02em",
-              pointerEvents: composing ? "none" : "auto",
-            }}
+            style={{ pointerEvents: composing ? "none" : "auto" }}
           >
-            {greeting},{" "}
-            <span style={{ color: "#8B93C4" }}>{displayName}</span>
-            <br />
-            Thoughts…?
-          </motion.h1>
+            <DottedRingMark />
+            <h1
+              className="text-center text-[34px] font-semibold leading-tight tracking-tight"
+              style={{
+                color: appleVibe.text.primary,
+                fontFamily: appleVibe.font.display,
+                letterSpacing: "-0.02em",
+              }}
+            >
+              {greeting},{" "}
+              <span style={{ color: "#8B93C4" }}>{displayName}</span>
+              <br />
+              What are your thoughts today?
+            </h1>
+          </motion.div>
 
           {/* Anchored chatbox — starts narrow, then only its width grows
               (centered) when composing, so it expands without moving. */}

@@ -198,6 +198,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       summary: body,
       sourceRef: `card:${kind}:${slug}`,
       sourceEntityId: null,
+      subsystem,
       cardFace: { name, body, from_updated_at: now },
     });
     if (!objectId) return;

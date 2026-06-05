@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { GoogleSignInButton } from "./google-sign-in-button";
 
-export function SignUpForm() {
+export function SignUpForm({ next = "/app" }: { next?: string }) {
   const router = useRouter();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -36,7 +36,7 @@ export function SignUpForm() {
         data: {
           display_name: displayName,
         },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
           // In production, this resolves to https://www.interaxis.com/auth/callback
       },
     });
@@ -68,7 +68,7 @@ export function SignUpForm() {
       {/* Google OAuth — primary path. New users skip the email
           confirmation round-trip entirely (Google has already
           verified their address), so this is genuinely faster. */}
-      <GoogleSignInButton next="/app" disabled={loading} />
+      <GoogleSignInButton next={next} disabled={loading} />
 
       {/* Divider between OAuth and email signup */}
       <div className="relative">
@@ -118,7 +118,7 @@ export function SignUpForm() {
         <p className="text-center text-sm text-gray-600 ">
           Already have an account?{" "}
           <Link
-            href="/auth/login"
+            href={`/auth/login${next && next !== "/app" ? `?next=${encodeURIComponent(next)}` : ""}`}
             className="font-medium text-interaxis-600 hover:text-interaxis-500"
           >
             Log in

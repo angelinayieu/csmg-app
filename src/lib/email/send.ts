@@ -9,7 +9,7 @@
 // To enable live sending:
 //   1. npm install resend
 //   2. Set RESEND_API_KEY in your env
-//   3. Optional: set RESEND_FROM (defaults to "Synergy <onboarding@resend.dev>")
+//   3. Optional: set RESEND_FROM (defaults to "akiboe <onboarding@resend.dev>")
 //
 // Resend's free tier sends from `onboarding@resend.dev` without
 // domain verification — fine for dev. Production needs a verified
@@ -65,7 +65,7 @@ export async function sendTransactional(
   opts: SendOptions,
 ): Promise<SendResult> {
   const client = await getClient();
-  const from = process.env.RESEND_FROM || "Synergy <onboarding@resend.dev>";
+  const from = process.env.RESEND_FROM || "akiboe <onboarding@resend.dev>";
 
   if (!client) {
     // Dry-run: log the email and return success so callers don't

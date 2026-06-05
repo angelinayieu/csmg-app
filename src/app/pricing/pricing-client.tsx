@@ -72,7 +72,7 @@ export function PricingClient({
       <header className="mx-auto flex max-w-[1080px] items-center justify-between px-6 py-6">
         <Link href="/" className="flex items-center gap-2.5">
           <InterAxisLogo className="h-8 w-8" size={32} style={{ borderRadius: 10 }} />
-          <span className="text-[16px] font-semibold tracking-tight">Intersice</span>
+          <span className="text-[16px] font-semibold tracking-tight">akiboe</span>
         </Link>
         <Link
           href={isLoggedIn ? "/app" : "/auth/login"}

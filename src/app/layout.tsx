@@ -10,9 +10,12 @@ const geist = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "InterAxis — Your Intelligence System",
+  title: "akiboe — Your Intelligence System",
   description:
     "AI with enhanced real world logic reasoning capabilities. Digital infrastructure for speed, quality, and accuracy.",
+  icons: {
+    icon: "/akiboe-mark.svg",
+  },
 };
 
 export default function RootLayout({

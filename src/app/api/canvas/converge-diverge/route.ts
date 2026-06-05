@@ -20,6 +20,7 @@ import {
   llmGenerate,
   detectCreditError,
   BEST_TUNABLE_CLAUDE_MODEL,
+  BEST_FAST_CLAUDE_MODEL,
 } from "@/lib/llm";
 import { getAnthropicClient } from "@/lib/anthropic";
 import { getResearchTools, parseResearchResponse } from "@/lib/web-search";
@@ -321,7 +322,10 @@ export async function POST(request: Request) {
       maxTokens: 1600,
       temperature,
       provider: "anthropic",
-      model: BEST_TUNABLE_CLAUDE_MODEL,
+      // Was BEST_TUNABLE_CLAUDE_MODEL (opus-4-1) — that model returns degenerate
+      // output for this schema (0 nodes + runaway questions field), so verbs
+      // rendered "Empty". Sonnet-4-6 honors temperature and produces clean nodes.
+      model: BEST_FAST_CLAUDE_MODEL,
       responseSchema: RESPONSE_SCHEMA as unknown as {
         name: string;
         schema: Record<string, unknown>;

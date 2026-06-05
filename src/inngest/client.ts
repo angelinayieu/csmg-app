@@ -9,5 +9,5 @@ import { Inngest } from "inngest";
  */
 export const inngest = new Inngest({
   id: "interaxis",
-  name: "InterAxis Analysis Pipeline",
+  name: "akiboe Analysis Pipeline",
 });

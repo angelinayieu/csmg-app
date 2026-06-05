@@ -91,7 +91,7 @@ export function SynergyWelcomeClient({
           <Sparkles className="h-6 w-6 text-white" />
         </div>
         <h1 className="text-3xl font-semibold tracking-tight text-gray-900">
-          Welcome to InterAxis Synergy
+          Welcome to akiboe
         </h1>
         <p className="mx-auto mt-3 max-w-md text-[14px] leading-relaxed text-gray-700">
           A whiteboard for solo brainstorming that also matches your ideas with

@@ -88,7 +88,7 @@ export interface PlanGeneratorRunInput extends PlanGeneratorInput {
 
 // ── System prompt ────────────────────────────────────────────────
 
-const PLAN_GENERATOR_SYSTEM = `You are the KG Generation Planning Agent for InterAxis Laboratory — a scientifically rigorous knowledge-graph + simulation platform for general mind-body modeling.
+const PLAN_GENERATOR_SYSTEM = `You are the KG Generation Planning Agent for akiboe Laboratory — a scientifically rigorous knowledge-graph + simulation platform for general mind-body modeling.
 
 Your job: given a user's prompt, scope, mode, and any uploaded research papers, produce a comprehensive plan describing EVERYTHING the pipeline is about to do. The user will review the plan in a Plan Review Card and approve (or edit + approve) before any downstream stage runs.
 

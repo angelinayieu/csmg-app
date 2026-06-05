@@ -24,12 +24,13 @@ import {
   Layers3,
   Workflow,
   Loader2,
-  Thermometer,
   FileCode2,
   MapPin,
   AppWindow,
   Pencil,
   Send,
+  Minus,
+  Plus,
   X,
 } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
@@ -45,12 +46,11 @@ import {
   getAiSettings,
   setAiSetting,
   AI_SETTINGS_EVENT,
-  DEPTH_MIN,
-  DEPTH_MAX,
-  COMPLEXITY_MIN,
-  COMPLEXITY_MAX,
+  UI_PLAN_COUNT_MIN,
+  UI_PLAN_COUNT_MAX,
   type AiSettings,
 } from "@/lib/objective-canvas/ai-settings";
+import { BUILD_UI_PLANS_EVENT, type BuildUiPlansDetail } from "@/components/objective/shapes/ui-plan-card-shape";
 import { OPEN_CARD_DETAIL_EVENT } from "./object-detail-drawer";
 import { deploySharpeningCard } from "@/components/objective/board-bus";
 import type { ObjectiveCardShape } from "@/components/objective/shapes/objective-card-shape";
@@ -63,6 +63,10 @@ import {
 /** Fired by the rail's Forge button → WhiteboardBase runs the SpecForge chain
  *  on the current selection (handleForge lives there, with editor + state). */
 export const FORGE_REQUEST_EVENT = "objective-board:forge-request";
+/** Dispatched by WhiteboardBase with `detail: { running: boolean }` so the rail
+ *  can mirror Forge busy-state — disable the button + show a spinner — without
+ *  having to share React state across the editor/rail boundary. */
+export const FORGE_STATE_EVENT = "objective-board:forge-state";
 // Mirror tech-spec-card-shape.tsx event names — kept local so this rail doesn't
 // pull the shape util into its bundle (and can't form an import cycle).
 const BUILD_PROTOTYPE_EVENT = "objective-board:build-prototype";
@@ -83,24 +87,6 @@ const OP_ICON: Record<string, typeof Split> = {
 const POWERUPS = CANVAS_OPERATIONS.filter(
   (o) => o.contract === "text" && o.wired && !o.hidden,
 );
-
-// Plain-language value words so the sliders read for anyone — "Very focused"
-// instead of "0.00", "Deep" instead of "4". The number is still what drives
-// the model; these just translate it.
-function creativityWord(t: number): string {
-  if (t <= 0.2) return "Very focused";
-  if (t <= 0.45) return "Focused";
-  if (t <= 0.7) return "Balanced";
-  if (t <= 0.9) return "Creative";
-  return "Wild";
-}
-function depthWord(d: number): string {
-  if (d <= 1) return "Quick look";
-  if (d <= 2) return "Light";
-  if (d <= 3) return "Normal";
-  if (d <= 4) return "Deep";
-  return "Very deep";
-}
 
 interface ArtifactRow {
   id: TLShapeId;
@@ -212,6 +198,20 @@ export function PowerupRail({
     return () => window.removeEventListener(DECOMPOSE_DONE_EVENT, done);
   }, []);
 
+  // Forge busy mirror — WhiteboardBase owns the actual SpecForge run; we
+  // listen so the button can disable itself + show a spinner. Optimistically
+  // flip true on click so a fast double-click can't queue a second run before
+  // WhiteboardBase's state catches up.
+  const [forging, setForging] = useState(false);
+  useEffect(() => {
+    const onState = (e: Event) => {
+      const ce = e as CustomEvent<{ running?: boolean }>;
+      setForging(!!ce.detail?.running);
+    };
+    window.addEventListener(FORGE_STATE_EVENT, onState);
+    return () => window.removeEventListener(FORGE_STATE_EVENT, onState);
+  }, []);
+
   // New objective → set + refine: the user types a fresh objective, we persist
   // it + run prompt refinement (the sharpening agent), then drop its card on the
   // board (same artifact → deploySharpeningCard mapping as the intake mount).
@@ -315,27 +315,45 @@ export function PowerupRail({
     setShowCustom(false);
   }
 
-  // Build prototype — turn the Forge's Tech Spec into a live screen app. Acts on
-  // the selected tech-spec card, else the most recent one on the board (fires
-  // the same event the card's own "Build prototype" button does).
+  // Build prototype — the fork step. From any selected card, draft N UI-plan
+  // variants on the board (connected by real tldraw arrows). Each variant
+  // card's own "Build prototype" button then commits ONE plan to a real
+  // prototype card. If the selection IS already a tech-spec card, short-circuit
+  // to the direct prototype path (skip the planning fork — the spec carries
+  // its UI plan already).
   function buildPrototype() {
-    const cards = editor
-      .getCurrentPageShapes()
-      .filter((s) => s.type === "tech-spec-card");
-    if (!cards.length) return;
-    const selected = new Set(editor.getSelectedShapeIds());
-    const card = cards.find((c) => selected.has(c.id)) ?? cards[cards.length - 1];
-    const p = card.props as { specJson?: string; markdown?: string; title?: string };
+    if (sel.count === 0 || running) return;
+    const shapes = editor.getSelectedShapes();
+    const techSpec = shapes.find((s) => s.type === "tech-spec-card");
+    if (techSpec) {
+      const p = techSpec.props as { specJson?: string; markdown?: string; title?: string };
+      window.dispatchEvent(
+        new CustomEvent(BUILD_PROTOTYPE_EVENT, {
+          detail: {
+            specJson: p.specJson ?? "",
+            markdown: p.markdown ?? "",
+            title: p.title ?? "Tech spec",
+            shapeId: techSpec.id,
+          },
+        }),
+      );
+      return;
+    }
+    if (!sel.anchorId || !sel.text.trim()) return;
+    setRunning("ui-plans");
+    const detail: BuildUiPlansDetail = {
+      sourceShapeId: sel.anchorId,
+      sourceText: sel.text,
+      sourceLabel: sel.labels[0],
+      count: settings.uiPlanCount,
+      temperature: settings.temperature,
+    };
     window.dispatchEvent(
-      new CustomEvent(BUILD_PROTOTYPE_EVENT, {
-        detail: {
-          specJson: p.specJson ?? "",
-          markdown: p.markdown ?? "",
-          title: p.title ?? "Tech spec",
-          shapeId: card.id,
-        },
-      }),
+      new CustomEvent<BuildUiPlansDetail>(BUILD_UI_PLANS_EVENT, { detail }),
     );
+    // The bridge fans out N cards immediately + fills async; clear busy after
+    // a short tick so the rail re-enables (the cards have their own state).
+    window.setTimeout(() => setRunning((c) => (c === "ui-plans" ? null : c)), 600);
   }
 
   function openArtifact(id: TLShapeId) {
@@ -378,7 +396,10 @@ export function PowerupRail({
   }
 
   const hasSel = sel.count > 0;
-  const hasTechSpec = boardArtifacts.some((a) => a.kind === "Tech spec");
+  const selHasTechSpec = editor
+    .getSelectedShapes()
+    .some((s) => s.type === "tech-spec-card");
+  const buildingPlans = running === "ui-plans";
 
   return (
     <div onPointerDown={(e) => e.stopPropagation()} style={rail}>
@@ -418,38 +439,125 @@ export function PowerupRail({
           </div>
         )}
 
-        {/* Forge — the hero. */}
+        {/* Forge — the hero. Disabled + spinner while a run is in flight so
+            an impatient second click can't queue a duplicate forge. */}
         <button
           type="button"
-          disabled={!hasSel}
-          onClick={() => window.dispatchEvent(new CustomEvent(FORGE_REQUEST_EVENT))}
-          style={{ ...forgeBtn, opacity: hasSel ? 1 : 0.5, marginTop: 12 }}
+          disabled={!hasSel || forging}
+          aria-busy={forging}
+          title={forging ? "Forging spec…" : undefined}
+          onClick={() => {
+            if (forging || !hasSel) return;
+            setForging(true);
+            window.dispatchEvent(new CustomEvent(FORGE_REQUEST_EVENT));
+          }}
+          style={{
+            ...forgeBtn,
+            opacity: !hasSel ? 0.5 : forging ? 0.85 : 1,
+            cursor: forging ? "progress" : !hasSel ? "not-allowed" : "pointer",
+            marginTop: 12,
+          }}
         >
           <span style={forgeIcon}>
-            <Wand2 style={{ width: 15, height: 15 }} strokeWidth={2.2} />
+            {forging ? (
+              <Loader2
+                className="animate-spin"
+                style={{ width: 15, height: 15 }}
+                strokeWidth={2.2}
+              />
+            ) : (
+              <Wand2 style={{ width: 15, height: 15 }} strokeWidth={2.2} />
+            )}
           </span>
           <span style={{ minWidth: 0, flex: 1, textAlign: "left" }}>
-            <span style={forgeTitle}>Forge full spec</span>
-            <span style={forgeSub}>Idea → root cause → MVPs → first build</span>
+            <span style={forgeTitle}>
+              {forging ? "Forging spec…" : "Forge full spec"}
+            </span>
+            <span style={forgeSub}>
+              {forging
+                ? "This can take ~30s — please wait"
+                : "Idea → root cause → MVPs → first build"}
+            </span>
           </span>
         </button>
 
-        {/* Build prototype — the Forge's Tech Spec → a live, clickable screen
-            app. Needs a spec on the board first (run Forge above). */}
-        <button
-          type="button"
-          disabled={!hasTechSpec}
-          title={
-            hasTechSpec
-              ? "Build a clickable prototype from your Tech Spec"
-              : "Forge a spec first — then build the prototype"
-          }
-          onClick={buildPrototype}
-          style={{ ...secondaryBtn, marginTop: 8, opacity: hasTechSpec ? 1 : 0.5 }}
-        >
-          <AppWindow style={{ width: 14, height: 14 }} strokeWidth={2.2} />
-          Build prototype
-        </button>
+        {/* Build prototype — works on ANY selected card. Forks N UI-plan
+            variants on the board first (real arrows from source → each card);
+            the user picks one and its card commits the prototype. If the
+            selection IS a tech-spec card, skips the fork (the spec already
+            carries its UI plan). The compact stepper to the right tunes N. */}
+        <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "stretch" }}>
+          <button
+            type="button"
+            disabled={!hasSel || buildingPlans}
+            title={
+              !hasSel
+                ? "Select a card to build a prototype from"
+                : selHasTechSpec
+                  ? "Build a clickable prototype straight from this Tech Spec"
+                  : `Fork ${settings.uiPlanCount} UI-plan variants, then pick one to prototype`
+            }
+            onClick={buildPrototype}
+            style={{
+              ...secondaryBtn,
+              flex: 1,
+              minWidth: 0,
+              opacity: hasSel ? 1 : 0.5,
+            }}
+          >
+            {buildingPlans ? (
+              <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />
+            ) : (
+              <AppWindow style={{ width: 14, height: 14 }} strokeWidth={2.2} />
+            )}
+            {selHasTechSpec
+              ? "Build prototype"
+              : `Build prototype — ${settings.uiPlanCount} UI plan${settings.uiPlanCount === 1 ? "" : "s"}`}
+          </button>
+          {!selHasTechSpec && (
+            <div
+              style={stepperWrap}
+              title="How many UI-plan variants to fork"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                aria-label="Fewer UI plans"
+                disabled={settings.uiPlanCount <= UI_PLAN_COUNT_MIN}
+                onClick={() =>
+                  setAiSetting(
+                    "uiPlanCount",
+                    Math.max(UI_PLAN_COUNT_MIN, settings.uiPlanCount - 1),
+                  )
+                }
+                style={{
+                  ...stepperBtn,
+                  opacity: settings.uiPlanCount <= UI_PLAN_COUNT_MIN ? 0.35 : 1,
+                }}
+              >
+                <Minus style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+              </button>
+              <span style={stepperValue}>{settings.uiPlanCount}</span>
+              <button
+                type="button"
+                aria-label="More UI plans"
+                disabled={settings.uiPlanCount >= UI_PLAN_COUNT_MAX}
+                onClick={() =>
+                  setAiSetting(
+                    "uiPlanCount",
+                    Math.min(UI_PLAN_COUNT_MAX, settings.uiPlanCount + 1),
+                  )
+                }
+                style={{
+                  ...stepperBtn,
+                  opacity: settings.uiPlanCount >= UI_PLAN_COUNT_MAX ? 0.35 : 1,
+                }}
+              >
+                <Plus style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* Objective-level decompose — break the whole objective into Feature
             & Variable cards (no selection needed). Was the bottom-left float. */}
@@ -636,85 +744,6 @@ export function PowerupRail({
           </div>
         )}
 
-        {/* AI settings — plain language so anyone can tune them. */}
-        <div style={{ ...sectionLabel, marginTop: 16, display: "flex", alignItems: "center", gap: 6 }}>
-          <Thermometer style={{ width: 12, height: 12 }} strokeWidth={2} /> How the AI thinks
-        </div>
-        <div style={{ marginTop: 8 }}>
-          <Knob
-            label="Creativity"
-            hint="Low = careful & on-topic. High = wild & surprising."
-            value={settings.temperature}
-            min={0}
-            max={1}
-            step={0.05}
-            display={creativityWord(settings.temperature)}
-            onChange={(v) => setAiSetting("temperature", v)}
-          />
-          <Knob
-            label="Thinking depth"
-            hint="How far down it breaks the idea apart."
-            value={settings.depth}
-            min={DEPTH_MIN}
-            max={DEPTH_MAX}
-            step={1}
-            display={depthWord(settings.depth)}
-            onChange={(v) => setAiSetting("depth", Math.round(v))}
-          />
-          <Knob
-            label="Angles explored"
-            hint="How many questions the AI asks + answers itself to stretch each idea."
-            value={settings.complexity}
-            min={COMPLEXITY_MIN}
-            max={COMPLEXITY_MAX}
-            step={1}
-            display={`${settings.complexity}`}
-            onChange={(v) => setAiSetting("complexity", Math.round(v))}
-          />
-          <button
-            type="button"
-            onClick={() => setAiSetting("webSearch", !settings.webSearch)}
-            style={{
-              ...toggleRow,
-              alignItems: "flex-start",
-              color: settings.webSearch
-                ? appleVibe.text.primary
-                : appleVibe.text.tertiary,
-            }}
-          >
-            <span
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "flex-start",
-                gap: 1,
-                minWidth: 0,
-              }}
-            >
-              <span>Look things up online</span>
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 500,
-                  lineHeight: 1.3,
-                  color: appleVibe.text.faint,
-                }}
-              >
-                Pull in real facts from the web (a bit slower).
-              </span>
-            </span>
-            <span
-              style={{
-                ...pip,
-                marginTop: 2,
-                background: settings.webSearch
-                  ? appleVibe.accent.primary
-                  : appleVibe.surface.chip,
-              }}
-            />
-          </button>
-        </div>
-
         {/* Artifacts — finished / polished outputs. */}
         <div style={{ ...sectionLabel, marginTop: 16, display: "flex", alignItems: "center", gap: 6 }}>
           <FileCode2 style={{ width: 12, height: 12 }} strokeWidth={2} /> Artifacts
@@ -762,79 +791,10 @@ export function PowerupRail({
   );
 }
 
-function Knob({
-  label,
-  hint,
-  value,
-  min,
-  max,
-  step,
-  display,
-  onChange,
-}: {
-  label: string;
-  hint?: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  display: string;
-  onChange: (v: number) => void;
-}) {
-  return (
-    <div style={{ marginBottom: 11 }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "baseline",
-          marginBottom: hint ? 1 : 4,
-        }}
-      >
-        <span style={{ fontSize: 11.5, fontWeight: 600, color: appleVibe.text.secondary }}>
-          {label}
-        </span>
-        <span
-          style={{
-            fontSize: 11,
-            fontWeight: 700,
-            fontVariantNumeric: "tabular-nums",
-            color: appleVibe.text.primary,
-          }}
-        >
-          {display}
-        </span>
-      </div>
-      {hint && (
-        <div
-          style={{
-            fontSize: 10,
-            lineHeight: 1.3,
-            color: appleVibe.text.faint,
-            marginBottom: 5,
-          }}
-        >
-          {hint}
-        </div>
-      )}
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onPointerDown={(e) => e.stopPropagation()}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{ width: "100%", height: 4, cursor: "pointer", accentColor: appleVibe.accent.primary }}
-      />
-    </div>
-  );
-}
-
 // ── styles ──
 const launcherPill: CSSProperties = {
   position: "absolute",
-  top: 108,
+  top: 96,
   right: 16,
   zIndex: 66,
   display: "inline-flex",
@@ -1013,24 +973,38 @@ const opIntent: CSSProperties = {
   lineHeight: 1.32,
   color: appleVibe.text.tertiary,
 };
-const toggleRow: CSSProperties = {
-  display: "flex",
+const stepperWrap: CSSProperties = {
+  display: "inline-flex",
   alignItems: "center",
-  justifyContent: "space-between",
-  width: "100%",
-  padding: "6px 2px",
+  flexShrink: 0,
+  borderRadius: appleVibe.radius.md,
+  border: "1px solid var(--glass-border)",
+  background: appleVibe.surface.chip,
+  overflow: "hidden",
+};
+const stepperBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 24,
+  height: "100%",
+  minHeight: 32,
   border: "none",
   background: "transparent",
   cursor: "pointer",
-  fontSize: 11.5,
-  fontWeight: 600,
-  fontFamily: appleVibe.font.stack,
+  color: appleVibe.text.secondary,
+  padding: 0,
 };
-const pip: CSSProperties = {
-  width: 30,
-  height: 16,
-  borderRadius: 999,
-  flexShrink: 0,
+const stepperValue: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minWidth: 18,
+  fontSize: 12.5,
+  fontWeight: 700,
+  fontVariantNumeric: "tabular-nums",
+  color: appleVibe.text.primary,
+  fontFamily: appleVibe.font.stack,
 };
 const artifactRow: CSSProperties = {
   display: "flex",

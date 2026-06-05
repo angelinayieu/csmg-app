@@ -63,8 +63,11 @@ const nextConfig: NextConfig = {
   // grows. This flag drops webpack's retained in-memory caches during the
   // build (slightly slower build, materially lower peak RSS). Safe + stable.
   // https://nextjs.org/docs/app/api-reference/config/next-config-js/webpackMemoryOptimizations
+  // DIAGNOSTIC: webpackMemoryOptimizations frees module sources mid-build; on
+  // Next 16 + Node 24 a later hash reads one back as `undefined`, crashing
+  // `next build --webpack` with ERR_INVALID_ARG_TYPE. Disabled to confirm.
   experimental: {
-    webpackMemoryOptimizations: true,
+    webpackMemoryOptimizations: false,
   },
 
   // ── Webpack: avoid the bundled WASM hasher ───────────────────────────

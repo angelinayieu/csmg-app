@@ -15,6 +15,7 @@ import { LayerBandShapeUtil } from "./shapes/layer-band-shape";
 import { SpecForgeCardShapeUtil } from "./shapes/specforge-card-shape";
 import { TechSpecCardShapeUtil } from "./shapes/tech-spec-card-shape";
 import { PrototypeCardShapeUtil } from "./shapes/prototype-card-shape";
+import { UiPlanCardShapeUtil } from "./shapes/ui-plan-card-shape";
 import { PromptSharpeningCardShapeUtil } from "./shapes/prompt-sharpening-card-shape";
 import { ObjectiveImageCardShapeUtil } from "./shapes/objective-image-card-shape";
 import { ChatboxCardShapeUtil } from "./shapes/chatbox-card-shape";
@@ -23,6 +24,7 @@ import {
   VoiceNoteCardShapeUtil,
   JournalCardShapeUtil,
 } from "./canvas-interactions/voice-journal-board";
+import { CommentCardShapeUtil } from "./shapes/comment-card-shape";
 
 /** Every custom shape util the objective whiteboard registers, in registration
  *  order. Reused by the main <Tldraw> mount AND by static <TldrawImage>
@@ -36,6 +38,7 @@ export const CUSTOM_SHAPE_UTILS = [
   LayerBandShapeUtil,
   SpecForgeCardShapeUtil,
   TechSpecCardShapeUtil,
+  UiPlanCardShapeUtil,
   PrototypeCardShapeUtil,
   PromptSharpeningCardShapeUtil,
   ObjectiveImageCardShapeUtil,
@@ -43,4 +46,5 @@ export const CUSTOM_SHAPE_UTILS = [
   ObjectiveCardShapeUtil,
   VoiceNoteCardShapeUtil,
   JournalCardShapeUtil,
+  CommentCardShapeUtil,
 ];

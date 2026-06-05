@@ -14,6 +14,7 @@
 
 import { createServiceClient } from "@/lib/supabase/service";
 import {
+  boardInviteEmail,
   matchSurfacedEmail,
   newRequestEmail,
   parallelPathAcceptedEmail,
@@ -355,6 +356,62 @@ export async function sendParallelPathAcceptedEmail(args: {
     }
   } catch (err) {
     console.warn("[email · parallel_path_accepted] trigger errored:", err);
+  }
+}
+
+// ── board_invite ──
+//
+// Fires after a successful POST /api/objective/[spaceId]/share insert.
+// Unlike the synergy triggers this targets a RAW EMAIL (the invitee may
+// not have an account yet), so there's no notification-preference lookup
+// or opt-out gate — a direct share is transactional, always delivered.
+// Resolves the inviter's display name for a friendly From-line.
+
+export async function sendBoardInviteEmail(args: {
+  invitee_email: string;
+  board_title: string;
+  role: "editor" | "viewer";
+  token: string;
+  inviter_user_id: string;
+}): Promise<{ ok: boolean; dry_run: boolean; error?: string }> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = createServiceClient() as any;
+    const [{ data: profile }, { data: authUser }] = await Promise.all([
+      db
+        .from("synergy_profiles")
+        .select("display_name")
+        .eq("user_id", args.inviter_user_id)
+        .maybeSingle(),
+      db.auth.admin.getUserById(args.inviter_user_id),
+    ]);
+    const inviterName =
+      (profile?.display_name as string | null) ||
+      (authUser?.user?.email as string | null) ||
+      "Someone";
+
+    const tpl = boardInviteEmail({
+      inviter_name: inviterName,
+      board_title: args.board_title || "a whiteboard",
+      role: args.role,
+      accept_url: appUrl(`/invite/${encodeURIComponent(args.token)}`),
+      preferences_url: appUrl("/app"),
+      unsubscribe_url: appUrl("/app"),
+    });
+
+    const result = await sendTransactional({
+      to: args.invitee_email,
+      subject: tpl.subject,
+      preheader: tpl.preheader,
+      html: tpl.html,
+    });
+    if (!result.ok) {
+      console.warn("[email · board_invite] send failed:", result.error);
+    }
+    return { ok: result.ok, dry_run: result.dry_run, error: result.error };
+  } catch (err) {
+    console.warn("[email · board_invite] trigger errored:", err);
+    return { ok: false, dry_run: false, error: (err as Error).message };
   }
 }
 

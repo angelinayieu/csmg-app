@@ -317,3 +317,114 @@ export const DEPLOY_JOURNAL_EVENT = "objective-board:deploy-journal";
 export function deployJournalCard(detail: JournalCardDetail) {
   window.dispatchEvent(new CustomEvent(DEPLOY_JOURNAL_EVENT, { detail }));
 }
+
+// ── Resolution Studio (immersive "I'll answer") ───────────────────
+// The sharpening card fires this with its salience annotations; the
+// layout-level ResolutionStudioMount opens the immersive modal where the
+// user resolves each high-leverage ambiguity (flashcard chips + voice +
+// live AI assist). Resolved answers persist onto the sharpening artifact.
+
+/** A single resolvable concept handed to the studio (a JSON-safe subset of
+ *  SalienceAnnotation — the bus stays tldraw-free + serializable). */
+export interface ResolutionStudioConcept {
+  phrase: string;
+  kind: string;
+  leverage: number;
+  uncertainty: number;
+  why?: string;
+  candidate_readings?: string[];
+  concept_slug?: string;
+}
+
+export interface ResolutionStudioDetail {
+  spaceId: string;
+  /** distilled objective title — shown as the studio subtitle for context. */
+  objectiveTitle?: string;
+  /** current sharpened prompt — shown in the scope rail. */
+  sharpenedPrompt?: string;
+  /** the deck of concepts to resolve. */
+  concepts: ResolutionStudioConcept[];
+}
+
+export const OPEN_RESOLUTION_STUDIO_EVENT =
+  "objective-board:open-resolution-studio";
+
+/** Open the Resolution Studio over the board. */
+export function openResolutionStudio(detail: ResolutionStudioDetail) {
+  window.dispatchEvent(
+    new CustomEvent(OPEN_RESOLUTION_STUDIO_EVENT, { detail }),
+  );
+}
+
+// ── Sharpening card refresh (Phase 3) ─────────────────────────────
+// After resolutions are applied (glossary write-back + re-framed prompt) the
+// sharpening card is past its loading-poll, so it won't pick up the new
+// prompt on its own. The studio fires this; the card re-fetches the artifact
+// and updates its props in place.
+
+export const REFRESH_SHARPENING_EVENT = "objective-board:refresh-sharpening";
+
+/** Tell the sharpening card to re-fetch + re-render (e.g. after a re-frame). */
+export function refreshSharpening(spaceId: string) {
+  window.dispatchEvent(
+    new CustomEvent(REFRESH_SHARPENING_EVENT, { detail: { spaceId } }),
+  );
+}
+
+// ── Comment-card events ───────────────────────────────────────────────────
+// The comment-card shape fires these as the user interacts with it; a
+// board-level mount handles the network round-trips and shape patches so
+// the shape stays pure-render.
+
+export interface CommentEventDetail {
+  commentId: string;
+  shapeId: string;
+}
+export interface CommentBodyPatchDetail extends CommentEventDetail {
+  body: string;
+}
+
+/** Toolbox sphere → "open a new comment on the current selection". */
+export const OPEN_BOARD_COMMENT_EVENT = "board:open-comment";
+
+export const COMMENT_BODY_PATCH_EVENT = "objective-board:comment-body-patch";
+export const COMMENT_RESOLVE_TOGGLE_EVENT =
+  "objective-board:comment-resolve-toggle";
+export const COMMENT_ANALYZE_EVENT = "objective-board:comment-analyze";
+export const COMMENT_DELETE_EVENT = "objective-board:comment-delete";
+
+export function dispatchCommentBodyPatch(
+  commentId: string,
+  shapeId: string,
+  body: string,
+) {
+  window.dispatchEvent(
+    new CustomEvent<CommentBodyPatchDetail>(COMMENT_BODY_PATCH_EVENT, {
+      detail: { commentId, shapeId, body },
+    }),
+  );
+}
+
+export function dispatchCommentResolveToggle(commentId: string, shapeId: string) {
+  window.dispatchEvent(
+    new CustomEvent<CommentEventDetail>(COMMENT_RESOLVE_TOGGLE_EVENT, {
+      detail: { commentId, shapeId },
+    }),
+  );
+}
+
+export function dispatchCommentAnalyze(commentId: string, shapeId: string) {
+  window.dispatchEvent(
+    new CustomEvent<CommentEventDetail>(COMMENT_ANALYZE_EVENT, {
+      detail: { commentId, shapeId },
+    }),
+  );
+}
+
+export function dispatchCommentDelete(commentId: string, shapeId: string) {
+  window.dispatchEvent(
+    new CustomEvent<CommentEventDetail>(COMMENT_DELETE_EVENT, {
+      detail: { commentId, shapeId },
+    }),
+  );
+}

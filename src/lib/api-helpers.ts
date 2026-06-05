@@ -231,6 +231,44 @@ export async function verifySpaceOwnership(
   return !error && !!data;
 }
 
+export type SpaceRole = "owner" | "editor" | "viewer";
+
+/**
+ * Resolve the authenticated user's access level to a space:
+ *   - "owner"  — the space's user_id
+ *   - "editor" / "viewer" — a space_members row (shared board)
+ *   - null     — no access
+ *
+ * Used by collaborative endpoints to gate reads (any role) vs. writes
+ * (owner | editor). Owner short-circuits before touching space_members
+ * so the common solo path stays a single query.
+ */
+export async function verifySpaceAccess(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: SupabaseClient<any>,
+  spaceId: string,
+  userId: string,
+): Promise<SpaceRole | null> {
+  const { data: owned } = await supabase
+    .from("spaces")
+    .select("id")
+    .eq("id", spaceId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (owned) return "owner";
+
+  const { data: member } = await supabase
+    .from("space_members")
+    .select("role")
+    .eq("space_id", spaceId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (member?.role === "editor" || member?.role === "viewer") {
+    return member.role;
+  }
+  return null;
+}
+
 /**
  * Verify ownership of multiple spaces. Returns false if any space is not owned.
  */

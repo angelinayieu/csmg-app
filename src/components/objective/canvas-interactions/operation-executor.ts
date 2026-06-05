@@ -23,6 +23,7 @@ import {
   type OperationRunOptions,
 } from "@/lib/objective-canvas/canvas-operations";
 import { saveCardsToLibrary, type SaveableCard } from "./save-to-library";
+import { lowestClearTop } from "./placement";
 
 const RESULT_W = 216;
 const RESULT_H = 132;
@@ -30,6 +31,8 @@ const RESULT_H = 132;
 const ROW_H = 176;
 const GAP_X = 16;
 const PER_ROW = 3;
+/** Gap below the source card (and below anything already sitting under it). */
+const RESULT_GAP = 40;
 /** Slate — neutral accent for AI-result cards (matches the de-purpled theme). */
 const RESULT_COLOR = "#64748B";
 
@@ -65,7 +68,7 @@ export async function executeCardOperation(
     : undefined;
   if (bounds) {
     anchorMidX = bounds.midX;
-    startY = bounds.maxY + 40;
+    startY = bounds.maxY + RESULT_GAP;
   } else {
     const vp = editor.getViewportPageBounds();
     anchorMidX = vp.center.x;
@@ -81,6 +84,17 @@ export async function executeCardOperation(
   const perRow =
     op.resultLayout === "column" ? 1 : Math.min(items.length, PER_ROW);
   const rowWidth = perRow * RESULT_W + (perRow - 1) * GAP_X;
+
+  // STRICT no-overlap rule: if anything already sits in this cluster's column
+  // below the source (e.g. a previous op run), drop the results beneath it
+  // instead of stacking on top. The source card itself is in the span, so this
+  // never moves results above `bounds.maxY + RESULT_GAP`.
+  startY = lowestClearTop(
+    editor,
+    { left: anchorMidX - rowWidth / 2, right: anchorMidX + rowWidth / 2 },
+    startY,
+    RESULT_GAP,
+  );
   const stamp = Date.now();
 
   // Create the result cards: feature/variable → oc-card (clickable to its

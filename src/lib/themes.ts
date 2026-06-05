@@ -72,7 +72,7 @@ export const THEMES: Record<ThemeId, ThemeDefinition> = {
     // so charts/rings don't lose their identity.
     swatch: "#0a0e14",
     cssVars: {
-      // Accent kept teal so "InterAxis teal" still reads as the brand,
+      // Accent kept teal so "akiboe teal" still reads as the brand,
       // just slightly brighter for contrast against dark surfaces.
       "--accent-50": "#0B2A30",
       "--accent-100": "#0F3B44",

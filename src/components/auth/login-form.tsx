@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { GoogleSignInButton } from "./google-sign-in-button";
 
-export function LoginForm() {
+export function LoginForm({ next = "/app" }: { next?: string }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -32,7 +32,7 @@ export function LoginForm() {
       return;
     }
 
-    router.push("/app");
+    router.push(next);
     router.refresh();
   }
 
@@ -40,7 +40,7 @@ export function LoginForm() {
     <div className="space-y-4">
       {/* Google OAuth — primary path. Sits above the email form so
           the most common option is visually first. */}
-      <GoogleSignInButton next="/app" disabled={loading} />
+      <GoogleSignInButton next={next} disabled={loading} />
 
       {/* Visual divider between OAuth and email/password */}
       <div className="relative">
@@ -80,7 +80,7 @@ export function LoginForm() {
         <p className="text-center text-sm text-gray-600">
           Don&apos;t have an account?{" "}
           <Link
-            href="/auth/signup"
+            href={`/auth/signup${next && next !== "/app" ? `?next=${encodeURIComponent(next)}` : ""}`}
             className="font-medium text-interaxis-600 hover:text-interaxis-500"
           >
             Sign up

@@ -8,6 +8,7 @@
 // route's robust JSON extractors. The route wraps this in instrumentedLLMCall.
 
 import { getAnthropicClient } from "@/lib/anthropic";
+import { BEST_CLAUDE_MODEL } from "@/lib/llm";
 import { loadUiSkillSystem } from "@/lib/objective-canvas/ui-skill-system";
 import { extractJSON, repairAndExtractJSON } from "@/lib/web-search";
 import type {
@@ -16,9 +17,9 @@ import type {
   TechSpecUiPlan,
 } from "./types";
 
-/** "Pro Claude" — the codebase's standard Opus id (matches llm.ts
- *  MODEL_DEFAULTS.reasoning). Bump here if the key has a newer Opus. */
-const OPUS_MODEL = "claude-opus-4-20250514";
+// Frontier Opus. Single source of truth in llm.ts so a model bump there
+// fixes every Opus call site at once (legacy ids 404 silently).
+const OPUS_MODEL = BEST_CLAUDE_MODEL;
 
 export interface ComposeTechSpecInput {
   idea: string;

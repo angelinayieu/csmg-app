@@ -1012,6 +1012,20 @@ declare module "@tldraw/tlschema" {
       featureCount: number;
       phaseCount: number;
     };
+    // Objective board — one UI-plan variant forked from any selected card
+    // (objective-board:build-ui-plans). Holds a TechSpecUiPlan + the source
+    // text; the card's "Build prototype" button fires BUILD_PROTOTYPE_EVENT
+    // with a stub TechSpec wrapping just this plan.
+    "ui-plan-card": {
+      w: number;
+      h: number;
+      title: string;
+      variantLabel: string;
+      overview: string;
+      sourceText: string;
+      uiPlanJson: string;
+      status: "generating" | "ready" | "error";
+    };
     // Objective board — interactive Claude prototype: self-contained HTML/CSS
     // (no JS, sanitized) rendered in a sandboxed iframe and iterated in place
     // via the feedback box (objective-board:prototype-refine).
@@ -1111,6 +1125,21 @@ declare module "@tldraw/tlschema" {
       pageCount: number;
       status: "fresh" | "regenerating" | "stale";
       open: boolean;
+      color: string;
+    };
+    // Comment — a human annotation tied to the comments DB row. Carries
+    // strands to its target shape IDs (drawn by CommentStrandsOverlay).
+    "comment-card": {
+      w: number;
+      h: number;
+      commentId: string;
+      spaceId: string;
+      authorName: string;
+      authorAvatarUrl: string;
+      body: string;
+      targetShapeIds: string[];
+      status: "open" | "resolved" | "analyzed";
+      createdAtIso: string;
       color: string;
     };
   }

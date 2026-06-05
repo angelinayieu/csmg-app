@@ -60,6 +60,16 @@ export interface PromptSharpeningArtifact {
   ranked_ambiguities: RankedAmbiguity[];
   ambiguity_heatmap: AmbiguityHeatmap;
   hidden_metadata_for_agents: HiddenMetadata;
+  /** Lazy second-pass depth + salience map. Absent until the deepen pass
+   *  runs (driven by the card once the fast artifact has landed). */
+  salience?: SalienceMetadata;
+  /** User-resolved answers from the Resolution Studio (Phase 2). These are
+   *  the unit of the user's taste — they deepen the glossary / variables
+   *  downstream (Phase 3). Keyed by concept_slug, last-write-wins. */
+  resolutions?: Resolution[];
+  /** ISO stamp when the resolutions were applied (glossary write-back +
+   *  re-framed prompt). Phase 3. */
+  resolutions_applied_at?: string;
   quality_status: string;
   confidence: number;
   /** Stamped server-side at persist time (ISO). */
@@ -307,4 +317,242 @@ export function normalizeSharpening(
     quality_status: typeof d.quality_status === "string" ? d.quality_status : "",
     confidence: typeof d.confidence === "number" ? d.confidence : 0,
   };
+}
+
+// ── Depth & Salience — the lazy SECOND pass ──────────────────────────
+//
+// The fast pass above lands the visible refinement quickly. This pass —
+// driven on-demand by the card once the base artifact exists — deepens the
+// SAME artifact: it (A) reads beneath the words (the interpretation fields
+// the fast schema deliberately drops) and (B) annotates the highest-LEVERAGE
+// concepts (pain points / goals / levers) so we know what to optimise for
+// and which knots most need modelling. Nothing here blocks intake.
+
+/** What a phrase IS in optimisation terms.
+ *  pain = a problem to relieve · goal = an outcome to hit ·
+ *  constraint = a hard limit · lever = a tunable that drives the outcome ·
+ *  concept = a term whose meaning must be pinned. */
+export type SalienceKind = "pain" | "goal" | "constraint" | "lever" | "concept";
+
+export interface SalienceAnnotation {
+  /** The exact key phrase/term, quoted from the (sharpened) objective. */
+  phrase: string;
+  kind: SalienceKind;
+  /** 0..1 — how much nailing this drives the outcome (the optimisation weight). */
+  leverage: number;
+  /** 0..1 — how under-specified / open to interpretation it is right now. */
+  uncertainty: number;
+  /** One line — why it carries weight (or why it's ambiguous). */
+  why: string;
+  /** 2–4 plausible readings — the flashcard fuel for the Resolution Studio. */
+  candidate_readings: string[];
+  /** kebab slug for glossary / variable tie-back. */
+  concept_slug: string;
+  /** Derived: leverage weighted by uncertainty → ranks "needs modelling". */
+  priority: number;
+}
+
+export interface SalienceMetadata {
+  annotations: SalienceAnnotation[];
+  /** Stamped server-side at persist time (ISO). */
+  generated_at?: string;
+}
+
+/** One resolved ambiguity from the Resolution Studio — the user's answer to
+ *  "what do you mean by <phrase>". The unit of taste captured at intake. */
+export interface Resolution {
+  /** kebab slug of the resolved phrase (ties back to the salience annotation). */
+  concept_slug: string;
+  phrase: string;
+  kind: string;
+  /** candidate_readings the user selected (may be empty if free-form only). */
+  chosen_readings: string[];
+  /** the user's free-form / voice / AI-distilled answer. */
+  answer_text: string;
+  source: "manual" | "voice" | "ai";
+  resolved_at: string;
+}
+
+const SALIENCE_ITEM_SCHEMA = {
+  type: "object",
+  properties: {
+    phrase: { type: "string" },
+    kind: {
+      type: "string",
+      enum: ["pain", "goal", "constraint", "lever", "concept"],
+    },
+    leverage: { type: "number" },
+    uncertainty: { type: "number" },
+    why: { type: "string" },
+    candidate_readings: { type: "array", items: { type: "string" } },
+  },
+  required: [
+    "phrase",
+    "kind",
+    "leverage",
+    "uncertainty",
+    "why",
+    "candidate_readings",
+  ],
+} as const;
+
+export const SHARPENING_DEPTH_RESPONSE_SCHEMA = {
+  name: "prompt_sharpening_depth_v1",
+  schema: {
+    type: "object",
+    properties: {
+      explicit_meaning: { type: "array", items: { type: "string" } },
+      inferred_meaning: { type: "array", items: { type: "string" } },
+      deep_intent: { type: "string" },
+      hidden_assumptions: { type: "array", items: { type: "string" } },
+      layered_understanding: { type: "array", items: { type: "string" } },
+      salience_annotations: { type: "array", items: SALIENCE_ITEM_SCHEMA },
+    },
+    required: [
+      "explicit_meaning",
+      "inferred_meaning",
+      "deep_intent",
+      "salience_annotations",
+    ],
+  },
+} as const;
+
+export const SHARPENING_DEPTH_SYSTEM = `You are the Depth & Salience Analyst for SpecForge.
+
+You are given a user's raw objective and its sharpened rewrite. Run a DEEP pass — not a fast one. Produce two things:
+
+A. INTERPRETATION — read beneath the words:
+   • explicit_meaning — what the words literally commit to (each one short line).
+   • inferred_meaning — what is strongly implied but left unsaid.
+   • deep_intent — ONE line: the real underlying goal behind the ask.
+   • hidden_assumptions — assumptions silently baked into the prompt.
+   • layered_understanding — 2–4 readings, from the surface reading down to the deepest.
+
+B. SALIENCE ANNOTATIONS — annotate the 4–8 highest-LEVERAGE concepts/phrases. For each:
+   • phrase — the exact key phrase/term, quoted from the objective.
+   • kind — pain (a problem to relieve) | goal (an outcome to hit) | constraint (a hard limit) | lever (a tunable that drives the outcome) | concept (a term whose meaning must be pinned).
+   • leverage — 0..1 — how much correctly nailing this drives the final outcome. Pain points and goals are the optimisation targets; weight them high.
+   • uncertainty — 0..1 — how under-specified or open to interpretation it is right now.
+   • why — ONE line — why it carries weight (or why it's ambiguous).
+   • candidate_readings — 2–4 DISTINCT plausible interpretations of this phrase (these become the options the user will later choose between).
+
+Rules:
+- Quote phrases verbatim from the objective; never invent terms it doesn't imply.
+- Prioritise PAIN POINTS and GOALS — they are what we optimise for.
+- The most valuable annotations are HIGH leverage AND HIGH uncertainty — they most need clarifying. Surface those.
+- Be specific to THIS objective. No generic boilerplate; every line earns its place.`;
+
+export const SHARPENING_DEPTH_USER = (raw: string, sharpened: string) =>
+  `Raw objective:\n"""\n${raw}\n"""\n\nSharpened objective:\n"""\n${sharpened}\n"""\n\nReturn the prompt_sharpening_depth JSON.`;
+
+// ── Depth normalizer ──
+
+function clamp01(n: unknown): number {
+  const v = typeof n === "number" && isFinite(n) ? n : 0;
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "")
+    .slice(0, 48);
+}
+
+/** Coerce the depth model output into the interpretation fields (a subset of
+ *  HiddenMetadata) + a sorted, clamped salience map. */
+export function normalizeSalience(data: unknown): {
+  hidden: Pick<
+    HiddenMetadata,
+    | "explicit_meaning"
+    | "inferred_meaning"
+    | "deep_intent"
+    | "hidden_assumptions"
+    | "layered_understanding"
+  >;
+  salience: SalienceMetadata;
+} {
+  const d = (data && typeof data === "object" ? data : {}) as Record<
+    string,
+    unknown
+  >;
+  const rawAnn = Array.isArray(d.salience_annotations)
+    ? d.salience_annotations
+    : [];
+  const annotations: SalienceAnnotation[] = rawAnn
+    .map((a) => {
+      const o = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
+      const phrase = typeof o.phrase === "string" ? o.phrase.trim() : "";
+      const leverage = clamp01(o.leverage);
+      const uncertainty = clamp01(o.uncertainty);
+      const kind: SalienceKind =
+        o.kind === "pain" ||
+        o.kind === "goal" ||
+        o.kind === "constraint" ||
+        o.kind === "lever" ||
+        o.kind === "concept"
+          ? o.kind
+          : "concept";
+      return {
+        phrase,
+        kind,
+        leverage,
+        uncertainty,
+        why: typeof o.why === "string" ? o.why.trim() : "",
+        candidate_readings: asStrArray(o.candidate_readings).slice(0, 4),
+        concept_slug: slugify(phrase),
+        // Leverage dominates; uncertainty boosts the "needs modelling" rank.
+        priority: Math.round(leverage * (0.5 + 0.5 * uncertainty) * 1000) / 1000,
+      };
+    })
+    .filter((a) => a.phrase.length > 0)
+    .sort((a, b) => b.priority - a.priority)
+    .slice(0, 10);
+
+  return {
+    hidden: {
+      explicit_meaning: asStrArray(d.explicit_meaning),
+      inferred_meaning: asStrArray(d.inferred_meaning),
+      deep_intent: typeof d.deep_intent === "string" ? d.deep_intent : "",
+      hidden_assumptions: asStrArray(d.hidden_assumptions),
+      layered_understanding: asStrArray(d.layered_understanding),
+    },
+    salience: { annotations },
+  };
+}
+
+// ── Re-frame (Phase 3 write-back) ────────────────────────────────────
+// After the user resolves ambiguities in the Resolution Studio, rewrite the
+// sharpened prompt to BAKE IN those resolved meanings — so every downstream
+// consumer (decompose, agents) reads the precise, taste-imbued objective.
+
+export const REFRAME_RESPONSE_SCHEMA = {
+  name: "sharpened_prompt_reframe_v1",
+  schema: {
+    type: "object",
+    properties: { sharpened_prompt: { type: "string" } },
+    required: ["sharpened_prompt"],
+  },
+} as const;
+
+export const REFRAME_SYSTEM = `You rewrite a project objective to BAKE IN the user's resolved clarifications.
+
+You are given the original objective, its current sharpened version, and a list of "phrase → what the user clarified it means". Rewrite the sharpened objective so those resolved meanings are now EXPLICIT and precise — no longer ambiguous.
+
+Rules:
+- 1–2 sentences, direct and high-signal. Keep it tight; this is a sharpened objective, not a spec.
+- Fold in EVERY resolution. Replace each vague phrase with its resolved meaning (don't just append a list).
+- Preserve the user's intent + voice; never add scope they didn't ask for.
+- Return ONLY the rewritten sharpened_prompt.`;
+
+export function REFRAME_USER(
+  raw: string,
+  sharpened: string,
+  resolutions: Resolution[],
+): string {
+  const lines = resolutions
+    .map((r) => `- "${r.phrase}" → ${r.answer_text || r.chosen_readings.join("; ")}`)
+    .join("\n");
+  return `Original objective:\n"""\n${raw}\n"""\n\nCurrent sharpened version:\n"""\n${sharpened}\n"""\n\nThe user resolved these ambiguities:\n${lines}\n\nReturn the reframed sharpened_prompt JSON.`;
 }

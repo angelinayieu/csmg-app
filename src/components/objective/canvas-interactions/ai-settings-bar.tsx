@@ -165,16 +165,18 @@ export function AiSettingsBar() {
       >
         <SlidersHorizontal style={{ width: 13, height: 13 }} strokeWidth={2.2} />
         AI
-        <span
-          style={{
-            fontSize: 10.5,
-            fontWeight: 600,
-            fontVariantNumeric: "tabular-nums",
-            opacity: open ? 0.9 : 0.62,
-          }}
-        >
-          {`d${s.depth} · ${s.complexity}q${s.webSearch ? " · web" : ""}`}
-        </span>
+        {s.webSearch && (
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 600,
+              fontVariantNumeric: "tabular-nums",
+              opacity: open ? 0.9 : 0.62,
+            }}
+          >
+            web
+          </span>
+        )}
       </button>
 
       {open && (

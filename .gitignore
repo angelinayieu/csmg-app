@@ -60,3 +60,6 @@ UI agent .zip
 # "Granola - AI Notepad.dmg"). Binaries, not source — and GitHub rejects
 # files over 100MB anyway.
 *.dmg
+
+# Local scheduled-tasks lock (transient)
+.claude/scheduled_tasks.lock

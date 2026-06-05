@@ -30,13 +30,11 @@ import {
   ObjectiveCardShapeUtil,
   type ObjectiveCardShape,
 } from "@/components/objective/shapes/objective-card-shape";
-import {
-  SysFrameShapeUtil,
-  type SysFrameShape,
-} from "@/components/objective/shapes/sys-frame-shape";
 import { layoutSystemsGraph } from "@/lib/objective-canvas/layout-systems-graph";
 
-const UTILS = [OcCardShapeUtil, ObjectiveCardShapeUtil, SysFrameShapeUtil];
+// Native tldraw `frame` is the group substrate — real move-together
+// containment (the "one artifact" behavior) + guaranteed-stable rendering.
+const UTILS = [OcCardShapeUtil, ObjectiveCardShapeUtil];
 
 const CARD_W = 248;
 const CARD_H = 176;
@@ -134,14 +132,14 @@ function build(editor: Editor) {
   const frameW = maxX + PAD * 2;
   const frameH = maxY + TOP_PAD + PAD;
 
-  // ── Frame FIRST so it sits behind the cards. ──
+  // ── Frame FIRST so it sits behind the cards. Native tldraw frame. ──
   const frameId = createShapeId();
-  editor.createShape<SysFrameShape>({
+  editor.createShape({
     id: frameId,
-    type: "sys-frame",
+    type: "frame",
     x: 0,
     y: 0,
-    props: { w: frameW, h: frameH, label: OBJECTIVE.title, accent: ACCENT },
+    props: { w: frameW, h: frameH, name: OBJECTIVE.title },
   });
 
   // ── Swimlane labels + cards, offset inside the frame. ──

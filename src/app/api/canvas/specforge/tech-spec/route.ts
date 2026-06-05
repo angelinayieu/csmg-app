@@ -11,7 +11,7 @@
 
 import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
-import { llmGenerate, BEST_FAST_CLAUDE_MODEL } from "@/lib/llm";
+import { llmGenerate, BEST_CLAUDE_MODEL, BEST_FAST_CLAUDE_MODEL } from "@/lib/llm";
 import { extractJSON } from "@/lib/web-search";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 import {
@@ -136,7 +136,7 @@ export async function POST(req: Request) {
         userId: auth.user.id,
         spaceId,
         callSite: "objective:tech_spec",
-        modelHint: "claude-opus-4-20250514",
+        modelHint: BEST_CLAUDE_MODEL,
         metadata: {
           hasInspiration: images.length > 0,
           inspirationCues: inspirationCues.length,

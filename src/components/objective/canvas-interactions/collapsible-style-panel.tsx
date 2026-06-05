@@ -27,7 +27,9 @@ export function CollapsibleStylePanel(props: TLUiStylePanelProps) {
         // cleanly below the Notebook pill; in minimal mode (and anywhere the
         // var is unset) it falls back to a clean corner inset instead of the
         // old dead 52px gap that made the palette look like it was floating.
-        marginTop: "var(--oc-style-panel-top, 14px)",
+        // Sits below the top-right nav pill (~top:16–56) so the palette never
+        // overlaps it; the full-mode layout already overrides this to ~60px.
+        marginTop: "var(--oc-style-panel-top, 60px)",
         // Slides left of the Powerups panel when it's open (the rail sets
         // `--oc-style-panel-right`) so the palette never covers the panel's
         // close button. Back to the corner (12px) when the panel is closed.

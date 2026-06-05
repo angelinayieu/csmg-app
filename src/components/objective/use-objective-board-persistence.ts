@@ -33,11 +33,20 @@ export function useObjectiveBoardPersistence(
    *  to the store here (e.g. drain queued artifacts) without a late
    *  restore wiping them. */
   onRestored?: () => void,
+  /** Single-writer gate for live collaboration. Returns false when ANOTHER
+   *  participant is the elected saver — this client then keeps its local
+   *  localStorage mirror but skips the durable server PUT, so N editors
+   *  don't storm `objective_boards` with last-write-wins thrash. Default
+   *  (undefined) = always allowed (the solo / non-shared case). Read as a
+   *  getter so the live saver election can change without re-subscribing. */
+  canSave?: () => boolean,
 ): { status: BoardSaveStatus } {
   const [status, setStatus] = useState<BoardSaveStatus>("idle");
   const restoredRef = useRef(false);
   const onRestoredRef = useRef(onRestored);
   onRestoredRef.current = onRestored;
+  const canSaveRef = useRef(canSave);
+  canSaveRef.current = canSave;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inflightRef = useRef<AbortController | null>(null);
   // Becomes true ONLY after the restore attempt fully settles. Until then NO
@@ -186,6 +195,15 @@ export function useObjectiveBoardPersistence(
         // quota / private mode — non-fatal
       }
 
+      // Single-writer election (live collaboration): when another participant
+      // is the elected saver, this client mirrors locally (above) but skips
+      // the durable PUT. The saver applies everyone's remote deltas into its
+      // own store, so ITS snapshot already reflects this client's edits.
+      if (canSaveRef.current && !canSaveRef.current()) {
+        setStatus("saved");
+        return;
+      }
+
       inflightRef.current?.abort();
       const ctrl = new AbortController();
       inflightRef.current = ctrl;
@@ -267,6 +285,9 @@ export function useObjectiveBoardPersistence(
         } catch {
           // quota — keepalive fetch covers it
         }
+        // Non-savers skip the durable flush (the elected saver owns the
+        // server snapshot) but keep their localStorage mirror above.
+        if (canSaveRef.current && !canSaveRef.current()) return;
         try {
           void fetch(`/api/objective/${spaceId}/board`, {
             method: "PUT",

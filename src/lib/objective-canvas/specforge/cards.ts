@@ -24,6 +24,8 @@ import type {
   RecommendationResult,
   FeatureCardsResult,
   FeatureCard,
+  FeatureMechanismsResult,
+  FeatureMechanism,
   ValidationResult,
   ValidationExperiment,
   DeepeningResult,
@@ -500,6 +502,60 @@ export function resultToCards(
       });
     }
 
+    case "feature_mechanisms": {
+      const r = result as FeatureMechanismsResult;
+      const mechs: FeatureMechanism[] = Array.isArray(r.mechanisms)
+        ? r.mechanisms.filter(
+            (m) => m && clean(m.mechanism_name) && clean(m.feature_name),
+          )
+        : [];
+      if (!mechs.length) return [];
+      // Surface top 3 by implementation order (low difficulty first within
+      // each priority — the chain doesn't carry priority here, so we use
+      // failure-mode count as a rough proxy for build risk).
+      const ordered = mechs.slice().sort((a, b) => {
+        const aD = (a.implementation_difficulty || "high") === "low" ? 0
+          : (a.implementation_difficulty || "high") === "medium" ? 1 : 2;
+        const bD = (b.implementation_difficulty || "high") === "low" ? 0
+          : (b.implementation_difficulty || "high") === "medium" ? 1 : 2;
+        return aD - bD;
+      });
+      return ordered.slice(0, 3).map((m) => {
+        const proc = (m.system_process ?? [])
+          .map(clean)
+          .filter(Boolean)
+          .slice(0, 3)
+          .join(" → ");
+        const outs = (m.outputs ?? [])
+          .map(clean)
+          .filter(Boolean)
+          .slice(0, 2)
+          .join(", ");
+        const alts = (m.alternatives ?? [])
+          .map((a) => clean(a?.name))
+          .filter(Boolean).length;
+        const failures = (m.failure_modes ?? [])
+          .map(clean)
+          .filter(Boolean)[0];
+        return {
+          stage: "mechanisms" as const,
+          eyebrow: `Mechanism · ${clean(m.feature_name) || "(unnamed)"}`,
+          title: clean(m.mechanism_name),
+          subtitle: clean(m.mechanism_thesis) || clean(m.user_behavior_changed),
+          body: bullets([
+            clean(m.trigger) ? `Trigger: ${clean(m.trigger)}` : undefined,
+            proc ? `Process: ${proc}` : undefined,
+            outs ? `Outputs: ${outs}` : undefined,
+            alts > 0 ? `${alts} alt${alts === 1 ? "" : "s"} rejected` : undefined,
+            failures ? `Top failure: ${failures}` : undefined,
+            clean(m.test_method) ? `Test: ${clean(m.test_method)}` : undefined,
+            `Difficulty: ${clean(m.implementation_difficulty) || "?"}`,
+          ]),
+          layout: "diverge",
+        };
+      });
+    }
+
     case "validation": {
       const r = result as ValidationResult;
       const exps: ValidationExperiment[] = Array.isArray(r.experiments)
@@ -922,6 +978,66 @@ export function summarizeForContext(
         delayed && `Delayed: ${delayed}`,
         gaps && `Open gaps: ${gaps}`,
         conf !== null && `Feature plan confidence: ${conf}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "feature_mechanisms": {
+      const r = result as FeatureMechanismsResult;
+      const mechs: FeatureMechanism[] = Array.isArray(r.mechanisms)
+        ? r.mechanisms
+        : [];
+      const mechLine = mechs
+        .slice(0, 5)
+        .map((m) => {
+          const trig = clean(m.trigger);
+          const out = (m.outputs ?? []).map(clean).filter(Boolean)[0];
+          return `${clean(m.feature_name) || "?"} → ${clean(m.mechanism_name) || "?"}` +
+            (trig ? ` (trigger: ${trig})` : "") +
+            (out ? ` ⇒ ${out}` : "");
+        })
+        .filter((s) => !s.startsWith("? → ?"))
+        .join(" | ");
+      const tests = mechs
+        .slice(0, 3)
+        .map((m) => {
+          const test = clean(m.test_method);
+          return test ? `${clean(m.mechanism_name) || "?"}: ${test}` : "";
+        })
+        .filter(Boolean)
+        .join("; ");
+      const failures = mechs
+        .slice(0, 3)
+        .map((m) => {
+          const f = (m.failure_modes ?? []).map(clean).filter(Boolean)[0];
+          return f ? `${clean(m.mechanism_name) || "?"}: ${f}` : "";
+        })
+        .filter(Boolean)
+        .join("; ");
+      const deps = (Array.isArray(r.cross_mechanism_dependencies)
+        ? r.cross_mechanism_dependencies
+        : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join("; ");
+      const skipped = (Array.isArray(r.features_not_mechanized)
+        ? r.features_not_mechanized
+        : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 2)
+        .join("; ");
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      return [
+        mechLine && `Mechanisms: ${mechLine}`,
+        tests && `Test methods (validation candidates): ${tests}`,
+        failures && `Top failure modes: ${failures}`,
+        deps && `Cross-mechanism dependencies: ${deps}`,
+        skipped && `Not yet mechanized: ${skipped}`,
+        conf !== null && `Mechanism plan confidence: ${conf}`,
       ]
         .filter(Boolean)
         .join("\n");

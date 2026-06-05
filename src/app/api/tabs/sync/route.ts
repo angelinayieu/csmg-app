@@ -1,6 +1,6 @@
 // POST /api/tabs/sync
 //
-// Called by the InterAxis tab-sync browser extension (NOT a Supabase-
+// Called by the akiboe tab-sync browser extension (NOT a Supabase-
 // authenticated user). Auth is a per-user pairing token issued by
 // /api/integrations/tabs/pair and pasted into the extension; we resolve
 // it → user_id with a service-role client (RLS-bypassing) and upsert the

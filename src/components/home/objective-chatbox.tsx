@@ -1013,7 +1013,7 @@ function TabsPopover({
             className="mt-1 text-[11.5px] font-light leading-snug"
             style={{ color: appleVibe.text.tertiary }}
           >
-            Install the InterAxis tab-sync extension to pull your open research
+            Install the akiboe tab-sync extension to pull your open research
             tabs in as context.
           </p>
           <a

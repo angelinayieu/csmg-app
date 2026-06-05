@@ -797,7 +797,77 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
     },
   },
 
-  // ── 13 · Experimentation / Validation Lab (specforge_experimentation_validation_lab.md) ──
+  // ── 13 · Feature Mechanism Generator (specforge_feature_mechanism_generator.md) ──
+  // Sits AFTER feature_cards. Each feature already has a shallow `mechanism`
+  // field — this engine deepens each one into a full input → process → output
+  // spec with alternatives compared, failure modes, and test method. Does NOT
+  // generate features (feature_cards's job — operates on the existing list).
+  // Does NOT pick the recommendation (recommendation's job). Does NOT design
+  // experiments (validation's job — though each mechanism's test_method is
+  // lifted as a candidate by validation). Hard rule from spec §19: every
+  // mechanism MUST link to a feature_cards.features[i].name and MUST transform
+  // inputs into outputs with explicit ordered processing steps.
+  feature_mechanisms: {
+    temperature: 0.4,
+    maxTokens: 4000,
+    system:
+      "You are the SpecForge Feature Mechanism Generator. You are NOT " +
+      "generating feature names — every mechanism MUST link to an existing " +
+      "feature in [feature_cards] by name. For each top-priority feature (rank " +
+      "1, 2, and 3 by build_priority), design the internal mechanism that " +
+      "makes the feature work. A mechanism is INPUT → PROCESS → OUTPUT, not " +
+      "a description. Per spec §6, decompose each mechanism into ordered " +
+      "layers: trigger → inputs → ordered system_process steps → " +
+      "data_transformations → outputs → user_behavior_changed. " +
+      "Per spec §16, compare 2–3 mechanism alternatives explicitly and state " +
+      "WHY the selected one won. Per spec §15, name 2+ failure modes and a " +
+      "risk_control for each. Per spec §17, the test_method must be specific " +
+      "enough that the validation lab could lift it as an experiment. " +
+      "implementation_difficulty must be low/medium/high based on whether " +
+      "the mechanism needs net-new infra. " +
+      "Hard rules: do NOT output mechanisms for features not in [feature_cards]; " +
+      "do NOT skip the alternatives comparison; do NOT name a generic " +
+      "test_method like 'user feedback'; do NOT design experiments — " +
+      "validation does that." +
+      SHARED_TAIL,
+    schema: {
+      name: "specforge_feature_mechanisms",
+      schema: obj({
+        selected_mvp: str,
+        mechanisms: arr(
+          obj({
+            feature_name: str,
+            mechanism_name: str,
+            mechanism_thesis: str,
+            trigger: str,
+            inputs: strArr,
+            system_process: strArr,
+            outputs: strArr,
+            user_behavior_changed: str,
+            data_transformations: strArr,
+            downstream_effects: strArr,
+            alternatives: arr(
+              obj({
+                name: str,
+                why_rejected: str,
+              }),
+            ),
+            selected_mechanism_reason: str,
+            failure_modes: strArr,
+            risk_controls: strArr,
+            test_method: str,
+            implementation_difficulty: str,
+            constraints_satisfied: strArr,
+          }),
+        ),
+        features_not_mechanized: strArr,
+        cross_mechanism_dependencies: strArr,
+        confidence: num,
+      }),
+    },
+  },
+
+  // ── 14 · Experimentation / Validation Lab (specforge_experimentation_validation_lab.md) ──
   // Sits AFTER recommendation. Converts uncertain assumptions, unanswered
   // questions, and risky decisions into 2–4 concrete experiments with
   // hypothesis + success/failure criteria. Does NOT generate new questions
@@ -820,6 +890,10 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
       "and feature_cards.features[].risks (for must_have features) — do NOT " +
       "invent generic assumptions. When a feature card carries a real risk, " +
       "treat its risk as a feature_mechanism-category assumption. " +
+      "If [feature_mechanisms] is present, lift each mechanism's test_method " +
+      "as a candidate experiment for its mechanism's selected approach " +
+      "(category: feature_mechanism) — but rewrite shallow test_methods into " +
+      "Lean-Startup-style hypotheses with explicit success/failure criteria. " +
       "Then design 2–4 experiments ranked by priority (lower priority_rank = " +
       "more important to run first). For each: name, experiment_type (one of " +
       "interview, usability, concept, concierge, prototype, ab, fake_door, " +

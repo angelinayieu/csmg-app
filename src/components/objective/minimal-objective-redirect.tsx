@@ -2,51 +2,22 @@
 
 // ── MinimalObjectiveRedirect ──
 //
-// In minimal mode the objective lives as a card on the board. Its "Press to
-// open ↗" fires OPEN_ROOM_EVENT → the shell opens a window with the page's
-// output. Instead of a dead-end placeholder ("append ?full=1 to the URL"),
-// opening should just take the user to the full analysis canvas. This mounts
-// ONLY when that window opens (the shell hides children while collapsed), and
-// navigates to ?full=1. A full reload is used so the objective layout re-reads
-// the param + switches out of minimal mode.
-
-import { useEffect } from "react";
+// Renders as the page body for /app/objective/[id] in minimal mode. The
+// surface the user actually sees is the whiteboard floor + objective card
+// (shell + PromptSharpeningMount), so this component is a no-op placeholder.
+//
+// IMPORTANT — do NOT auto-redirect to ?full=1 here. ?full=1 mounts the
+// deprecated legacy canvas (MainCanvasView + sub-objective picker), retired
+// per project_old_build_deprecation. An earlier version of this component
+// fired `window.location.assign(?full=1)` from a useEffect, which meant any
+// brief race that opened the room window on the objective root (eg. ⌘↑ from
+// a sub room: navTo(0) sets collapsed=false then router.push) immediately
+// flipped the user into the retired legacy UI. The shell's pathname effect
+// re-collapses the window on its own; rendering null is enough.
+//
+// ?full=1 is still reachable by manually appending it to the URL — the
+// intentional escape hatch into the legacy canvas.
 
 export function MinimalObjectiveRedirect() {
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sp = new URLSearchParams(window.location.search);
-    if (sp.get("full") === "1") return; // already full — nothing to do
-    sp.set("full", "1");
-    window.location.assign(`${window.location.pathname}?${sp.toString()}`);
-  }, []);
-
-  return (
-    <div
-      style={{
-        display: "grid",
-        placeItems: "center",
-        minHeight: "50vh",
-        fontFamily:
-          '-apple-system, "SF Pro Text", Inter, system-ui, sans-serif',
-      }}
-    >
-      <div
-        style={{ display: "flex", alignItems: "center", gap: 10, color: "#64748B" }}
-      >
-        <span
-          className="animate-spin"
-          style={{
-            width: 16,
-            height: 16,
-            borderRadius: 999,
-            border: "2px solid rgba(15,23,42,0.12)",
-            borderTopColor: "#64748B",
-            display: "inline-block",
-          }}
-        />
-        <span style={{ fontSize: 13, fontWeight: 500 }}>Opening canvas…</span>
-      </div>
-    </div>
-  );
+  return null;
 }

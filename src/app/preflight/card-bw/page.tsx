@@ -51,7 +51,7 @@ function BWCard({ id, name, tagline, ink }: { id: string; name: string; tagline:
         <div className="mt-4 flex items-center justify-between gap-3 border-t pt-3" style={{ borderColor: "rgba(15,23,42,0.08)" }}>
           <div className="flex min-w-0 items-center gap-1.5">
             <InterAxisLogo className="h-[18px] w-[18px] shrink-0" size={36} style={{ borderRadius: 5 }} />
-            <span className="whitespace-nowrap text-[11px] font-semibold tracking-[-0.01em] text-[#334155]">Intersice Team</span>
+            <span className="whitespace-nowrap text-[11px] font-semibold tracking-[-0.01em] text-[#334155]">akiboe Team</span>
             <Seal />
           </div>
           <span className="whitespace-nowrap text-[10px] font-semibold text-[#0B0B0C]">Use template →</span>

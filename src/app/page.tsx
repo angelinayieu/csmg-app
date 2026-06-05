@@ -11,6 +11,9 @@
 //   • `/?v2=1`        → alias for the default V2 surface that ALSO bypasses
 //                       the logged-in redirect, so it stays previewable while
 //                       signed in.
+//   • `/?whiteboard=1` → V2 layout rendered on the tldraw-style dot-grid
+//                       whiteboard surface (same dots MinimalHome shows when
+//                       you start composing). Preview; also bypasses redirect.
 //
 // Logged-in visitors hitting the default `/` are redirected to /app (the
 // explicit ?legacy=1 / ?v2=1 previews skip that redirect). This mirrors how
@@ -32,7 +35,8 @@ import {
 } from "lucide-react";
 import { ImmersiveHome } from "@/components/home/immersive-home";
 import { LandingMarketingNav } from "@/components/landing/landing-marketing-nav";
-import { LandingV2, type LandingCard } from "@/components/landing/landing-v2";
+import { type LandingCard } from "@/components/landing/landing-v2";
+import { LandingV2Mount } from "@/components/landing/landing-v2-mount";
 import { AuthModal } from "@/components/auth/auth-modal";
 import { TEMPLATE_LIST, getTemplate } from "@/lib/use-cases/library";
 import { getAuthUser } from "@/lib/supabase/server";
@@ -88,17 +92,18 @@ const V2_LABEL_OVERRIDES: Record<string, string> = { team_retro: "Retrospective"
 export default async function LandingPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ v2?: string; legacy?: string }>;
+  searchParams?: Promise<{ v2?: string; legacy?: string; whiteboard?: string }>;
 }) {
   const params = await searchParams;
   const showLegacy = params?.legacy === "1"; // the preserved prior landing
   const previewV2 = params?.v2 === "1"; // explicit V2 preview alias
+  const whiteboard = params?.whiteboard === "1"; // V2 on the tldraw dot-grid surface
 
   // Logged-in visitors skip the marketing surface and drop straight on /app
   // (Supabase SSR persists the session cookie, so this "remembers" them across
   // restarts). Explicit ?legacy=1 / ?v2=1 previews bypass the redirect so
   // either surface stays viewable while signed in.
-  if (!showLegacy && !previewV2) {
+  if (!showLegacy && !previewV2 && !whiteboard) {
     const user = await getAuthUser();
     if (user) {
       redirect("/app");
@@ -116,13 +121,19 @@ export default async function LandingPage({
         name: V2_LABEL_OVERRIDES[t.id] ?? t.name,
         tagline: t.tagline,
         category: t.category,
-        // Black & white: feed the card ink instead of the per-template color.
-        // One value drives every card visual (glyph, chips, Generates icons,
-        // banner, CTA). Revert to `t.accent_color` to bring the colors back.
+        // Mostly black & white: ink drives the glyph, chips, Generates, and
+        // the category pill — the monochrome card.
         accent: "#0B0B0C",
+        // ...but the banner wash keeps the real per-template color.
+        bannerAccent: t.accent_color,
       };
     }).filter((c): c is LandingCard => c !== null);
-    return <LandingV2 cards={cards} />;
+    return (
+      <LandingV2Mount
+        cards={cards}
+        surface={whiteboard ? "whiteboard" : "flat"}
+      />
+    );
   }
 
   // ── Preserved prior landing (/?legacy=1) ──
@@ -258,7 +269,7 @@ export default async function LandingPage({
       </main>
 
       <footer className="border-t border-gray-200/60 px-6 py-6 text-center text-sm text-gray-400">
-        InterAxis &mdash; Your Intelligence System
+        akiboe &mdash; Your Intelligence System
       </footer>
 
       <AuthModal />

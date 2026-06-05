@@ -29,6 +29,8 @@ import type {
   RecommendationResult,
   FeatureCardsResult,
   FeatureCard,
+  FeatureMechanismsResult,
+  FeatureMechanism,
   ValidationResult,
   ValidationExperiment,
 } from "./types";
@@ -363,6 +365,64 @@ export function extractConstraintsFromEngineResult(
             priority: "high",
             text: `Must measure: ${metric} (for feature ${name})`,
             why: "feature card's own success metric",
+          });
+        }
+      }
+      return out;
+    }
+
+    case "feature_mechanisms": {
+      const r = result as FeatureMechanismsResult;
+      // Each mechanism with a real input → process → output is a MECHANISM
+      // constraint on the build. Top 3 surface so the spec doesn't get drowned.
+      const mechs = arr<FeatureMechanism>(r.mechanisms).slice(0, 3);
+      for (const m of mechs) {
+        const name = clean(m?.mechanism_name);
+        const feature = clean(m?.feature_name);
+        const trigger = clean(m?.trigger);
+        if (name && feature) {
+          push({
+            type: "mechanism",
+            priority: "high",
+            text: `Build must implement: ${name} (for ${feature})`,
+            why: trigger
+              ? `triggered by: ${trigger}`
+              : "selected mechanism for this feature",
+          });
+        }
+        // Top failure mode → evidence constraint (must validate it doesn't happen)
+        const topFailure = arr<string>(m?.failure_modes).map(clean).filter(Boolean)[0];
+        if (topFailure && name) {
+          push({
+            type: "evidence",
+            priority: "medium",
+            text: `Must validate against: ${topFailure}`,
+            why: `top failure mode for ${name}`,
+          });
+        }
+        // The mechanism's own constraints_satisfied carry forward unchanged
+        for (const c of arr<string>(m?.constraints_satisfied).slice(0, 2)) {
+          const txt = clean(c);
+          if (txt) {
+            push({
+              type: "mechanism",
+              priority: "medium",
+              text: txt,
+              why: `referenced by mechanism ${name || "(unnamed)"}`,
+            });
+          }
+        }
+      }
+      // Cross-mechanism dependencies become buildability constraints (sequence
+      // matters when shipping).
+      for (const dep of arr<string>(r.cross_mechanism_dependencies).slice(0, 2)) {
+        const txt = clean(dep);
+        if (txt) {
+          push({
+            type: "buildability",
+            priority: "medium",
+            text: `Build sequencing: ${txt}`,
+            why: "cross-mechanism dependency surfaced by the mechanism generator",
           });
         }
       }
