@@ -20,6 +20,7 @@ import {
   linkObjects,
   type ObjectRelation,
 } from "@/lib/objective-canvas/library-objects";
+import { buildSpaceContext } from "@/lib/objective-canvas/build-space-context";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -125,30 +126,19 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const db = supabase as any;
   const userId = user.id; // captured — narrowing doesn't reach the closure below
 
-  // Objective text: explicit override, else the space's own text.
+  // Objective text: explicit override, else the shared space context (which
+  // prefers the RE-FRAMED sharpened prompt — the user's resolved objective).
   let objective = "";
   try {
     const b = (await req.json()) as { objective?: unknown };
     if (typeof b?.objective === "string") objective = b.objective.trim();
   } catch {
-    /* no body — fall back to the space text */
+    /* no body — fall back to the space context */
   }
-  if (!objective) {
-    const { data: space } = await db
-      .from("spaces")
-      .select("description, input_text, primary_goal, name")
-      .eq("id", spaceId)
-      .maybeSingle();
-    objective = (
-      space?.primary_goal ||
-      space?.description ||
-      space?.input_text ||
-      space?.name ||
-      ""
-    )
-      .toString()
-      .trim();
-  }
+  // Shared context: re-framed objective + glossary + resolved intent, so the
+  // decomposition reasons WITH the user's taste — not raw, stale space text.
+  const ctx = await buildSpaceContext(db, spaceId);
+  if (!objective) objective = ctx.objective;
   if (objective.length < 4) {
     return NextResponse.json({ error: "No objective to decompose." }, { status: 400 });
   }
@@ -157,7 +147,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   try {
     result = await llmJSON({
       system: SYSTEM,
-      user: objective.slice(0, 4000),
+      user: ctx.preamble
+        ? `${ctx.preamble}\n\n---\n\nDecompose THIS objective into Feature/Variable cards:\n${objective.slice(0, 4000)}`
+        : objective.slice(0, 4000),
       model: "gpt-4o",
       maxTokens: 2000,
       temperature: 0.4,

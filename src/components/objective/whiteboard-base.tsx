@@ -116,6 +116,8 @@ import {
   FORGE_STATE_EVENT,
 } from "./canvas-interactions/powerup-rail";
 import { CollapsibleStylePanel } from "./canvas-interactions/collapsible-style-panel";
+import { ArtifactDock } from "./canvas-interactions/artifact-dock";
+import { NotebookMount } from "./canvas-interactions/notebook-panel";
 import type { TLComponents, TLPageId } from "tldraw";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 import { useFocusMode } from "@/components/synergy/focus-mode/use-focus-mode";
@@ -146,8 +148,10 @@ import {
   DEPLOY_IMAGE_CARD_EVENT,
   type ImageCardDetail,
   DEPLOY_VOICE_NOTE_EVENT,
+  UPDATE_VOICE_ANALYSIS_EVENT,
   DEPLOY_JOURNAL_EVENT,
   type VoiceNoteCardDetail,
+  type VoiceNoteAnalysisDetail,
   type JournalCardDetail,
   SEED_CHATBOX_EVENT,
   SEED_OBJECTIVE_EVENT,
@@ -163,6 +167,7 @@ import {
   clearLegacySharpeningArrows,
 } from "./canvas-interactions/prompt-sharpening-board";
 import { SharpeningConnectorsOverlay } from "./canvas-interactions/sharpening-connectors";
+import { SpecForgeConnectorsOverlay } from "./canvas-interactions/specforge-connectors";
 import { CommentStrandsOverlay } from "./canvas-interactions/comment-strands";
 import {
   deployChatboxOnBoard,
@@ -173,6 +178,7 @@ import {
 import { deployImageCardOnBoard } from "./canvas-interactions/objective-image-board";
 import {
   deployVoiceNoteOnBoard,
+  updateVoiceNoteAnalysisOnBoard,
   deployJournalOnBoard,
 } from "./canvas-interactions/voice-journal-board";
 import { CUSTOM_SHAPE_UTILS } from "./board-shape-utils";
@@ -639,12 +645,15 @@ const BOARD_COMPONENTS: TLComponents = {
   PageMenu: null,
   // Custom flow-builder connectors (bezier + handles) for the sharpening
   // graph AND comment strands (soft beziers from comment-card to its
-  // target shapes). Both derive live from card positions; tldraw's
-  // InFrontOfTheCanvas slot only takes one component, so we compose.
-  InFrontOfTheCanvas: function ComposedConnectors() {
+  // target shapes). Both derive live from card positions. Mounted in the
+  // OnTheCanvas slot so they render BEHIND the shapes (on the board
+  // surface) — InFrontOfTheCanvas painted them over any card you opened.
+  // The slot takes one component, so we compose both.
+  OnTheCanvas: function ComposedConnectors() {
     return (
       <>
         <SharpeningConnectorsOverlay />
+        <SpecForgeConnectorsOverlay />
         <CommentStrandsOverlay />
       </>
     );
@@ -1391,6 +1400,15 @@ export function WhiteboardBase({
       );
     }
 
+    function onUpdateVoiceAnalysis(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      updateVoiceNoteAnalysisOnBoard(
+        editor,
+        (e as CustomEvent<VoiceNoteAnalysisDetail>).detail,
+      );
+    }
+
     function onDeployJournal(e: Event) {
       const editor = editorRef.current;
       if (!editor) return;
@@ -1465,6 +1483,7 @@ export function WhiteboardBase({
     window.addEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguityB);
     window.addEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCardB);
     window.addEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNoteB);
+    window.addEventListener(UPDATE_VOICE_ANALYSIS_EVENT, onUpdateVoiceAnalysis);
     window.addEventListener(DEPLOY_JOURNAL_EVENT, onDeployJournalB);
     window.addEventListener(SEED_CHATBOX_EVENT, onSeedChatboxB);
     window.addEventListener(SEED_OBJECTIVE_EVENT, onSeedObjectiveB);
@@ -1479,6 +1498,7 @@ export function WhiteboardBase({
       window.removeEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguityB);
       window.removeEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCardB);
       window.removeEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNoteB);
+      window.removeEventListener(UPDATE_VOICE_ANALYSIS_EVENT, onUpdateVoiceAnalysis);
       window.removeEventListener(DEPLOY_JOURNAL_EVENT, onDeployJournalB);
       window.removeEventListener(SEED_CHATBOX_EVENT, onSeedChatboxB);
       window.removeEventListener(SEED_OBJECTIVE_EVENT, onSeedObjectiveB);
@@ -2761,6 +2781,14 @@ function BoardOverlay({
       {/* Powerups + Artifacts rail — the persistent right-edge home for every
           AI op (run on the live selection) + the finished tech-specs/artifacts. */}
       <PowerupRail spaceId={spaceId} editor={editor} />
+      {/* Artifact Dock — left-edge gradient circles for TERMINAL deliverables
+          (Prototype, Notebook, …). Select objects → tap a circle → the engine
+          runs plan→create and drops a persistent artifact. */}
+      <ArtifactDock spaceId={spaceId} editor={editor} />
+      {/* Notebook — the editable on-canvas Notebook panel. Opens on
+          OPEN_NOTEBOOK_EVENT (journal-card "Open" + the Notebook dock engine);
+          block-model editing, board stays live behind. */}
+      <NotebookMount spaceId={spaceId} />
       {/* AI Chat — bottom-right card overlay. Opens on OPEN_BOARD_CHAT_EVENT
           (dispatched by the toolbox sphere's "AI Chat" pill). Reads the live
           board snapshot every send; cross-board scope is a header toggle. */}

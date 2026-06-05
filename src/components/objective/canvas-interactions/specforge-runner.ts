@@ -15,7 +15,6 @@ import {
   createShapeId,
   type Editor,
   type TLShapeId,
-  type TLArrowShape,
   type TLShapePartial,
 } from "tldraw";
 import type { SpecForgeCardShape } from "../shapes/specforge-card-shape";
@@ -47,6 +46,7 @@ import {
   extractConstraintsFromEngineResult,
   summarizeConstraintsForContext,
 } from "@/lib/objective-canvas/specforge/constraints";
+import { reserveSpace } from "./placement";
 
 export interface SpecForgeProgress {
   phase: "running" | "done" | "error";
@@ -154,6 +154,24 @@ export async function runSpecForge(
     anchorMidX = vp.center.x;
     cursorY = vp.center.y;
   }
+
+  // Reserve a clear column for the WHOLE spec up front (hybrid push-then-yield):
+  // the spine streams in engine-by-engine, so without an up-front reservation a
+  // later stage could land on a neighbour that the first stage didn't overlap.
+  // The exact height isn't known until cards return, so estimate generously from
+  // the chain length + the post-chain cards (depth, constraints, quality, MVP
+  // row, hero); over-reserving just leaves extra air below. The source idea is
+  // ignored so it's never pushed by its own spec.
+  const estH = (SPECFORGE_CHAIN.length + 4) * (200 + ROW_GAP);
+  const ignore = new Set<TLShapeId>();
+  if (target.shapeId) ignore.add(target.shapeId as TLShapeId);
+  const spot = reserveSpace(
+    editor,
+    { w: HERO_W, h: estH },
+    { anchorMidX, preferredTop: cursorY, gap: ANCHOR_GAP, ignore },
+  );
+  anchorMidX = spot.x + HERO_W / 2;
+  cursorY = spot.y;
 
   const total = SPECFORGE_CHAIN.length;
   const contextParts: string[] = [];
@@ -391,10 +409,13 @@ interface PlacedCard {
   layout: SpecForgeCard["layout"];
 }
 
-/** Walk the placed cards in causal order and draw black node-connectors: a
- *  spine link between consecutive stacked cards, a FORK from the card above
- *  the MVP row to each MVP, and a CONVERGE from each MVP to the recommendation
- *  that follows. Same connector grammar used across the canvas graphs. */
+/** Walk the placed cards in causal order, compute the edges (spine,
+ *  fork-to-MVPs, converge-from-MVPs), and PERSIST each child's parent IDs
+ *  in shape meta. The bezier overlay (specforge-connectors.tsx) reads
+ *  meta.specforgeParents and renders smooth cubic-bezier curves through
+ *  the vertical gap between cards — replacing the old tldraw straight-
+ *  line arrows that cut diagonally through neighbor cards. Same connector
+ *  grammar as the sharpening graph. */
 function connectSpecCards(
   editor: Editor,
   placed: PlacedCard[],
@@ -402,10 +423,11 @@ function connectSpecCards(
 ): void {
   let prevStacked: TLShapeId | null = null;
   let pendingDiverge: TLShapeId[] = [];
-  const arrowIds: TLShapeId[] = [];
+  const parentsByChild = new Map<TLShapeId, TLShapeId[]>();
   const link = (from: TLShapeId, to: TLShapeId) => {
-    const a = connectCards(editor, from, to);
-    if (a) arrowIds.push(a);
+    const list = parentsByChild.get(to) ?? [];
+    list.push(from);
+    parentsByChild.set(to, list);
   };
 
   // Branch the whole spec from the originating idea (the post-it the user
@@ -427,65 +449,24 @@ function connectSpecCards(
     }
   }
 
-  // Keep connectors beneath the cards so they never cover content.
-  if (arrowIds.length > 0) {
-    try {
-      editor.sendToBack(arrowIds);
-    } catch {
-      /* z-order is cosmetic — never break on it */
-    }
-  }
-}
-
-/** One black, arrowhead-less connector bound bottom-of-`from` → top-of-`to`. */
-function connectCards(
-  editor: Editor,
-  fromId: TLShapeId,
-  toId: TLShapeId,
-): TLShapeId | null {
+  // Persist parent IDs in meta so the SVG overlay can read them live and
+  // re-render whenever a card moves. Soft-fail on a per-card basis.
   try {
-    const arrowId = createShapeId();
-    const arrow: TLShapePartial<TLArrowShape> = {
-      id: arrowId,
-      type: "arrow",
-      props: {
-        color: "black",
-        size: "s",
-        dash: "solid",
-        arrowheadStart: "none",
-        arrowheadEnd: "none",
-      },
-      meta: { specforge: true, connector: true },
-    };
-    editor.createShapes([arrow]);
-    editor.createBindings([
-      {
-        fromId: arrowId,
-        toId: fromId,
-        type: "arrow",
-        props: {
-          terminal: "start",
-          normalizedAnchor: { x: 0.5, y: 1 },
-          isExact: false,
-          isPrecise: false,
+    const updates: TLShapePartial<SpecForgeCardShape>[] = [];
+    for (const [to, fromIds] of parentsByChild) {
+      const shape = editor.getShape(to);
+      if (!shape || shape.type !== "specforge-card") continue;
+      updates.push({
+        id: to,
+        type: "specforge-card",
+        meta: {
+          ...shape.meta,
+          specforgeParents: fromIds.map((id) => String(id)),
         },
-        meta: {},
-      },
-      {
-        fromId: arrowId,
-        toId: toId,
-        type: "arrow",
-        props: {
-          terminal: "end",
-          normalizedAnchor: { x: 0.5, y: 0 },
-          isExact: false,
-          isPrecise: false,
-        },
-        meta: {},
-      },
-    ]);
-    return arrowId;
+      });
+    }
+    if (updates.length) editor.updateShapes(updates);
   } catch {
-    return null;
+    /* best-effort — connectors are cosmetic, never break the chain */
   }
 }

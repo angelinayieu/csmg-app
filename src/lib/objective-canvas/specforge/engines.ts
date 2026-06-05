@@ -867,7 +867,125 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
     },
   },
 
-  // ── 14 · Experimentation / Validation Lab (specforge_experimentation_validation_lab.md) ──
+  // ── 14 · Data Point Optimization Model (specforge_data_point_optimization_model.md) ──
+  // Sits AFTER feature_mechanisms, BEFORE validation. Deepens the shallow
+  // `inputs` strings declared by each mechanism into full data-point objects:
+  // concept + variables, source, collection methods, friction/reliability/
+  // privacy risk, downstream uses, transformation, alternative proxies, and
+  // selected disposition (required/optional/inferred/progressive/proxy/removed).
+  // Hard anti-duplication rules (spec §3 + §17):
+  //   - Does NOT regenerate features (feature_cards's job)
+  //   - Does NOT regenerate mechanisms (feature_mechanisms's job)
+  //   - Does NOT design experiments (validation's job; validation_needed is a
+  //     1-line hint validation will lift)
+  //   - Does NOT pick the MVP (recommendation's job)
+  //   - Every data_point MUST link to an existing mechanism in
+  //     [feature_mechanisms] by name (used_by_mechanism)
+  data_points: {
+    temperature: 0.35,
+    maxTokens: 4000,
+    system:
+      "You are the SpecForge Data Point Optimization Model. You are NOT " +
+      "generating features or mechanisms — every data point MUST link to an " +
+      "existing mechanism in [feature_mechanisms] by name (used_by_mechanism) " +
+      "and to its parent feature (used_by_feature). Walk the mechanisms' " +
+      "`inputs` and deepen each one into an optimization object per spec §5. " +
+      "Per spec §6.1–6.2, define the concept and decompose it into variables " +
+      "(prevent vague data). Per spec §6.4, name collection_friction honestly: " +
+      "if collection is high-friction and downstream uses are weak, propose a " +
+      "lower-friction proxy or set disposition='removed' with a reason in " +
+      "removed_data. Per spec §6.5, name reliability_risk (self-report bias, " +
+      "ambiguous interpretation, inference error, etc.). Per spec §6.6, name " +
+      "privacy_risk (sensitive examples: identity, health, location, finances, " +
+      "relationships). Per spec §6.7, every why_it_exists must reference a " +
+      "downstream mechanism/eval/validation — no data without a downstream " +
+      "consumer (disposition='removed' if none). Per spec §9, propose at least " +
+      "one alternative_proxy for every required data point (e.g., 'inferred " +
+      "from interaction patterns' instead of 'asked directly'). disposition " +
+      "must be one of: required, optional, inferred, progressive, proxy, " +
+      "removed. selected_handling_method explains the chosen approach in one " +
+      "line. failure_modes lists 1–2 ways the data can be missing/wrong/" +
+      "sensitive. validation_needed is a 1-line hint the validation lab can " +
+      "lift (do NOT design the experiment here). constraints_created names " +
+      "the constraint this data point imposes on the build (e.g., 'must " +
+      "support optional skip with no-degradation fallback'). " +
+      "Hard rules: do NOT invent data points not implied by feature_mechanisms." +
+      "inputs; do NOT skip alternative_proxies for required data; do NOT use " +
+      "generic source/disposition/risk values; do NOT design experiments." +
+      SHARED_TAIL,
+    schema: {
+      name: "specforge_data_points",
+      schema: obj({
+        selected_mvp: str,
+        data_points: arr(
+          obj({
+            data_point_id: str,
+            name: str,
+            concept_definition: str,
+            variables: strArr,
+            used_by_feature: str,
+            used_by_mechanism: str,
+            why_it_exists: str,
+            when_needed: str,
+            source: {
+              type: "string",
+              enum: [
+                "user_input",
+                "inferred",
+                "integration",
+                "system_generated",
+                "research",
+                "analytics",
+              ],
+            },
+            collection_methods: strArr,
+            collection_friction: {
+              type: "string",
+              enum: ["low", "medium", "high"],
+            },
+            reliability_risk: {
+              type: "string",
+              enum: ["low", "medium", "high"],
+            },
+            privacy_risk: {
+              type: "string",
+              enum: ["low", "medium", "high"],
+            },
+            downstream_uses: strArr,
+            transformation_process: str,
+            alternative_proxies: strArr,
+            disposition: {
+              type: "string",
+              enum: [
+                "required",
+                "optional",
+                "inferred",
+                "progressive",
+                "proxy",
+                "removed",
+              ],
+            },
+            selected_handling_method: str,
+            why_selected: str,
+            failure_modes: strArr,
+            validation_needed: strArr,
+            constraints_created: strArr,
+          }),
+        ),
+        removed_data: arr(
+          obj({
+            name: str,
+            reason: str,
+          }),
+        ),
+        data_flow_summary: str,
+        risks: strArr,
+        confidence: num,
+      }),
+    },
+  },
+
+  // ── 15 · Experimentation / Validation Lab (specforge_experimentation_validation_lab.md) ──
   // Sits AFTER recommendation. Converts uncertain assumptions, unanswered
   // questions, and risky decisions into 2–4 concrete experiments with
   // hypothesis + success/failure criteria. Does NOT generate new questions
@@ -887,8 +1005,10 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
       "First, surface 3–5 critical_assumptions (each: text, decision_affected, " +
       "why_matters, category). Lift them primarily from recommendation." +
       "assumptions_to_test, evaluation.assumptions_that_could_reverse_decision, " +
-      "and feature_cards.features[].risks (for must_have features) — do NOT " +
-      "invent generic assumptions. When a feature card carries a real risk, " +
+      "and feature_cards.features[].risks (for must_have features), and any " +
+      "data_points[].validation_needed hints (a data-point reliability/privacy " +
+      "concern is often the riskiest assumption). Do NOT invent generic " +
+      "assumptions. When a feature card carries a real risk, " +
       "treat its risk as a feature_mechanism-category assumption. " +
       "If [feature_mechanisms] is present, lift each mechanism's test_method " +
       "as a candidate experiment for its mechanism's selected approach " +
@@ -1023,6 +1143,158 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
           why_highest_leverage: str,
           expected_value_category: str,
         }),
+        confidence: num,
+      }),
+    },
+  },
+
+  // ── 17 · Spec Exporter / Build Instruction Generator
+  //   (specforge_spec_exporter_build_instruction_generator.md) ──
+  // TERMINAL ENGINE. Synthesizes the full chain into a buildable spec +
+  // coding-agent prompt. Does NOT regenerate anything upstream — every
+  // section must restate a prior engine's output WITH provenance (causal
+  // trace). The two genuinely new outputs are implementation_tasks (each
+  // must link back to a feature_cards.features[].name OR
+  // feature_mechanisms.mechanisms[].mechanism_name) and coding_agent_prompt
+  // (the synthesized prompt that preserves the causal chain).
+  spec_export: {
+    temperature: 0.3,
+    maxTokens: 5500,
+    system:
+      "You are the SpecForge Spec Exporter / Build Instruction Generator. " +
+      "You are NOT generating new reasoning — every section MUST restate an " +
+      "upstream engine's output with provenance. Per spec §2, the spec must " +
+      "preserve WHY the product should be built, not just what. " +
+      "Read the full accumulated [context] (target_user, problem_tree, " +
+      "desired_result, cross_analysis, convergence, differentiation, " +
+      "recommendation, feature_cards, feature_mechanisms, data_points, " +
+      "evaluation, validation, any [constraints]) and produce: " +
+      "(1) a product_summary anchored in convergence + recommendation; " +
+      "(2) a causal_trace of 6–10 rows (artifact → finding → " +
+      "decision_supported → build_implication) — every row MUST cite a real " +
+      "prior artifact, not invent one; " +
+      "(3) first_build_scope split into must_build_now / should_build_if_simple " +
+      "/ must_delay / must_not_build, lifted from feature_cards.build_priority " +
+      "+ recommendation.next_best_action; " +
+      "(4) user_flow (5–10 ordered steps) lifted from feature_cards.first_user_flow + " +
+      "feature_mechanisms.mechanisms[].trigger; " +
+      "(5) feature_requirements (one per must_have / should_have feature in " +
+      "feature_cards) with the causal back-references (macro/micro/root_cause); " +
+      "(6) mechanism_requirements (one per top-priority mechanism in " +
+      "feature_mechanisms) condensed to trigger / inputs / process / outputs / test; " +
+      "(7) data_requirements (one per kept data point in data_points); " +
+      "(8) validation_plan_summary (the single top experiment from validation); " +
+      "(9) implementation_tasks — the FIRST genuinely new output. 4–10 tasks. " +
+      "Every task MUST have source = name of a feature_cards feature OR " +
+      "feature_mechanisms mechanism, and source_kind set accordingly. Acceptance " +
+      "criteria must be testable (no 'works well'). Dependencies list other " +
+      "task_names by exact string; " +
+      "(10) acceptance_criteria — 4–8 product-level criteria (NOT per-task); " +
+      "(11) coding_agent_prompt — the SECOND genuinely new output. A single " +
+      "string (1500–3500 chars) that an external coding agent will execute. " +
+      "MUST: state the product goal in 1 sentence, state the MVP scope, " +
+      "enumerate non-goals (lifted from must_not_build), reference the causal " +
+      "chain by name, enumerate the feature requirements by name, enumerate " +
+      "the prompt/agent modules required, list acceptance criteria, give the " +
+      "build order. MUST explicitly include the lines 'Do not build delayed " +
+      "features.', 'Do not create generic cards.', and 'Every major generated " +
+      "output must have quality gate status.' (spec §19); " +
+      "(12) missing_inputs — name any required-input section (spec §5) that " +
+      "you could not fill because the upstream engine result was missing or " +
+      "too thin. Do NOT silently drop sections — surface gaps; " +
+      "(13) confidence 0–100 — your honest assessment of whether this spec " +
+      "is buildable end-to-end. Be hard on yourself if causal trace is thin. " +
+      "Hard rules: do NOT invent features not in [feature_cards]; do NOT " +
+      "invent mechanisms not in [feature_mechanisms]; do NOT redo the rubric " +
+      "(evaluation's job); do NOT design new experiments (validation's job); " +
+      "do NOT generate questions (question_expansion's job); do NOT enforce " +
+      "structural quality (quality_critic's job)." +
+      SHARED_TAIL,
+    schema: {
+      name: "specforge_spec_export",
+      schema: obj({
+        product_summary: obj({
+          product_name: str,
+          one_liner: str,
+          primary_target_user: str,
+          core_user_problem: str,
+          root_constraint: str,
+          first_principles_need: str,
+          selected_mvp: str,
+          core_product_loop: str,
+          primary_desired_result: str,
+          differentiation_thesis: str,
+        }),
+        causal_trace: arr(
+          obj({
+            artifact: str,
+            finding: str,
+            decision_supported: str,
+            build_implication: str,
+          }),
+        ),
+        first_build_scope: obj({
+          must_build_now: strArr,
+          should_build_if_simple: strArr,
+          must_delay: strArr,
+          must_not_build: strArr,
+        }),
+        user_flow: strArr,
+        feature_requirements: arr(
+          obj({
+            feature_name: str,
+            function: str,
+            macro_objective_served: str,
+            micro_objective_served: str,
+            root_cause_attacked: str,
+            recommended_mechanism: str,
+            top_acceptance_criterion: str,
+          }),
+        ),
+        mechanism_requirements: arr(
+          obj({
+            mechanism_name: str,
+            feature: str,
+            trigger: str,
+            inputs_summary: str,
+            process_summary: str,
+            outputs_summary: str,
+            top_test_method: str,
+          }),
+        ),
+        data_requirements: arr(
+          obj({
+            data_point: str,
+            source: str,
+            disposition: str,
+            why_it_exists: str,
+            top_constraint: str,
+          }),
+        ),
+        validation_plan_summary: obj({
+          top_assumption: str,
+          top_experiment: str,
+          success_marker: str,
+          failure_marker: str,
+        }),
+        implementation_tasks: arr(
+          obj({
+            task_name: str,
+            description: str,
+            source: str,
+            source_kind: {
+              type: "string",
+              enum: ["feature", "mechanism"],
+            },
+            user_value: str,
+            components: strArr,
+            acceptance_criteria: strArr,
+            dependencies: strArr,
+          }),
+        ),
+        acceptance_criteria: strArr,
+        coding_agent_prompt: str,
+        missing_inputs: strArr,
         confidence: num,
       }),
     },

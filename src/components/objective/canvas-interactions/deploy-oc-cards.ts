@@ -21,7 +21,7 @@ import {
 } from "tldraw";
 import type { OcCardShape, OcCardKind } from "../shapes/oc-card-shape";
 import { layoutSystemsGraph } from "@/lib/objective-canvas/layout-systems-graph";
-import { lowestClearTop } from "./placement";
+import { reserveSpace } from "./placement";
 
 /** Fire to ask the board to decompose the current objective into cards. */
 export const DECOMPOSE_INTO_CARDS_EVENT = "objective-board:decompose-into-cards";
@@ -82,9 +82,7 @@ export function deployOcCards(
     { cardW: CARD_W, cardH: CARD_H, startX: 0, startY: 0 },
   );
 
-  // Anchor the cluster horizontally centered on the viewport.
   const vp = editor.getViewportPageBounds();
-  const anchorX = vp.center.x - layout.sinkX / 2;
 
   // Baseline: drop the cluster BELOW the objective + sharpening head cards so it
   // reads as a downstream layer (not piling on top of them).
@@ -101,16 +99,20 @@ export function deployOcCards(
   const preferredTop =
     headBottoms.length > 0 ? Math.max(...headBottoms) + GAP_BELOW : vp.center.y;
 
-  // STRICT no-overlap rule: never spawn on top of an earlier generation (or any
-  // shape) sharing this cluster's horizontal span — drop below the lowest one
-  // with a margin. Lane labels sit a touch left of the cards, so pad the span's
-  // left edge; sinkX is one layer-pitch past the rightmost card, covering it.
-  const anchorY = lowestClearTop(
+  // Hybrid push-then-yield: reserve a clear region for the WHOLE systems graph,
+  // pushing earlier generations aside or relocating the cluster — never on top.
+  // sinkX is one layer-pitch past the rightmost card; pad the left for the
+  // swimlane labels (they sit ~8px left of the cards) and use the graph's full
+  // height so the reservation covers every lane.
+  const graphH =
+    Math.max(CARD_H, ...[...layout.pos.values()].map((p) => p.y + CARD_H));
+  const spot = reserveSpace(
     editor,
-    { left: anchorX - 16, right: anchorX + layout.sinkX },
-    preferredTop,
-    GAP_BELOW,
+    { w: layout.sinkX + 16, h: graphH },
+    { anchorMidX: vp.center.x, preferredTop, gap: GAP_BELOW },
   );
+  const anchorX = spot.x + 8;
+  const anchorY = spot.y;
 
   const idByObject = new Map<string, TLShapeId>();
   const cardIds: TLShapeId[] = [];

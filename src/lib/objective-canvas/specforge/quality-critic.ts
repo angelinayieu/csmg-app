@@ -25,12 +25,19 @@ import type {
   FeatureCard,
   FeatureMechanismsResult,
   FeatureMechanism,
+  DataPointsResult,
+  DataPoint,
   ValidationResult,
   ValidationExperiment,
   ValidationAssumption,
   DeepeningResult,
   DeepeningBaseline,
   DeepeningUncertainty,
+  SpecExportResult,
+  SpecExportImplementationTask,
+  SpecExportCausalTraceRow,
+  SpecExportFeatureRequirement,
+  SpecExportMechanismRequirement,
 } from "./types";
 
 export type QualitySeverity = "critical" | "high" | "medium" | "low";
@@ -496,6 +503,50 @@ export function evaluateSpecForgeQuality(
       return finalize(engine, issues, repaired, ctx);
     }
 
+    case "data_points": {
+      const r = result as DataPointsResult;
+      const pts = arr<DataPoint>(r.data_points);
+      const kept = pts.filter((p) => p && String(p?.disposition) !== "removed");
+      // Critical: no data points means the engine effectively didn't run.
+      add(issues, !pts.length, "critical", "downstream usefulness", "no data points produced", "extract a data point from each unique input across feature_mechanisms.mechanisms[].inputs");
+      // Critical: every data point must trace back to a mechanism (spec §3 +
+      // anti-duplication rule in the prompt).
+      const untraced = pts.filter((p) => !clean(p?.used_by_mechanism)).length;
+      add(issues, untraced > 0, "critical", "downstream usefulness", `${untraced} data point${untraced === 1 ? "" : "s"} not traced to a mechanism`, "set used_by_mechanism to a mechanism name from feature_mechanisms — orphan data is forbidden");
+      // High: every why_it_exists must reference a downstream consumer (spec §6.7).
+      const missingWhy = pts.filter((p) => !clean(p?.why_it_exists)).length;
+      add(issues, missingWhy > 0, "high", "evidence honesty", `${missingWhy} data point${missingWhy === 1 ? "" : "s"} missing why_it_exists`, "spec §6.7: no data without a stated downstream consumer (or set disposition='removed')");
+      // High: every REQUIRED data point must propose alternative_proxies (spec §9).
+      const requiredWithoutProxies = pts.filter(
+        (p) =>
+          String(p?.disposition) === "required" &&
+          arr<string>(p?.alternative_proxies).filter(Boolean).length < 1,
+      ).length;
+      add(issues, requiredWithoutProxies > 0, "high", "downstream usefulness", `${requiredWithoutProxies} required data point${requiredWithoutProxies === 1 ? "" : "s"} have no alternative_proxies`, "spec §9: every required data point must consider a lower-friction proxy — name at least one");
+      // High: variables[] must decompose the concept (spec §6.2 prevents vague data).
+      const noVariables = kept.filter((p) => arr<string>(p?.variables).filter(Boolean).length < 2).length;
+      add(issues, noVariables > 0, "high", "downstream usefulness", `${noVariables} data point${noVariables === 1 ? "" : "s"} have <2 decomposed variables`, "spec §6.2: a single-variable concept is usually too vague — decompose into 2+ named variables");
+      // High: high-friction data must justify itself with strong downstream uses (spec §6.4).
+      const highFrictionThin = kept.filter(
+        (p) =>
+          String(p?.collection_friction) === "high" &&
+          arr<string>(p?.downstream_uses).filter(Boolean).length < 2,
+      ).length;
+      add(issues, highFrictionThin > 0, "high", "constraint satisfaction", `${highFrictionThin} high-friction data point${highFrictionThin === 1 ? "" : "s"} have <2 downstream uses`, "spec §6.4 rule: do not collect high-friction data unless it strongly improves downstream output — add downstream uses or set disposition to proxy/removed");
+      // Medium: every data point should name failure_modes (spec §6.10).
+      const noFailures = kept.filter((p) => arr<string>(p?.failure_modes).filter(Boolean).length < 1).length;
+      add(issues, noFailures > 0, "medium", "uncertainty visibility", `${noFailures} data point${noFailures === 1 ? "" : "s"} have no failure_modes`, "spec §6.10: name 1–2 ways the data can be missing/wrong/sensitive");
+      // Medium: every data point should impose at least one downstream constraint.
+      const noConstraints = kept.filter((p) => arr<string>(p?.constraints_created).filter(Boolean).length < 1).length;
+      add(issues, noConstraints > 0, "medium", "constraint satisfaction", `${noConstraints} data point${noConstraints === 1 ? "" : "s"} create no downstream constraint`, "name the constraint each data point imposes on the build (e.g., 'must support optional skip with no-degradation fallback')");
+      // Medium: data_flow_summary must exist for the spec exporter.
+      add(issues, !clean(r.data_flow_summary), "medium", "downstream usefulness", "missing data_flow_summary", "write a 1–2 sentence upstream → collection → transform → mechanism → downstream summary");
+      add(issues, !Number.isFinite(Number(r.confidence)), "medium", "evidence honesty", "missing confidence", "state confidence 0–100 honestly on this data plan");
+
+      const ctx = kept.slice(0, 3).map((p) => clean(p?.name)).filter(Boolean);
+      return finalize(engine, issues, repaired, ctx);
+    }
+
     case "validation": {
       const r = result as ValidationResult;
       const assumptions = arr<ValidationAssumption>(r.critical_assumptions);
@@ -607,6 +658,114 @@ export function evaluateSpecForgeQuality(
 
       // Deepening doesn't pass new constraints downstream — its output is the
       // iteration snapshot itself. Quality strip stays empty.
+      return finalize(engine, issues, repaired, []);
+    }
+
+    case "spec_export": {
+      // Per specforge_spec_exporter_build_instruction_generator.md §20:
+      // a spec FAILS if any of {causal trace, target user, root constraint,
+      // desired result, differentiation thesis, MVP direction, feature
+      // cards traceable, mechanisms, data model, quality gates, validation,
+      // build tasks scoped, delayed scope explicit, acceptance criteria}
+      // is missing or vague. We enforce the structural slice deterministically.
+      const r = result as SpecExportResult;
+      const summary = r.product_summary ?? ({} as SpecExportResult["product_summary"]);
+      const trace = arr<SpecExportCausalTraceRow>(r.causal_trace);
+      const scope = r.first_build_scope ?? ({} as SpecExportResult["first_build_scope"]);
+      const features = arr<SpecExportFeatureRequirement>(r.feature_requirements);
+      const mechanisms = arr<SpecExportMechanismRequirement>(r.mechanism_requirements);
+      const tasks = arr<SpecExportImplementationTask>(r.implementation_tasks);
+      const acceptance = arr<string>(r.acceptance_criteria);
+      const userFlow = arr<string>(r.user_flow);
+
+      // §20 critical anchors — these must exist or the spec is unbuildable.
+      add(issues, !clean(summary?.primary_target_user), "critical", "downstream usefulness", "spec missing primary_target_user", "lift it from target_user.primary_segment");
+      add(issues, !clean(summary?.root_constraint), "critical", "root constraint alignment", "spec missing root_constraint", "lift it from convergence.root_constraint");
+      add(issues, !clean(summary?.primary_desired_result), "critical", "downstream usefulness", "spec missing primary_desired_result", "lift it from desired_result.functional_result");
+      add(issues, !clean(summary?.differentiation_thesis), "critical", "differentiation defensibility", "spec missing differentiation_thesis", "lift it from differentiation.differentiation_thesis");
+      add(issues, !clean(summary?.selected_mvp), "critical", "downstream usefulness", "spec missing selected_mvp", "lift it from recommendation.recommendation");
+      add(issues, trace.length < 6, "critical", "downstream usefulness", `causal_trace has only ${trace.length} row(s) (need 6+)`, "restate target_user, root_constraint, desired_result, differentiation, MVP, feature_cards, validation as distinct trace rows");
+
+      // §20 high — provenance + traceability rules.
+      const tracelessTraceRows = trace.filter(
+        (t) => !clean(t?.artifact) || !clean(t?.build_implication),
+      ).length;
+      add(issues, tracelessTraceRows > 0, "high", "evidence honesty", `${tracelessTraceRows} causal_trace row(s) missing artifact or build_implication`, "every trace row must cite an upstream artifact AND state the build implication it creates");
+
+      add(issues, features.length < 1, "high", "downstream usefulness", "no feature_requirements", "lift one requirement per must_have / should_have feature from feature_cards");
+      const featuresMissingLinks = features.filter(
+        (f) => !clean(f?.macro_objective_served) || !clean(f?.root_cause_attacked),
+      ).length;
+      add(issues, featuresMissingLinks > 0, "high", "downstream usefulness", `${featuresMissingLinks} feature(s) missing causal back-references`, "every feature_requirement must name macro_objective_served + root_cause_attacked (spec §12)");
+
+      add(issues, mechanisms.length < 1, "high", "downstream usefulness", "no mechanism_requirements", "lift one requirement per top-priority mechanism from feature_mechanisms");
+
+      add(issues, tasks.length < 3, "high", "buildability", `only ${tasks.length} implementation_task(s) — too thin to build from`, "decompose the must_build_now scope into 4+ concrete tasks");
+
+      // §18: every task must have provenance back to a feature or mechanism.
+      // Take feature/mechanism names case-insensitively for the membership check.
+      const featureNames = new Set(
+        features
+          .map((f) => clean(f?.feature_name).toLowerCase())
+          .filter(Boolean),
+      );
+      const mechanismNames = new Set(
+        mechanisms
+          .map((m) => clean(m?.mechanism_name).toLowerCase())
+          .filter(Boolean),
+      );
+      const orphanTasks = tasks.filter((t) => {
+        const src = clean(t?.source).toLowerCase();
+        if (!src) return true;
+        if (t?.source_kind === "feature") return !featureNames.has(src);
+        if (t?.source_kind === "mechanism") return !mechanismNames.has(src);
+        return true; // missing or invalid source_kind
+      }).length;
+      add(issues, orphanTasks > 0, "critical", "evidence honesty", `${orphanTasks} implementation_task(s) lack provenance to a feature or mechanism`, "every task's source must EXACTLY match a feature_requirements.feature_name (source_kind:feature) or mechanism_requirements.mechanism_name (source_kind:mechanism)");
+
+      const tasksMissingAcceptance = tasks.filter(
+        (t) => arr<string>(t?.acceptance_criteria).map(clean).filter(Boolean).length < 1,
+      ).length;
+      add(issues, tasksMissingAcceptance > 0, "high", "evidence honesty", `${tasksMissingAcceptance} task(s) have no testable acceptance criteria`, "name at least one testable acceptance criterion per task (no 'works well')");
+
+      // §20: first-build scope split is required.
+      const mustNow = arr<string>(scope?.must_build_now).map(clean).filter(Boolean);
+      const mustDelay = arr<string>(scope?.must_delay).map(clean).filter(Boolean);
+      add(issues, mustNow.length < 1, "high", "downstream usefulness", "first_build_scope.must_build_now is empty", "name the smallest sequence of features required to enable the first user flow");
+      add(issues, mustDelay.length < 1, "medium", "downstream usefulness", "first_build_scope.must_delay is empty", "spec §8 requires an explicit delayed scope — name features delayed past v1");
+
+      add(issues, acceptance.map(clean).filter(Boolean).length < 3, "high", "evidence honesty", "<3 product-level acceptance criteria", "name 4–8 testable product-level criteria (NOT per-task)");
+
+      add(issues, userFlow.map(clean).filter(Boolean).length < 4, "medium", "downstream usefulness", "user_flow is under-decomposed", "list 5–10 ordered steps lifted from feature_cards.first_user_flow + mechanism triggers");
+
+      // §19: the coding_agent_prompt is the synthesized export. It must
+      // include the three hard rules verbatim, and be long enough to be a
+      // real instruction (not a one-liner).
+      const prompt = clean(r.coding_agent_prompt);
+      add(issues, !prompt, "critical", "downstream usefulness", "missing coding_agent_prompt", "synthesize a single string prompt (1500+ chars) covering goal, scope, non-goals, architecture, features, build order");
+      add(issues, prompt.length > 0 && prompt.length < 600, "high", "downstream usefulness", `coding_agent_prompt is too short (${prompt.length} chars)`, "the prompt must cover goal, scope, non-goals, architecture, features, build order — at least 1500 chars");
+      const hasDoNotBuildDelayed = /do not build delayed features/i.test(prompt);
+      const hasDoNotGeneric = /do not create generic cards/i.test(prompt);
+      const hasQualityGate = /quality gate status/i.test(prompt);
+      const missingRules = [
+        !hasDoNotBuildDelayed && "'Do not build delayed features.'",
+        !hasDoNotGeneric && "'Do not create generic cards.'",
+        !hasQualityGate && "'Every major generated output must have quality gate status.'",
+      ].filter(Boolean) as string[];
+      add(issues, missingRules.length > 0, "high", "evidence honesty", `coding_agent_prompt missing ${missingRules.length} required hard rule(s)`, `include the verbatim line(s): ${missingRules.join(", ")} (spec §19)`);
+
+      // missing_inputs surfaces gaps — should not be silently empty when the
+      // spec is being graded poorly on the critical checks above.
+      const declaredMissing = arr<string>(r.missing_inputs).map(clean).filter(Boolean);
+      const hasCriticalIssue = issues.some((i) => i.severity === "critical");
+      add(issues, hasCriticalIssue && declaredMissing.length === 0, "medium", "evidence honesty", "missing_inputs is empty despite critical gaps", "per spec §5: when an upstream input is missing or too thin, list the section here rather than silently dropping it");
+
+      // §11: confidence must be honestly low when causal trace is thin.
+      const conf = Number(r.confidence);
+      add(issues, !Number.isFinite(conf), "medium", "evidence honesty", "missing build-spec confidence", "state confidence 0–100 honestly");
+      add(issues, Number.isFinite(conf) && conf >= 70 && trace.length < 8, "high", "evidence honesty", "high build-spec confidence with thin causal trace", "drop confidence below 60 until the causal trace covers 8+ artifacts");
+
+      // No new constraints from spec_export — it consumes, not produces.
       return finalize(engine, issues, repaired, []);
     }
   }

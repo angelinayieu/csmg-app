@@ -10,10 +10,14 @@
 //   objective card  ──(down)──▶  Prompt Sharpening card
 //   Prompt Sharpening card  ──(side)──▶  each forked ambiguity card
 //
-// Mirrors thread-tethers-overlay.tsx: useValue reads the shape bounds in
-// page space, and a <g> applies tldraw's camera transform so the SVG
-// aligns with the shapes at any zoom/pan. Mounted via InFrontOfTheCanvas
-// in whiteboard-base's BOARD_COMPONENTS.
+// useValue reads the shape bounds in page space and the SVG is rendered
+// directly in page coordinates. Mounted via the OnTheCanvas slot in
+// whiteboard-base's BOARD_COMPONENTS — that slot lives INSIDE the shapes
+// layer (which tldraw already camera-transforms) and BEHIND the shapes
+// themselves, so the connectors stay on the board surface and never paint
+// over a card you open. Because the parent layer is already transformed,
+// we draw paths in raw page coords (no manual camera <g>); only the
+// hairline weights are divided by the zoom so they stay screen-constant.
 
 import { useEditor, useValue, type Editor } from "tldraw";
 import type { RoomCardShape } from "../shapes/room-card-shape";
@@ -95,57 +99,53 @@ export function SharpeningConnectorsOverlay() {
     () => computeSegments(editor),
     [editor],
   );
-  const camera = useValue("sc-camera", () => editor.getCamera(), [editor]);
-  const viewport = useValue(
-    "sc-viewport",
-    () => editor.getViewportScreenBounds(),
-    [editor],
-  );
+  const scale = useValue("sc-scale", () => editor.getCamera().z, [editor]);
 
   if (segs.length === 0) return null;
-  const scale = camera.z;
 
+  // The parent OnTheCanvas layer already carries tldraw's camera transform,
+  // so the SVG anchors at page origin (0,0) with overflow visible and paths
+  // are drawn in raw page coords. Weights divide by the zoom to stay crisp.
   return (
     <svg
       aria-hidden
       style={{
         position: "absolute",
-        inset: 0,
+        left: 0,
+        top: 0,
+        width: 0,
+        height: 0,
+        overflow: "visible",
         pointerEvents: "none",
-        width: viewport.w,
-        height: viewport.h,
-        zIndex: 1, // same layering as the shipped thread-tethers overlay
       }}
     >
-      <g transform={`scale(${scale}) translate(${camera.x} ${camera.y})`}>
-        {segs.map((s) => (
-          <g key={s.id}>
-            <path
-              d={s.d}
-              fill="none"
-              stroke={STROKE}
-              strokeWidth={1.75 / scale}
-              strokeLinecap="round"
-            />
-            <circle
-              cx={s.from.x}
-              cy={s.from.y}
-              r={3.5 / scale}
-              fill="#ffffff"
-              stroke={HANDLE_RING}
-              strokeWidth={1.5 / scale}
-            />
-            <circle
-              cx={s.to.x}
-              cy={s.to.y}
-              r={3.5 / scale}
-              fill="#ffffff"
-              stroke={HANDLE_RING}
-              strokeWidth={1.5 / scale}
-            />
-          </g>
-        ))}
-      </g>
+      {segs.map((s) => (
+        <g key={s.id}>
+          <path
+            d={s.d}
+            fill="none"
+            stroke={STROKE}
+            strokeWidth={1.75 / scale}
+            strokeLinecap="round"
+          />
+          <circle
+            cx={s.from.x}
+            cy={s.from.y}
+            r={3.5 / scale}
+            fill="#ffffff"
+            stroke={HANDLE_RING}
+            strokeWidth={1.5 / scale}
+          />
+          <circle
+            cx={s.to.x}
+            cy={s.to.y}
+            r={3.5 / scale}
+            fill="#ffffff"
+            stroke={HANDLE_RING}
+            strokeWidth={1.5 / scale}
+          />
+        </g>
+      ))}
     </svg>
   );
 }

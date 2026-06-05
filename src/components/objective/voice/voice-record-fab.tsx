@@ -5,9 +5,11 @@
 // The persistent record affordance on the board (glass FAB, bottom-center).
 // Owns the recorder + the user's profile, and orchestrates a commit:
 //   1. drop a voice-note card on the board (deployVoiceNoteCard)
-//   2. re-synthesize the journal from all notes (POST journal-synthesize →
-//      deployJournalCard, status regenerating → fresh)
-// When Live analysis is on, each finished sentence is routed to the
+//   2. analyze THAT note in the background → its card shows the AI's read
+//      (analyzeVoiceNote → updateVoiceNoteAnalysis), NOT a journal.
+// A voice note no longer auto-synthesizes a journal — journals/notebooks are
+// produced on demand from the Artifact Dock (not everyone wants one).
+// When Live analysis is on, each finished sentence is also routed to the
 // quality-gated converge/diverge controller.
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
@@ -30,17 +32,17 @@ function WaveformIcon({ style }: { style?: CSSProperties }) {
 }
 import { useVoiceRecorder } from "./use-voice-recorder";
 import { VoiceRecorderPanel } from "./voice-recorder-panel";
-import { handleVoiceSentence } from "./voice-analysis-controller";
 import {
-  deployVoiceNoteCard,
-  deployJournalCard,
-} from "@/components/objective/board-bus";
+  handleVoiceSentence,
+  analyzeVoiceNote,
+} from "./voice-analysis-controller";
+import { deployVoiceNoteCard } from "@/components/objective/board-bus";
 
 export function VoiceRecordFab({ spaceId }: { spaceId: string }) {
   const [open, setOpen] = useState(false);
   const [displayName, setDisplayName] = useState("You");
   const liveRef = useRef(false);
-  const sectionsRef = useRef("[]"); // last-known journal sections (for the "regenerating" frame)
+  const noteStartRef = useRef<number>(0); // start of the current (uncommitted) note
 
   const recorder = useVoiceRecorder({
     onFinalSentence: (sentence) => {
@@ -66,6 +68,7 @@ export function VoiceRecordFab({ spaceId }: { spaceId: string }) {
 
   const openAndStart = useCallback(() => {
     setOpen(true);
+    noteStartRef.current = Date.now();
     recorder.start();
   }, [recorder]);
 
@@ -81,54 +84,25 @@ export function VoiceRecordFab({ spaceId }: { spaceId: string }) {
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()
         : `vn-${Date.now()}`;
+    const durationMs = noteStartRef.current
+      ? Date.now() - noteStartRef.current
+      : 0;
 
-    // 1. The note card.
+    // 1. The note card — drops with a "pending" analysis (shows "Analyzing…").
     deployVoiceNoteCard({
       voiceNoteId,
       spaceId,
       authorName: displayName,
       transcript: text,
       createdAtIso: new Date().toISOString(),
+      durationMs,
+      analysisJson: JSON.stringify({ status: "pending", points: [] }),
     });
     recorder.reset(); // keep listening for the next note
+    noteStartRef.current = Date.now(); // next note's clock starts now
 
-    // 2. Journal re-synthesis — show "regenerating" instantly, then fill.
-    deployJournalCard({
-      spaceId,
-      title: "Journal",
-      sectionsJson: sectionsRef.current,
-      pageCount: 1,
-      status: "regenerating",
-    });
-    void (async () => {
-      try {
-        const res = await fetch(
-          `/api/objective/${spaceId}/journal-synthesize`,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ note: text }),
-          },
-        );
-        if (!res.ok) return;
-        const json = (await res.json()) as {
-          title?: string;
-          sections?: Array<{ heading?: string; body?: string }>;
-          pageCount?: number;
-        };
-        const sectionsJson = JSON.stringify(json.sections ?? []);
-        sectionsRef.current = sectionsJson;
-        deployJournalCard({
-          spaceId,
-          title: json.title || "Journal",
-          sectionsJson,
-          pageCount: json.pageCount ?? 1,
-          status: "fresh",
-        });
-      } catch {
-        /* soft-fail — the card stays on its last good content */
-      }
-    })();
+    // 2. Analyze THIS note in the background → attaches to its card.
+    void analyzeVoiceNote(voiceNoteId, text, durationMs);
   }, [recorder, spaceId, displayName]);
 
   return (

@@ -21,6 +21,7 @@ import {
 import { BookOpen, NotebookPen } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { openNotebook } from "@/components/objective/board-bus";
 
 export const JOURNAL_COLOR = "#0F766E"; // teal — a calm "writing" accent
 const PAPER = "#F5F0E4"; // warm cream page
@@ -113,7 +114,7 @@ function JournalRenderer({
   util: JournalCardShapeUtil;
 }) {
   const editor = util.editor;
-  const { title, status, open, color } = shape.props;
+  const { title, status, open, color, spaceId } = shape.props;
   const sections = parseSections(shape.props.sectionsJson);
   const regenerating = status === "regenerating";
 
@@ -129,6 +130,13 @@ function JournalRenderer({
         h: next ? BOOK_H : NOTE_H,
       },
     });
+  }
+
+  // "Open" now launches the editable Notebook panel (the booklet flip was a
+  // dead-end — you couldn't interact with it). The board stays live behind.
+  function openPanel(e: React.MouseEvent) {
+    e.stopPropagation();
+    openNotebook({ spaceId });
   }
 
   return (
@@ -148,7 +156,7 @@ function JournalRenderer({
           sections={sections}
           color={color}
           regenerating={regenerating}
-          onOpen={toggleOpen}
+          onOpen={openPanel}
         />
       )}
     </HTMLContainer>

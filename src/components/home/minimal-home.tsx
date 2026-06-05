@@ -24,54 +24,108 @@ import {
 } from "@/components/home/objective-chatbox";
 import { LibraryGrid, type LibrarySpace } from "@/components/home/library-grid";
 
-// ── Animated dotted-ring mark ──
-// A ring of small dots that gently rotates with a comet-tail opacity
-// gradient, while the whole mark floats softly above the greeting. Reads
-// as a quiet "thinking" pulse rather than a busy spinner.
-function DottedRingMark() {
-  const DOTS = 12;
-  const radius = 13; // px from center
-  const size = 38; // viewBox px
+// ── Sun greeting mark ──
+// A tiny sun glyph (echoing the akiboe brand mark) with a soft warm glow
+// and faint ripples that emerge from the center and dissolve outward. No
+// spinning — every motion is deliberately minuscule, so it reads as a
+// quiet living warmth above the greeting rather than a loader.
+const SUN_INK = "#1b1a18";
+const SUN_ACCENT = "#c2593b";
+function SunGreetingMark() {
+  const size = 42;
   const center = size / 2;
+  // 8 rays around the core, plus one warm accent ray (lower-right).
+  const rays = Array.from({ length: 8 }).map((_, i) => {
+    const a = (i / 8) * Math.PI * 2;
+    return {
+      x1: center + 8 * Math.cos(a),
+      y1: center + 8 * Math.sin(a),
+      x2: center + 12.5 * Math.cos(a),
+      y2: center + 12.5 * Math.sin(a),
+    };
+  });
   return (
-    <motion.div
+    <div
       aria-hidden
-      className="mx-auto mb-5"
+      className="relative mx-auto mb-5"
       style={{ width: size, height: size }}
-      animate={{ y: [0, -5, 0] }}
-      transition={{ duration: 3.6, ease: "easeInOut", repeat: Infinity }}
     >
-      <motion.svg
+      {/* soft warm glow — breathes ever so slightly */}
+      <motion.div
+        className="absolute inset-0 rounded-full"
+        style={{
+          background: `radial-gradient(circle, ${SUN_ACCENT}33 0%, transparent 68%)`,
+        }}
+        animate={{ opacity: [0.55, 0.85, 0.55], scale: [1, 1.06, 1] }}
+        transition={{ duration: 4.5, ease: "easeInOut", repeat: Infinity }}
+      />
+      {/* ripples emerging from the center, dissolving outward (staggered) */}
+      {[0, 2.2].map((delay) => (
+        <motion.div
+          key={delay}
+          className="absolute rounded-full"
+          style={{
+            left: "50%",
+            top: "50%",
+            width: 14,
+            height: 14,
+            marginLeft: -7,
+            marginTop: -7,
+            border: `1px solid ${SUN_ACCENT}`,
+          }}
+          initial={{ scale: 0.5, opacity: 0 }}
+          animate={{ scale: [0.5, 1.5], opacity: [0, 0.28, 0] }}
+          transition={{
+            duration: 4.4,
+            ease: "easeOut",
+            repeat: Infinity,
+            delay,
+          }}
+        />
+      ))}
+      {/* the sun glyph itself */}
+      <svg
         width={size}
         height={size}
         viewBox={`0 0 ${size} ${size}`}
-        animate={{ rotate: 360 }}
-        transition={{ duration: 8, ease: "linear", repeat: Infinity }}
+        className="relative"
         style={{ display: "block" }}
       >
-        {Array.from({ length: DOTS }).map((_, i) => {
-          const angle = (i / DOTS) * Math.PI * 2 - Math.PI / 2;
-          const cx = center + radius * Math.cos(angle);
-          const cy = center + radius * Math.sin(angle);
-          // comet-tail: leading dots brighter/larger, trailing dots fade.
-          const t = i / DOTS;
-          const opacity = 0.18 + 0.82 * t;
-          const r = 1.1 + 1.2 * t;
-          return (
-            <circle
-              key={i}
-              cx={cx}
-              cy={cy}
-              r={r}
-              fill={appleVibe.text.primary}
-              opacity={opacity}
-            />
-          );
-        })}
-      </motion.svg>
-    </motion.div>
+        <g stroke={SUN_INK} strokeWidth={2.4} strokeLinecap="round">
+          {rays.slice(0, 7).map((r, i) => (
+            <line key={i} x1={r.x1} y1={r.y1} x2={r.x2} y2={r.y2} />
+          ))}
+        </g>
+        {/* the warm accent ray */}
+        <line
+          x1={rays[7].x1}
+          y1={rays[7].y1}
+          x2={rays[7].x2}
+          y2={rays[7].y2}
+          stroke={SUN_ACCENT}
+          strokeWidth={2.4}
+          strokeLinecap="round"
+        />
+        {/* core — gently breathing */}
+        <motion.circle
+          cx={center}
+          cy={center}
+          r={4.4}
+          fill={SUN_INK}
+          style={{ transformOrigin: "center", transformBox: "fill-box" }}
+          animate={{ scale: [1, 1.08, 1] }}
+          transition={{ duration: 4.5, ease: "easeInOut", repeat: Infinity }}
+        />
+      </svg>
+    </div>
   );
 }
+
+// The greeting question rotates between a couple of gentle prompts.
+const GREETING_PROMPTS = [
+  "What are your thoughts today?",
+  "What are you building?",
+];
 
 interface Props {
   displayName: string;
@@ -112,6 +166,17 @@ export function MinimalHome({
 
   // composing = the user has started typing → morph onto the whiteboard.
   const [composing, setComposing] = useState(false);
+
+  // Rotating greeting prompt — cross-fades between a couple of gentle
+  // questions every few seconds.
+  const [promptIdx, setPromptIdx] = useState(0);
+  useEffect(() => {
+    const id = setInterval(
+      () => setPromptIdx((i) => (i + 1) % GREETING_PROMPTS.length),
+      6500,
+    );
+    return () => clearInterval(id);
+  }, []);
 
   // Profile dropdown (avatar → settings / credits / logout).
   const [profileOpen, setProfileOpen] = useState(false);
@@ -169,12 +234,25 @@ export function MinimalHome({
         style={{ zIndex: 2, fontFamily: appleVibe.font.stack }}
       >
         {/* ── Header ── */}
-        <header className="flex items-center justify-between py-1.5">
+        {/* Frosted floating bar: a contained, blurred pill (hairline + soft
+            shadow) centered and constrained so the logo + actions read as a
+            deliberate nav instead of two lonely items pinned to the edges.
+            Sticky so it floats as the library scrolls under it. */}
+        <header
+          className="sticky top-3 z-20 mx-auto flex max-w-[640px] items-center justify-between gap-3 rounded-full py-2 pl-3 pr-2.5"
+          style={{
+            background: "rgba(255,255,255,0.72)",
+            backdropFilter: "saturate(180%) blur(20px)",
+            WebkitBackdropFilter: "saturate(180%) blur(20px)",
+            border: `1px solid ${appleVibe.stroke.soft}`,
+            boxShadow: appleVibe.shadow.chip,
+          }}
+        >
           <div className="flex items-center gap-2.5">
             <InterAxisLogo
-              className="h-9 w-9"
-              size={36}
-              style={{ borderRadius: 11 }}
+              className="h-8 w-8"
+              size={32}
+              style={{ borderRadius: 10 }}
             />
             <span
               className="text-[17px] font-semibold tracking-tight"
@@ -339,9 +417,9 @@ export function MinimalHome({
             transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
             style={{ pointerEvents: composing ? "none" : "auto" }}
           >
-            <DottedRingMark />
+            <SunGreetingMark />
             <h1
-              className="text-center text-[34px] font-semibold leading-tight tracking-tight"
+              className="text-center text-[31px] font-medium leading-tight tracking-tight"
               style={{
                 color: appleVibe.text.primary,
                 fontFamily: appleVibe.font.display,
@@ -351,7 +429,26 @@ export function MinimalHome({
               {greeting},{" "}
               <span style={{ color: "#8B93C4" }}>{displayName}</span>
               <br />
-              What are your thoughts today?
+              <span className="relative inline-block">
+                {/* reserve width with the longest prompt so layout is stable */}
+                <span className="invisible" aria-hidden>
+                  {GREETING_PROMPTS.reduce((a, b) =>
+                    a.length >= b.length ? a : b,
+                  )}
+                </span>
+                <AnimatePresence mode="wait">
+                  <motion.span
+                    key={promptIdx}
+                    className="absolute inset-0 whitespace-nowrap"
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+                  >
+                    {GREETING_PROMPTS[promptIdx]}
+                  </motion.span>
+                </AnimatePresence>
+              </span>
             </h1>
           </motion.div>
 

@@ -8,11 +8,12 @@
 // or hovered so the relationship reads at a glance without permanently
 // adding visual weight.
 //
-// Mirrors SharpeningConnectorsOverlay's camera-transform trick so the
-// SVG aligns with the shapes at any zoom/pan. Mounted via the same
-// InFrontOfTheCanvas slot — currently that slot is occupied by the
-// sharpening connectors, so we compose both in CombinedConnectorsOverlay
-// (see whiteboard-base BOARD_COMPONENTS).
+// Mirrors SharpeningConnectorsOverlay: rendered in the OnTheCanvas slot
+// (behind shapes, inside tldraw's already camera-transformed shapes
+// layer), so strands sit on the board surface and never paint over a card
+// you open. Paths are drawn in raw page coords; only the hairline weights
+// divide by the zoom. Composed with the sharpening connectors in
+// whiteboard-base BOARD_COMPONENTS.
 
 import { useEditor, useValue, type Editor } from "tldraw";
 import type { CommentCardShape } from "../shapes/comment-card-shape";
@@ -99,62 +100,57 @@ function computeSegments(editor: Editor): Seg[] {
 export function CommentStrandsOverlay() {
   const editor = useEditor();
   const segs = useValue("comment-strands", () => computeSegments(editor), [editor]);
-  const camera = useValue("cs-camera", () => editor.getCamera(), [editor]);
-  const viewport = useValue(
-    "cs-viewport",
-    () => editor.getViewportScreenBounds(),
-    [editor],
-  );
+  const scale = useValue("cs-scale", () => editor.getCamera().z, [editor]);
 
   if (segs.length === 0) return null;
-  const scale = camera.z;
 
+  // OnTheCanvas parent already carries the camera transform, so anchor the
+  // SVG at page origin with overflow visible and draw in raw page coords.
   return (
     <svg
       aria-hidden
       style={{
         position: "absolute",
-        inset: 0,
+        left: 0,
+        top: 0,
+        width: 0,
+        height: 0,
+        overflow: "visible",
         pointerEvents: "none",
-        width: viewport.w,
-        height: viewport.h,
-        zIndex: 1,
       }}
     >
-      <g transform={`scale(${scale}) translate(${camera.x} ${camera.y})`}>
-        {segs.map((s) => (
-          <g key={s.id}>
-            <path
-              d={s.d}
-              fill="none"
-              stroke={s.hot ? STROKE_HOT : STROKE_QUIET}
-              strokeWidth={(s.hot ? 2.2 : 1.5) / scale}
-              strokeLinecap="round"
-              strokeDasharray={s.hot ? undefined : `${4 / scale} ${4 / scale}`}
-            />
-            {s.hot && (
-              <>
-                <circle
-                  cx={s.from.x}
-                  cy={s.from.y}
-                  r={3.5 / scale}
-                  fill="#ffffff"
-                  stroke={STROKE_HOT}
-                  strokeWidth={1.5 / scale}
-                />
-                <circle
-                  cx={s.to.x}
-                  cy={s.to.y}
-                  r={3.5 / scale}
-                  fill="#ffffff"
-                  stroke={STROKE_HOT}
-                  strokeWidth={1.5 / scale}
-                />
-              </>
-            )}
-          </g>
-        ))}
-      </g>
+      {segs.map((s) => (
+        <g key={s.id}>
+          <path
+            d={s.d}
+            fill="none"
+            stroke={s.hot ? STROKE_HOT : STROKE_QUIET}
+            strokeWidth={(s.hot ? 2.2 : 1.5) / scale}
+            strokeLinecap="round"
+            strokeDasharray={s.hot ? undefined : `${4 / scale} ${4 / scale}`}
+          />
+          {s.hot && (
+            <>
+              <circle
+                cx={s.from.x}
+                cy={s.from.y}
+                r={3.5 / scale}
+                fill="#ffffff"
+                stroke={STROKE_HOT}
+                strokeWidth={1.5 / scale}
+              />
+              <circle
+                cx={s.to.x}
+                cy={s.to.y}
+                r={3.5 / scale}
+                fill="#ffffff"
+                stroke={STROKE_HOT}
+                strokeWidth={1.5 / scale}
+              />
+            </>
+          )}
+        </g>
+      ))}
     </svg>
   );
 }

@@ -18,12 +18,14 @@ import type { OcCardShape, OcCardKind } from "../shapes/oc-card-shape";
 import {
   operationById,
   runOperation,
+  OperationTransportError,
   type OperationTarget,
   type OperationResultItem,
   type OperationRunOptions,
+  type OperationErrorReason,
 } from "@/lib/objective-canvas/canvas-operations";
 import { saveCardsToLibrary, type SaveableCard } from "./save-to-library";
-import { lowestClearTop } from "./placement";
+import { reserveSpace } from "./placement";
 
 const RESULT_W = 216;
 const RESULT_H = 132;
@@ -43,10 +45,14 @@ function objectTypeFor(t?: string): SaveableCard["objectType"] {
   return t === "feature" ? "feature" : t === "variable" ? "variable" : "insight";
 }
 
-/** Result of a run: how many cards landed on the board. Callers (the ‹ ›
- *  popup) use `count === 0` to surface "nothing came back" feedback instead of
- *  a silent no-op — the #1 cause of "converge doesn't work" reports. */
-export type OperationRunResult = { count: number };
+/** Result of a run: how many cards landed on the board, plus WHY zero landed.
+ *  Callers (the ‹ › popup) use `count === 0` to surface feedback instead of a
+ *  silent no-op — the #1 cause of "diverge doesn't work" reports. `error`
+ *  distinguishes a failed request (network / server / credits / auth → "couldn't
+ *  run, retry") from a genuine empty result (error undefined → "nothing came
+ *  back"); the two looked identical before, which is why a broken call read as
+ *  "Empty". */
+export type OperationRunResult = { count: number; error?: OperationErrorReason };
 
 /** Run a wired text operation for a card/sticky and render the results.
  *  Returns the number of cards created (0 → caller should signal "nothing
@@ -77,24 +83,42 @@ export async function executeCardOperation(
 
   // No pending placeholder shape — the trigger surfaces show their own
   // affordance (scanner rows + the ‹ › buttons), and a grey sticky on the
-  // board just reads as clutter. runOperation soft-fails to [] (never throws).
-  const items = await runOperation(op, target, opts);
+  // board just reads as clutter. runOperation returns [] for a genuine empty
+  // result but THROWS OperationTransportError when the request itself failed —
+  // catch it so the verb shows "couldn't run, retry" instead of a silent
+  // "Empty" (the bug being fixed) and so a `void`-called run never rejects.
+  let items: OperationResultItem[];
+  try {
+    items = await runOperation(op, target, opts);
+  } catch (err) {
+    const error: OperationErrorReason =
+      err instanceof OperationTransportError ? err.reason : "server";
+    console.warn(`[operation-executor] op "${opId}" failed (${error}):`, err);
+    return { count: 0, error };
+  }
   if (!items.length) return { count: 0 };
 
   const perRow =
     op.resultLayout === "column" ? 1 : Math.min(items.length, PER_ROW);
   const rowWidth = perRow * RESULT_W + (perRow - 1) * GAP_X;
+  const nRows = Math.ceil(items.length / perRow);
+  const clusterH = nRows * ROW_H;
 
-  // STRICT no-overlap rule: if anything already sits in this cluster's column
-  // below the source (e.g. a previous op run), drop the results beneath it
-  // instead of stacking on top. The source card itself is in the span, so this
-  // never moves results above `bounds.maxY + RESULT_GAP`.
-  startY = lowestClearTop(
+  // Hybrid push-then-yield: claim the spot below the source and push neighbours
+  // aside to make room; if that would cascade too far (or hit a head card),
+  // relocate the cluster to the nearest clear region instead. Replaces the old
+  // drop-straight-down rule so a run never stacks on a prior generation AND
+  // never gets flung far down-page by one unrelated card in the column. The
+  // source card is ignored so it's never pushed by its own results.
+  const ignore = new Set<TLShapeId>();
+  if (target.shapeId) ignore.add(target.shapeId as TLShapeId);
+  const spot = reserveSpace(
     editor,
-    { left: anchorMidX - rowWidth / 2, right: anchorMidX + rowWidth / 2 },
-    startY,
-    RESULT_GAP,
+    { w: rowWidth, h: clusterH },
+    { anchorMidX, preferredTop: startY, gap: RESULT_GAP, ignore },
   );
+  const clusterX = spot.x;
+  startY = spot.y;
   const stamp = Date.now();
 
   // Create the result cards: feature/variable → oc-card (clickable to its
@@ -103,9 +127,9 @@ export async function executeCardOperation(
   // detail drawer; no dead ends).
   const created: { shapeId: TLShapeId; item: OperationResultItem; isOc: boolean }[] = [];
   items.forEach((item, i) => {
-    const col = i % PER_ROW;
-    const row = Math.floor(i / PER_ROW);
-    const x = anchorMidX - rowWidth / 2 + col * (RESULT_W + GAP_X);
+    const col = i % perRow;
+    const row = Math.floor(i / perRow);
+    const x = clusterX + col * (RESULT_W + GAP_X);
     const y = startY + row * ROW_H;
     const id = createShapeId();
     const isOc = !!item.type && FV.has(item.type);
@@ -148,11 +172,10 @@ export async function executeCardOperation(
     created.push({ shapeId: id, item, isOc });
   });
 
-  // Reveal where the results landed without yanking the zoom level.
-  const nRows = Math.ceil(items.length / PER_ROW);
-  const clusterHeight = nRows * ROW_H;
+  // Reveal where the results landed (the cluster may have been relocated to
+  // clear space) without yanking the zoom level.
   editor.centerOnPoint(
-    { x: anchorMidX, y: startY + clusterHeight / 2 },
+    { x: clusterX + rowWidth / 2, y: startY + clusterH / 2 },
     { animation: { duration: 300 } },
   );
 

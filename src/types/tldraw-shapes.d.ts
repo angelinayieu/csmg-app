@@ -1111,6 +1111,12 @@ declare module "@tldraw/tlschema" {
       authorName: string;
       transcript: string;
       createdAtIso: string;
+      /** Length of the recording in ms (0 = unknown). */
+      durationMs: number;
+      /** AI analysis, JSON-encoded ({ status, points: [{title, subtitle}] }). */
+      analysisJson: string;
+      /** Expanded → editable transcript + analysis + metadata. */
+      expanded: boolean;
       color: string;
     };
     // Voice journal — the synthesized note-page / 3D-booklet artifact that

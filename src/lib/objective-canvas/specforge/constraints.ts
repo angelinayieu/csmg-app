@@ -31,6 +31,8 @@ import type {
   FeatureCard,
   FeatureMechanismsResult,
   FeatureMechanism,
+  DataPointsResult,
+  DataPoint,
   ValidationResult,
   ValidationExperiment,
 } from "./types";
@@ -429,6 +431,54 @@ export function extractConstraintsFromEngineResult(
       return out;
     }
 
+    case "data_points": {
+      const r = result as DataPointsResult;
+      const pts = arr<DataPoint>(r.data_points).filter(
+        (p) => p && clean(p?.name) && String(p?.disposition) !== "removed",
+      );
+      // Each data point's own constraints_created — these are explicit (the
+      // engine already named them). Cap at top 4 to keep the strip readable.
+      const explicit = pts
+        .flatMap((p) =>
+          arr<string>(p?.constraints_created)
+            .map(clean)
+            .filter(Boolean)
+            .map((text) => ({
+              type: "mechanism" as const,
+              priority: "high" as const,
+              text,
+              why: `data point ${clean(p?.name)} requires it`,
+            })),
+        )
+        .slice(0, 4);
+      for (const c of explicit) push(c);
+      // Privacy-sensitive data points → critical privacy constraint (one per).
+      const sensitive = pts.filter((p) => String(p?.privacy_risk) === "high");
+      for (const p of sensitive.slice(0, 2)) {
+        push({
+          type: "buildability",
+          priority: "critical",
+          text: `Privacy-sensitive: ${clean(p?.name)} must have consent + minimization`,
+          why: `data point flagged privacy_risk=high (concept: ${clean(p?.concept_definition)})`,
+        });
+      }
+      // High-friction REQUIRED data → buildability constraint (forces UX care).
+      const requiredHighFriction = pts.filter(
+        (p) =>
+          String(p?.disposition) === "required" &&
+          String(p?.collection_friction) === "high",
+      );
+      for (const p of requiredHighFriction.slice(0, 2)) {
+        push({
+          type: "buildability",
+          priority: "high",
+          text: `High-friction required input: ${clean(p?.name)} needs onboarding/proxy fallback`,
+          why: "collection_friction=high on a required field — UX must justify the ask",
+        });
+      }
+      return out;
+    }
+
     case "validation": {
       const r = result as ValidationResult;
       // Each top-ranked experiment imposes an EVIDENCE constraint: the build
@@ -462,9 +512,12 @@ export function extractConstraintsFromEngineResult(
     case "question_expansion":
     case "recommendation":
     case "deepening":
-      // Generator-only / advisory / final selector / meta-summary — they
-      // consume constraints or describe the run; they don't create new ones
-      // the spec recognizes.
+    case "spec_export":
+      // Generator-only / advisory / final selector / meta-summary /
+      // terminal-synthesizer — they consume constraints (or describe the
+      // run); they don't create new ones the spec recognizes. The spec
+      // exporter restates upstream constraints in causal_trace +
+      // first_build_scope but adds nothing new to the accumulator.
       return out;
   }
 }

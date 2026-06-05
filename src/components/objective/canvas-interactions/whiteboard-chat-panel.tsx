@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { Editor, TLShape } from "tldraw";
-import { ArrowUp, Globe, Layers, Sparkles, X } from "lucide-react";
+import { ArrowUp, Globe, Layers, Waypoints, X } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
 export const OPEN_BOARD_CHAT_EVENT = "board:open-chat";
@@ -182,7 +182,7 @@ export function WhiteboardChatPanel({
       {/* Header — title + scope toggle + close */}
       <div style={header}>
         <span style={titleWrap}>
-          <Sparkles style={{ width: 13, height: 13, color: appleVibe.text.secondary }} strokeWidth={2.2} />
+          <Waypoints style={{ width: 13, height: 13, color: appleVibe.text.secondary }} strokeWidth={2.2} />
           <span style={titleText}>AI Chat</span>
         </span>
         <span style={scopeTabs} role="tablist" aria-label="Chat scope">

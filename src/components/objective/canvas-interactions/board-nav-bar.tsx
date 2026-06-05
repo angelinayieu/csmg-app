@@ -9,7 +9,7 @@
 // Icons + tooltips only, per the minimal chrome direction.
 
 import { type CSSProperties } from "react";
-import { Home, Compass, History, Settings } from "lucide-react";
+import { Home, Plus, Compass, History, Settings } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { OPEN_BOARD_GOAL_EVENT } from "./goal-ranking-sidebar";
 import { OPEN_BOARD_HISTORY_EVENT } from "./board-history";
@@ -18,6 +18,18 @@ import { OPEN_BOARD_SETTINGS_EVENT } from "./board-settings";
 const fire = (name: string) =>
   window.dispatchEvent(new CustomEvent(name));
 
+/** Spin up a fresh, isolated scratch space + navigate to it. */
+async function createSandbox() {
+  try {
+    const r = await fetch("/api/objective/sandbox", { method: "POST" });
+    if (!r.ok) return;
+    const { spaceId } = (await r.json()) as { spaceId?: string };
+    if (spaceId) window.location.assign(`/app/objective/${spaceId}`);
+  } catch {
+    /* ignore — soft-fail */
+  }
+}
+
 const ITEMS: {
   key: string;
   label: string;
@@ -25,6 +37,7 @@ const ITEMS: {
   onClick: () => void;
 }[] = [
   { key: "home", label: "Home", Icon: Home, onClick: () => window.location.assign("/app") },
+  { key: "sandbox", label: "New sandbox space", Icon: Plus, onClick: createSandbox },
   { key: "goal", label: "Goal & alignment", Icon: Compass, onClick: () => fire(OPEN_BOARD_GOAL_EVENT) },
   { key: "history", label: "Version history", Icon: History, onClick: () => fire(OPEN_BOARD_HISTORY_EVENT) },
   { key: "settings", label: "Settings", Icon: Settings, onClick: () => fire(OPEN_BOARD_SETTINGS_EVENT) },

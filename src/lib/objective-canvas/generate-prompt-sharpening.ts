@@ -51,10 +51,14 @@ export async function generatePromptSharpeningForSpace(
       .eq("id", spaceId)
       .maybeSingle();
     if (!space || space.user_id !== userId) return null;
-    const existing = (space.synthesis_data as Record<string, unknown> | null)
-      ?.objective_canvas as { prompt_sharpening?: PromptSharpeningArtifact } | undefined;
-    if (existing?.prompt_sharpening && !opts?.force) {
-      return existing.prompt_sharpening;
+    const ocState = (space.synthesis_data as Record<string, unknown> | null)
+      ?.objective_canvas as
+      | { sandbox?: boolean; prompt_sharpening?: PromptSharpeningArtifact }
+      | undefined;
+    // Sandbox spaces are blank scratch boards — never auto-sharpen them.
+    if (ocState?.sandbox === true) return null;
+    if (ocState?.prompt_sharpening && !opts?.force) {
+      return ocState.prompt_sharpening;
     }
 
     // ── Agent: generate the sharpening artifact ──

@@ -22,14 +22,13 @@ export function CollapsibleStylePanel(props: TLUiStylePanelProps) {
         alignItems: "flex-end",
         gap: 6,
         pointerEvents: "all",
-        // Hug the top-right corner. The objective layout overrides
-        // `--oc-style-panel-top` to ~60px in FULL mode so the palette stacks
-        // cleanly below the Notebook pill; in minimal mode (and anywhere the
-        // var is unset) it falls back to a clean corner inset instead of the
-        // old dead 52px gap that made the palette look like it was floating.
-        // Sits below the top-right nav pill (~top:16–56) so the palette never
-        // overlaps it; the full-mode layout already overrides this to ~60px.
-        marginTop: "var(--oc-style-panel-top, 60px)",
+        // Hug the top-right corner. BoardNavBar lives at top-LEFT, so the
+        // top-right is free; we sit at top: 14 alongside the Saved status
+        // pill (which is at right: 168, so we don't horizontally collide).
+        // Library + Powerups pills sit BELOW at top: 56 / 96 and don't fight
+        // for this row. The layout still overrides via the CSS var if a
+        // future layout needs to push us elsewhere.
+        marginTop: "var(--oc-style-panel-top, 14px)",
         // Slides left of the Powerups panel when it's open (the rail sets
         // `--oc-style-panel-right`) so the palette never covers the panel's
         // close button. Back to the corner (12px) when the panel is closed.

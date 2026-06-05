@@ -231,6 +231,71 @@ export const CANVAS_OPERATIONS: CanvasOperation[] = [
   },
 ];
 
+/** Why a canvas op couldn't RUN — distinct from "ran and returned nothing".
+ *  The trigger surfaces (the ‹ › verbs) used to render the same silent "Empty"
+ *  whether the model genuinely found nothing OR the request failed (a hung dev
+ *  server, a 5xx, a dropped connection, exhausted credits). That made a broken
+ *  call look identical to an empty one — the core "diverge doesn't work, just
+ *  goes empty" report. We now throw this so the UI can tell the truth + the
+ *  user knows a retry is worthwhile. */
+export type OperationErrorReason = "network" | "server" | "credits" | "auth";
+
+export class OperationTransportError extends Error {
+  constructor(
+    public reason: OperationErrorReason,
+    message?: string,
+  ) {
+    super(message ?? reason);
+    this.name = "OperationTransportError";
+  }
+}
+
+/** POST JSON to a canvas-op endpoint with a hard timeout + one retry on a
+ *  transient transport failure (network drop / abort / 5xx). A single retry
+ *  self-heals the blips that were silently surfacing as "Empty"; a thrown
+ *  OperationTransportError (instead of a swallowed []) lets the caller
+ *  distinguish "couldn't run" from "no results". */
+async function postOp(endpoint: string, body: string): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ctrl = new AbortController();
+    // 75s > the routes' 60s maxDuration, so a real (slow) response is never
+    // aborted — only a genuinely stuck request trips the timeout.
+    const timer = setTimeout(() => ctrl.abort(), 75_000);
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      // A 5xx is worth exactly one retry (cold route / transient upstream); a
+      // 4xx is the caller's problem and must not be retried.
+      if (res.status >= 500 && attempt === 0) {
+        lastErr = new Error(`server ${res.status}`);
+        continue;
+      }
+      return res;
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err; // network error or abort → retry once, then surface.
+    }
+  }
+  throw new OperationTransportError(
+    "network",
+    lastErr instanceof Error ? lastErr.message : "network error",
+  );
+}
+
+/** Map a non-OK response to a typed transport error (credits / auth / server). */
+function transportErrorFor(res: Response): OperationTransportError {
+  if (res.status === 402) return new OperationTransportError("credits");
+  if (res.status === 401 || res.status === 403)
+    return new OperationTransportError("auth");
+  return new OperationTransportError("server", `HTTP ${res.status}`);
+}
+
 const BY_ID = new Map(CANVAS_OPERATIONS.map((o) => [o.id, o]));
 
 export function operationById(id: string): CanvasOperation | undefined {
@@ -249,33 +314,36 @@ export function menuOperations(): CanvasOperation[] {
 const MAX_RESULT_ITEMS = 8;
 
 /** Run a wired augment-backed operation and return normalized result rows.
- *  Soft-fails to [] (network/credit/parse) so the caller never throws. */
+ *  Returns [] for a genuine empty result; THROWS OperationTransportError when
+ *  the request itself failed (network / 5xx / credits / auth) so the caller can
+ *  distinguish "no results" from "couldn't run" instead of showing a silent
+ *  "Empty". A re-thrown OperationTransportError is left intact. */
 export async function runAugmentOperation(
   op: CanvasOperation,
   target: OperationTarget,
   opts: OperationRunOptions = {},
 ): Promise<OperationResultItem[]> {
   if (!op.augmentMode || !target.text.trim()) return [];
+  const res = await postOp(
+    "/api/synergy/augment",
+    JSON.stringify({
+      transcript: target.text.slice(0, 8000),
+      mode: op.augmentMode,
+      precision: 3,
+      // Run these on-canvas analyses with the best Claude model, at the
+      // strategist's chosen temperature (undefined → the route default).
+      provider: "anthropic",
+      temperature: opts.temperature,
+    }),
+  );
+  if (!res.ok) throw transportErrorFor(res);
+  let json: { mode?: string; result?: unknown };
   try {
-    const res = await fetch("/api/synergy/augment", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        transcript: target.text.slice(0, 8000),
-        mode: op.augmentMode,
-        precision: 3,
-        // Run these on-canvas analyses with the best Claude model, at the
-        // strategist's chosen temperature (undefined → the route default).
-        provider: "anthropic",
-        temperature: opts.temperature,
-      }),
-    });
-    if (!res.ok) return [];
-    const json = (await res.json()) as { mode?: string; result?: unknown };
-    return normalizeAugment(op.augmentMode, json.result).slice(0, MAX_RESULT_ITEMS);
+    json = (await res.json()) as { mode?: string; result?: unknown };
   } catch {
-    return [];
+    throw new OperationTransportError("server", "malformed response");
   }
+  return normalizeAugment(op.augmentMode, json.result).slice(0, MAX_RESULT_ITEMS);
 }
 
 /** Map a mode-specific augment payload → flat result rows for the board. */
@@ -322,7 +390,10 @@ function normalizeAugment(
 }
 
 /** Dispatch: run any wired operation and return normalized result rows.
- *  augment-backed ops → /api/synergy/augment; the rest → /api/canvas/idea-op. */
+ *  augment-backed ops → /api/synergy/augment; the rest → /api/canvas/idea-op.
+ *  Returns [] for a genuine empty result; throws OperationTransportError when
+ *  the request failed (the executor catches it → surfaces a "couldn't run"
+ *  state rather than a silent "Empty"). */
 export async function runOperation(
   op: CanvasOperation,
   target: OperationTarget,
@@ -333,45 +404,48 @@ export async function runOperation(
   return [];
 }
 
-/** Run a non-augment text op (layers / make_technical) via /api/canvas/idea-op.
- *  Soft-fails to [] so the caller never throws. */
+/** Run a non-augment text op (diverge / converge / layers / make_technical) via
+ *  its endpoint. Returns [] for a genuine empty result; THROWS
+ *  OperationTransportError when the request itself failed (network / 5xx /
+ *  credits / auth) so the verb shows "couldn't run — retry" instead of the
+ *  misleading silent "Empty" that masked every diverge failure. */
 async function runIdeaOp(
   op: CanvasOperation,
   target: OperationTarget,
   opts: OperationRunOptions = {},
 ): Promise<OperationResultItem[]> {
   if (!target.text.trim()) return [];
+  const res = await postOp(
+    op.endpoint ?? "/api/canvas/idea-op",
+    JSON.stringify({
+      text: target.text.slice(0, 4000),
+      kind: op.id,
+      temperature: opts.temperature,
+      // Honored by /api/canvas/converge-diverge; ignored by idea-op.
+      depth: opts.depth,
+      questionCount: opts.questionCount,
+      webSearch: opts.webSearch,
+      // Honored by /api/canvas/custom-op (the user's instruction).
+      prompt: opts.prompt,
+    }),
+  );
+  if (!res.ok) throw transportErrorFor(res);
+  let json: {
+    items?: Array<{ title?: string; subtitle?: string; type?: string }>;
+  };
   try {
-    const res = await fetch(op.endpoint ?? "/api/canvas/idea-op", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        text: target.text.slice(0, 4000),
-        kind: op.id,
-        temperature: opts.temperature,
-        // Honored by /api/canvas/converge-diverge; ignored by idea-op.
-        depth: opts.depth,
-        questionCount: opts.questionCount,
-        webSearch: opts.webSearch,
-        // Honored by /api/canvas/custom-op (the user's instruction).
-        prompt: opts.prompt,
-      }),
-    });
-    if (!res.ok) return [];
-    const json = (await res.json()) as {
+    json = (await res.json()) as {
       items?: Array<{ title?: string; subtitle?: string; type?: string }>;
     };
-    return (json.items ?? [])
-      .filter(
-        (it) => typeof it.title === "string" && it.title.trim().length > 0,
-      )
-      .map((it) => ({
-        title: (it.title as string).trim(),
-        subtitle: typeof it.subtitle === "string" ? it.subtitle : undefined,
-        type: typeof it.type === "string" ? it.type : undefined,
-      }))
-      .slice(0, MAX_RESULT_ITEMS);
   } catch {
-    return [];
+    throw new OperationTransportError("server", "malformed response");
   }
+  return (json.items ?? [])
+    .filter((it) => typeof it.title === "string" && it.title.trim().length > 0)
+    .map((it) => ({
+      title: (it.title as string).trim(),
+      subtitle: typeof it.subtitle === "string" ? it.subtitle : undefined,
+      type: typeof it.type === "string" ? it.type : undefined,
+    }))
+    .slice(0, MAX_RESULT_ITEMS);
 }

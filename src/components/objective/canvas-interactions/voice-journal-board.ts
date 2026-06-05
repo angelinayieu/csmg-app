@@ -16,7 +16,11 @@ import {
   JOURNAL_COLOR,
   type JournalCardShape,
 } from "../shapes/journal-card-shape";
-import type { VoiceNoteCardDetail, JournalCardDetail } from "../board-bus";
+import type {
+  VoiceNoteCardDetail,
+  VoiceNoteAnalysisDetail,
+  JournalCardDetail,
+} from "../board-bus";
 
 // Re-export the utils so whiteboard-base can register them from one import.
 export { VoiceNoteCardShapeUtil, JournalCardShapeUtil };
@@ -62,6 +66,9 @@ export function deployVoiceNoteOnBoard(
     return;
   }
 
+  const analysisJson =
+    d.analysisJson ?? JSON.stringify({ status: "pending", points: [] });
+
   // Stack new notes in a column below the objective (notes feed downward,
   // offset to the LEFT so the journal artifact can sit to their right).
   const noteCount = editor
@@ -85,6 +92,9 @@ export function deployVoiceNoteOnBoard(
       authorName: d.authorName || "You",
       transcript: d.transcript,
       createdAtIso: d.createdAtIso,
+      durationMs: d.durationMs ?? 0,
+      analysisJson,
+      expanded: false,
       color: d.color || VOICE_NOTE_COLOR,
     },
   });
@@ -93,6 +103,31 @@ export function deployVoiceNoteOnBoard(
     { x: x + NOTE_W / 2, y: y + NOTE_H / 2 },
     { animation: { duration: 300 } },
   );
+}
+
+/** Attach the AI analysis (and duration) to an existing note by id — updates
+ *  ONLY those props, so it never clobbers a transcript the user has edited. */
+export function updateVoiceNoteAnalysisOnBoard(
+  editor: Editor,
+  d: VoiceNoteAnalysisDetail,
+): void {
+  if (!d?.voiceNoteId) return;
+  const existing = editor
+    .getCurrentPageShapes()
+    .find(
+      (s) =>
+        s.type === "voice-note-card" &&
+        (s as VoiceNoteCardShape).props.voiceNoteId === d.voiceNoteId,
+    );
+  if (!existing) return;
+  editor.updateShape<VoiceNoteCardShape>({
+    id: existing.id,
+    type: "voice-note-card",
+    props: {
+      analysisJson: d.analysisJson,
+      ...(typeof d.durationMs === "number" ? { durationMs: d.durationMs } : {}),
+    },
+  });
 }
 
 export function deployJournalOnBoard(

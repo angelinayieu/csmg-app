@@ -24,6 +24,7 @@ import {
   repairAndExtractJSON,
 } from "@/lib/web-search";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
+import { buildSpaceContext } from "@/lib/objective-canvas/build-space-context";
 
 export const runtime = "nodejs";
 // Opus + several web searches runs long; lift the platform timeout where
@@ -169,7 +170,10 @@ export async function POST(req: Request, ctx: RouteContext) {
     );
   }
 
-  const objective = str(body.objectiveTitle).trim();
+  // Shared context — glossary + resolved intent + the re-framed objective, so
+  // synthesis honors the user's vocabulary instead of reasoning from scratch.
+  const ctx = await buildSpaceContext(auth.supabase, spaceId);
+  const objective = str(body.objectiveTitle).trim() || ctx.objective;
   const system =
     "You are a systems strategist AND researcher helping a user find the non-obvious throughline across items on their strategy whiteboard (sticky notes, free text, and cards). " +
     "Do two things: (1) find the cross-links BETWEEN their items — how they reinforce, tension, gate, or feed each other; (2) use the web_search tool to GROUND and EXTEND the strongest threads with current, concrete external evidence (real examples, data points, prior art, named approaches). Search when external evidence would make a link sharper or more credible; rely on your own reasoning when it would not. " +
@@ -180,6 +184,7 @@ export async function POST(req: Request, ctx: RouteContext) {
     "Produce 3-6 branches. Every branch must reference at least one source by its number. Only include a citation if you actually searched and used that page.";
 
   const user =
+    (ctx.preamble ? `${ctx.preamble}\n\n---\n\n` : "") +
     (objective ? `Objective: ${objective}\n\n` : "") +
     `The user selected these items from their strategy whiteboard:\n\n${selectionBlock(
       selection,

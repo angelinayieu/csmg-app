@@ -12,7 +12,10 @@
 // Reuses the existing /api/canvas/converge-diverge pipeline; results land as
 // artifact cards via the board-bus deploy event.
 
-import { deployArtifactCard } from "@/components/objective/board-bus";
+import {
+  deployArtifactCard,
+  updateVoiceNoteAnalysis,
+} from "@/components/objective/board-bus";
 
 const MIN_CHARS = 18;
 const DEBOUNCE_MS = 1800;
@@ -46,6 +49,52 @@ export function handleVoiceSentence(spaceId: string, sentence: string): void {
   buf.sentences.push(clean);
   if (buf.timer) clearTimeout(buf.timer);
   buf.timer = setTimeout(() => void flush(spaceId), DEBOUNCE_MS);
+}
+
+/** One-shot analysis of a committed note → attached to its card (not loose
+ *  artifact cards). Reuses the diverge pipeline; soft-fails silently. The note
+ *  card shows "Analyzing…" until this lands. */
+export async function analyzeVoiceNote(
+  voiceNoteId: string,
+  text: string,
+  durationMs?: number,
+): Promise<void> {
+  const clean = text.trim();
+  if (clean.length < MIN_CHARS) {
+    updateVoiceNoteAnalysis({
+      voiceNoteId,
+      analysisJson: JSON.stringify({ status: "ready", points: [] }),
+      durationMs,
+    });
+    return;
+  }
+  try {
+    const res = await fetch("/api/canvas/converge-diverge", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: clean, kind: "diverge", questionCount: 3, depth: 3 }),
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    const json = (await res.json()) as {
+      items?: Array<{ title?: string; subtitle?: string }>;
+    };
+    const points = (Array.isArray(json.items) ? json.items : [])
+      .map((it) => ({ title: (it.title ?? "").trim(), subtitle: it.subtitle }))
+      .filter((p) => p.title)
+      .slice(0, MAX_CARDS_PER_BATCH);
+    updateVoiceNoteAnalysis({
+      voiceNoteId,
+      analysisJson: JSON.stringify({ status: "ready", points }),
+      durationMs,
+    });
+  } catch {
+    // Soft-fail — clear the pending spinner with an empty-but-ready analysis.
+    updateVoiceNoteAnalysis({
+      voiceNoteId,
+      analysisJson: JSON.stringify({ status: "ready", points: [] }),
+      durationMs,
+    });
+  }
 }
 
 async function flush(spaceId: string): Promise<void> {

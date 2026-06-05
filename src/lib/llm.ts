@@ -48,15 +48,16 @@ export const MODEL_DEFAULTS = {
 // other Anthropic call sites.
 //
 // BEST_CLAUDE_MODEL — the current frontier Opus, for surfaces whose whole value
-// is raw answer quality. NOTE: Opus 4.8 has DEPRECATED the `temperature` param
-// (the API 400s if you send it), so it can't be paired with a user-facing
-// temperature knob — modelSupportsTemperature() strips it defensively.
+// is raw answer quality. Was "claude-opus-4-8" which 404s (the 4.8 id was never
+// released / has been rolled back) — that 404 was the source of the silent
+// "Tech spec failed" card on the board. 4.7 is the current frontier Opus and
+// accepts `temperature` again.
 //
-// BEST_TUNABLE_CLAUDE_MODEL — the best Opus that STILL honors a custom
+// BEST_TUNABLE_CLAUDE_MODEL — the best Opus that honors a custom
 // `temperature`. Use this wherever the user controls sampling, e.g. the
 // on-canvas "simple analysis" power-ups whose scanner exposes a temperature
 // slider (decompose / variations / questions / plan / layers / data-flow).
-export const BEST_CLAUDE_MODEL = "claude-opus-4-8";
+export const BEST_CLAUDE_MODEL = "claude-opus-4-7";
 export const BEST_TUNABLE_CLAUDE_MODEL = "claude-opus-4-1-20250805";
 
 // BEST_FAST_CLAUDE_MODEL — the current fast/mid-tier Sonnet, for utility

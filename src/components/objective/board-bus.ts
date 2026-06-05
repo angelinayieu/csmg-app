@@ -292,11 +292,31 @@ export interface VoiceNoteCardDetail {
   authorName: string;
   transcript: string;
   createdAtIso: string;
+  /** Length of the recording in ms (metadata shown when expanded). */
+  durationMs?: number;
+  /** AI analysis, JSON-encoded ({ status, points: [{title, subtitle}] }). */
+  analysisJson?: string;
   color?: string;
 }
 export const DEPLOY_VOICE_NOTE_EVENT = "objective-board:deploy-voice-note";
 export function deployVoiceNoteCard(detail: VoiceNoteCardDetail) {
   window.dispatchEvent(new CustomEvent(DEPLOY_VOICE_NOTE_EVENT, { detail }));
+}
+
+// ── Voice-note analysis update ─────────────────────────────────────
+// The note's AI analysis lands async (a beat after the card). This updates
+// ONLY the analysis/duration props by voiceNoteId, so it never clobbers a
+// transcript the user has edited in the meantime.
+
+export interface VoiceNoteAnalysisDetail {
+  voiceNoteId: string;
+  /** JSON-encoded VoiceNoteAnalysis ({ status, points }). */
+  analysisJson: string;
+  durationMs?: number;
+}
+export const UPDATE_VOICE_ANALYSIS_EVENT = "objective-board:update-voice-analysis";
+export function updateVoiceNoteAnalysis(detail: VoiceNoteAnalysisDetail) {
+  window.dispatchEvent(new CustomEvent(UPDATE_VOICE_ANALYSIS_EVENT, { detail }));
 }
 
 // ── Journal synthesis artifact → board ─────────────────────────────
@@ -316,6 +336,21 @@ export interface JournalCardDetail {
 export const DEPLOY_JOURNAL_EVENT = "objective-board:deploy-journal";
 export function deployJournalCard(detail: JournalCardDetail) {
   window.dispatchEvent(new CustomEvent(DEPLOY_JOURNAL_EVENT, { detail }));
+}
+
+// ── Open the editable Notebook panel ───────────────────────────────
+// Fired by the journal-card "Open" button + the Notebook dock engine.
+// The NotebookMount listens and opens the on-canvas editable panel (the
+// board stays live behind it). artifactId optional — the panel resolves the
+// space's notebook artifact when omitted.
+
+export interface OpenNotebookDetail {
+  spaceId: string;
+  artifactId?: string | null;
+}
+export const OPEN_NOTEBOOK_EVENT = "objective-board:open-notebook";
+export function openNotebook(detail: OpenNotebookDetail) {
+  window.dispatchEvent(new CustomEvent(OPEN_NOTEBOOK_EVENT, { detail }));
 }
 
 // ── Resolution Studio (immersive "I'll answer") ───────────────────

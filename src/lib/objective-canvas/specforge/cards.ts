@@ -26,11 +26,16 @@ import type {
   FeatureCard,
   FeatureMechanismsResult,
   FeatureMechanism,
+  DataPointsResult,
+  DataPoint,
   ValidationResult,
   ValidationExperiment,
   DeepeningResult,
   DeepeningBaseline,
   DeepeningUncertainty,
+  SpecExportResult,
+  SpecExportImplementationTask,
+  SpecExportCausalTraceRow,
 } from "./types";
 
 /** Join a few bullet strings into the shape's "\n"-delimited body. */
@@ -556,6 +561,52 @@ export function resultToCards(
       });
     }
 
+    case "data_points": {
+      const r = result as DataPointsResult;
+      const pts: DataPoint[] = Array.isArray(r.data_points)
+        ? r.data_points.filter((d) => d && clean(d.name))
+        : [];
+      if (!pts.length) return [];
+      // Surface only kept data (not removed) — risk-weighted: HIGH risks first.
+      const kept = pts.filter((p) => String(p.disposition) !== "removed");
+      const riskWeight = (p: DataPoint): number => {
+        const w = (r: unknown): number =>
+          r === "high" ? 3 : r === "medium" ? 2 : 1;
+        return w(p.collection_friction) + w(p.reliability_risk) + w(p.privacy_risk);
+      };
+      const sorted = kept
+        .slice()
+        .sort((a, b) => riskWeight(b) - riskWeight(a));
+      return sorted.slice(0, 3).map((p) => {
+        const vars = (p.variables ?? []).map(clean).filter(Boolean).slice(0, 3).join(", ");
+        const proxies = (p.alternative_proxies ?? [])
+          .map(clean)
+          .filter(Boolean)
+          .slice(0, 2)
+          .join(", ");
+        const fail = (p.failure_modes ?? []).map(clean).filter(Boolean)[0];
+        const risks: string[] = [];
+        if (String(p.collection_friction) === "high") risks.push("friction high");
+        if (String(p.reliability_risk) === "high") risks.push("reliability low");
+        if (String(p.privacy_risk) === "high") risks.push("privacy sensitive");
+        return {
+          stage: "data" as const,
+          eyebrow: `Data point · ${clean(p.disposition) || "?"}`,
+          title: clean(p.name),
+          subtitle: clean(p.concept_definition) || undefined,
+          body: bullets([
+            vars && `Variables: ${vars}`,
+            clean(p.source) && `Source: ${clean(p.source)}`,
+            risks.length ? `Risks: ${risks.join(" · ")}` : undefined,
+            proxies && `Proxies: ${proxies}`,
+            clean(p.selected_handling_method) && `Handling: ${clean(p.selected_handling_method)}`,
+            fail ? `Top failure: ${fail}` : undefined,
+          ]),
+          layout: "diverge",
+        };
+      });
+    }
+
     case "validation": {
       const r = result as ValidationResult;
       const exps: ValidationExperiment[] = Array.isArray(r.experiments)
@@ -651,6 +702,70 @@ export function resultToCards(
               : "",
           ]),
           layout: "spine",
+        },
+      ];
+    }
+
+    case "spec_export": {
+      const r = result as SpecExportResult;
+      const summary = r.product_summary;
+      const productName = clean(summary?.product_name);
+      const oneLiner = clean(summary?.one_liner);
+      const tasks: SpecExportImplementationTask[] = Array.isArray(
+        r.implementation_tasks,
+      )
+        ? r.implementation_tasks
+        : [];
+      const trace: SpecExportCausalTraceRow[] = Array.isArray(r.causal_trace)
+        ? r.causal_trace
+        : [];
+      const mustBuild = Array.isArray(r.first_build_scope?.must_build_now)
+        ? r.first_build_scope.must_build_now.map(clean).filter(Boolean)
+        : [];
+      const missing = Array.isArray(r.missing_inputs)
+        ? r.missing_inputs.map(clean).filter(Boolean)
+        : [];
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      // No usable spec → no card (soft-fail the chain).
+      if (!productName && !oneLiner && !tasks.length) return [];
+      const title = productName || "Build spec exported";
+      const subtitleParts = [
+        oneLiner,
+        summary?.selected_mvp && `Selected MVP: ${clean(summary.selected_mvp)}`,
+      ]
+        .map((s) => (typeof s === "string" ? s : ""))
+        .filter(Boolean) as string[];
+      const topTask = tasks[0];
+      const topTaskLine = topTask
+        ? `Top task: ${clean(topTask.task_name)} (from ${clean(topTask.source_kind) || "?"} "${clean(topTask.source) || "?"}")`
+        : "";
+      const traceLine = trace.length
+        ? `Causal trace: ${trace.length} row${trace.length === 1 ? "" : "s"}`
+        : "";
+      const mustLine = mustBuild.length
+        ? `Must build now: ${mustBuild.slice(0, 3).join(", ")}${mustBuild.length > 3 ? "…" : ""}`
+        : "";
+      const missingLine = missing.length
+        ? `Missing inputs: ${missing.slice(0, 2).join("; ")}`
+        : "";
+      return [
+        {
+          stage: "export" as const,
+          title,
+          subtitle: subtitleParts.join(" · "),
+          body: bullets([
+            traceLine,
+            mustLine,
+            tasks.length
+              ? `Implementation tasks: ${tasks.length}`
+              : "",
+            topTaskLine,
+            missingLine,
+            conf !== null ? `Build spec confidence: ${conf}` : "",
+          ]),
+          layout: "hero",
         },
       ];
     }
@@ -1042,6 +1157,56 @@ export function summarizeForContext(
         .filter(Boolean)
         .join("\n");
     }
+    case "data_points": {
+      const r = result as DataPointsResult;
+      const pts: DataPoint[] = Array.isArray(r.data_points) ? r.data_points : [];
+      const kept = pts.filter(
+        (p) => p && clean(p.name) && String(p.disposition) !== "removed",
+      );
+      const ptsLine = kept
+        .slice(0, 6)
+        .map(
+          (p) =>
+            `${clean(p.name)} (${clean(p.disposition) || "?"}, src=${clean(p.source) || "?"})`,
+        )
+        .filter((s) => !s.startsWith(" "))
+        .join("; ");
+      const validationHints = kept
+        .slice(0, 5)
+        .flatMap((p) => (p.validation_needed ?? []).map(clean).filter(Boolean))
+        .slice(0, 3)
+        .join("; ");
+      const constraints = kept
+        .slice(0, 5)
+        .flatMap((p) => (p.constraints_created ?? []).map(clean).filter(Boolean))
+        .slice(0, 3)
+        .join("; ");
+      const removed = (Array.isArray(r.removed_data) ? r.removed_data : [])
+        .slice(0, 3)
+        .map((d) => `${clean(d?.name)}: ${clean(d?.reason)}`)
+        .filter((s) => !s.startsWith(": "))
+        .join("; ");
+      const risks = (Array.isArray(r.risks) ? r.risks : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join("; ");
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      return [
+        clean(r.selected_mvp) && `MVP: ${clean(r.selected_mvp)}`,
+        ptsLine && `Data points (kept): ${ptsLine}`,
+        clean(r.data_flow_summary) && `Data flow: ${clean(r.data_flow_summary)}`,
+        validationHints && `Data validation hints: ${validationHints}`,
+        constraints && `Data constraints: ${constraints}`,
+        removed && `Removed data: ${removed}`,
+        risks && `Data risks: ${risks}`,
+        conf !== null && `Data plan confidence: ${conf}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
     case "validation": {
       const r = result as ValidationResult;
       const exps: ValidationExperiment[] = Array.isArray(r.experiments)
@@ -1114,6 +1279,30 @@ export function summarizeForContext(
         baselines && `Baselines: ${baselines}`,
         next && clean(next.action) && `Next iteration: ${clean(next.action)}`,
         conf !== null && `Model confidence: ${conf}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "spec_export": {
+      // Terminal engine — nothing downstream consumes its summary, but the
+      // runner always calls summarizeForContext. Keep it minimal but
+      // informative for any future post-spec_export consumer.
+      const r = result as SpecExportResult;
+      const summary = r.product_summary;
+      const tasksCount = Array.isArray(r.implementation_tasks)
+        ? r.implementation_tasks.length
+        : 0;
+      const missingCount = Array.isArray(r.missing_inputs)
+        ? r.missing_inputs.filter((s) => clean(s)).length
+        : 0;
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      return [
+        clean(summary?.product_name) && `Spec exported for: ${clean(summary.product_name)}`,
+        tasksCount > 0 && `Implementation tasks: ${tasksCount}`,
+        missingCount > 0 && `Missing sections: ${missingCount}`,
+        conf !== null && `Build spec confidence: ${conf}`,
       ]
         .filter(Boolean)
         .join("\n");

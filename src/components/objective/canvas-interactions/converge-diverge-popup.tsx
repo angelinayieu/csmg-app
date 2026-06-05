@@ -27,6 +27,11 @@ const COLLAPSED = 40; // circular button diameter
 const EXPANDED = 132; // width once hovered (icon + label)
 const STACK_H = COLLAPSED * 2 + 8;
 
+/** Why a verb produced no cards — drives the honest retry pill. "empty" = the
+ *  model genuinely returned nothing; the rest = the request failed and a retry
+ *  is worthwhile (these used to ALL read as a misleading "Empty"). */
+type VerbStatus = "empty" | "error" | "credits";
+
 /** anchor = the selection's bounding box in SCREEN coords. */
 export function ConvergeDivergePopup({
   anchor,
@@ -36,7 +41,7 @@ export function ConvergeDivergePopup({
   onRun: (
     opId: string,
     temperature: number,
-  ) => Promise<{ count: number }> | void;
+  ) => Promise<{ count: number; error?: string }> | void;
 }) {
   const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
   // Sit beside the selection; flip to its left if the right would overflow.
@@ -47,15 +52,26 @@ export function ConvergeDivergePopup({
   const top = Math.max(12, anchor.midY - STACK_H / 2);
 
   const [ran, setRan] = useState<Direction | null>(null);
-  // Brief per-verb "came back empty" flag so a 0-result run gives feedback
-  // instead of silently doing nothing — the root of the "converge doesn't work
-  // for connection" report (the converge prompt can yield 0 decision nodes on a
-  // thin connection card, and the result was being swallowed with no signal).
-  const [empty, setEmpty] = useState<Direction | null>(null);
+  // Per-verb feedback when a run lands no cards, so it never silently does
+  // nothing — the root of the "diverge doesn't work, just goes empty" report.
+  // We now separate a genuine empty result from a failed request (the request
+  // was failing silently and reading as "Empty", which looked like diverge was
+  // broken) so the user knows when a retry is actually worthwhile.
+  const [outcome, setOutcome] = useState<{
+    dir: Direction;
+    status: VerbStatus;
+  } | null>(null);
+  function flash(dir: Direction, status: VerbStatus) {
+    setOutcome({ dir, status });
+    window.setTimeout(
+      () => setOutcome((c) => (c?.dir === dir ? null : c)),
+      3200,
+    );
+  }
   async function run(dir: Direction) {
     if (ran) return;
     setRan(dir);
-    setEmpty(null);
+    setOutcome(null);
     try {
       const res = await Promise.resolve(
         onRun(
@@ -64,13 +80,19 @@ export function ConvergeDivergePopup({
         ),
       );
       if (res && res.count === 0) {
-        setEmpty(dir);
-        window.setTimeout(() => setEmpty((c) => (c === dir ? null : c)), 2600);
+        flash(
+          dir,
+          res.error === "credits"
+            ? "credits"
+            : res.error
+              ? "error"
+              : "empty",
+        );
       }
     } catch {
-      // executeCardOperation soft-fails internally; treat a throw as empty too.
-      setEmpty(dir);
-      window.setTimeout(() => setEmpty((c) => (c === dir ? null : c)), 2600);
+      // executeCardOperation catches transport errors internally, but treat any
+      // unexpected throw as a failed run (retry-worthy), not a genuine empty.
+      flash(dir, "error");
     } finally {
       setRan((c) => (c === dir ? null : c));
     }
@@ -96,7 +118,7 @@ export function ConvergeDivergePopup({
         label="Diverge"
         Icon={ChevronLeft}
         busy={ran === "diverge"}
-        empty={empty === "diverge"}
+        status={outcome?.dir === "diverge" ? outcome.status : null}
         flip={flip}
         onClick={() => run("diverge")}
       />
@@ -105,7 +127,7 @@ export function ConvergeDivergePopup({
         label="Converge"
         Icon={ChevronRight}
         busy={ran === "converge"}
-        empty={empty === "converge"}
+        status={outcome?.dir === "converge" ? outcome.status : null}
         flip={flip}
         onClick={() => run("converge")}
       />
@@ -113,11 +135,18 @@ export function ConvergeDivergePopup({
   );
 }
 
+/** Pill copy + accent per non-empty outcome. */
+const STATUS_COPY: Record<VerbStatus, { text: string; color: string; width: number }> = {
+  empty: { text: "Empty — retry", color: "#B45309", width: 150 },
+  error: { text: "Couldn't run — retry", color: "#B91C1C", width: 188 },
+  credits: { text: "Out of credits", color: "#B91C1C", width: 150 },
+};
+
 function Verb({
   label,
   Icon,
   busy,
-  empty,
+  status,
   flip,
   onClick,
 }: {
@@ -125,12 +154,13 @@ function Verb({
   label: string;
   Icon: typeof ChevronLeft;
   busy: boolean;
-  empty: boolean;
+  status: VerbStatus | null;
   flip: boolean;
   onClick: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  const expanded = hover || busy || empty;
+  const copy = status ? STATUS_COPY[status] : null;
+  const expanded = hover || busy || !!status;
   return (
     <button
       type="button"
@@ -148,13 +178,13 @@ function Verb({
         justifyContent: flip ? "flex-end" : "flex-start",
         gap: 8,
         height: COLLAPSED,
-        width: empty ? 150 : expanded ? EXPANDED : COLLAPSED,
+        width: copy ? copy.width : expanded ? EXPANDED : COLLAPSED,
         padding: "0 12px",
         borderRadius: 999,
         border: "1px solid var(--glass-border)",
         cursor: "pointer",
         overflow: "hidden",
-        color: empty ? "#B45309" : appleVibe.text.primary,
+        color: copy ? copy.color : appleVibe.text.primary,
         background: "var(--glass-float-bg)",
         backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
         WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
@@ -166,7 +196,7 @@ function Verb({
       <span style={{ display: "inline-flex", flexShrink: 0 }}>
         {busy ? (
           <Loader2 className="animate-spin" style={{ width: 17, height: 17 }} />
-        ) : empty ? (
+        ) : copy ? (
           <RotateCcw style={{ width: 16, height: 16 }} strokeWidth={2.4} />
         ) : (
           <Icon style={{ width: 18, height: 18 }} strokeWidth={2.4} />
@@ -182,7 +212,7 @@ function Verb({
           transition: "opacity var(--dur-quick, 140ms) ease-out",
         }}
       >
-        {empty ? "Empty — retry" : label}
+        {copy ? copy.text : label}
       </span>
     </button>
   );

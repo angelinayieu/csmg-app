@@ -115,12 +115,14 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
   const minimal = mode === "space" && !isBrief && !fullMode;
 
   // Where the whiteboard's collapsible style palette anchors (top-right).
-  // Full mode can show the Notebook pill in that same corner, so push the
-  // palette below it; minimal mode has no pill, so let it hug the corner.
+  // BoardNavBar moved to top-LEFT, so the top-right corner is free for the
+  // palette in BOTH modes. The Saved pill sits to its LEFT (right: 168) at
+  // ~top: 18, so palette at the same y reads as one clean top-right row.
+  // Library + Powerups pills sit BELOW at top: 56 / 96 and don't conflict.
   // Read as `--oc-style-panel-top` by CollapsibleStylePanel.
   useEffect(() => {
     const root = document.documentElement;
-    root.style.setProperty("--oc-style-panel-top", minimal ? "14px" : "60px");
+    root.style.setProperty("--oc-style-panel-top", "14px");
     return () => {
       root.style.removeProperty("--oc-style-panel-top");
     };

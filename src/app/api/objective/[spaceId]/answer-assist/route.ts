@@ -10,6 +10,7 @@
 import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
 import { llmJSON } from "@/lib/llm";
+import { buildSpaceContext } from "@/lib/objective-canvas/build-space-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,9 +39,9 @@ Return:
 Be specific to THIS objective. No preamble, no meta-commentary.`;
 
 export async function POST(req: Request, ctx: Ctx) {
-  const { user, error } = await safeAuth();
+  const { supabase, error } = await safeAuth();
   if (error) return error;
-  await ctx.params; // spaceId not needed beyond auth scope, but keep the contract
+  const { spaceId } = await ctx.params;
 
   let phrase = "";
   let question = "";
@@ -66,7 +67,13 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!phrase && !transcript)
     return NextResponse.json({ distilled: "", suggestions: [] });
 
+  // Shared context — keep the distilled answer consistent with terms the user
+  // has already resolved (+ the re-framed objective).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sctx = await buildSpaceContext(supabase as any, spaceId);
+
   const userMsg = [
+    sctx.preamble || "",
     `Phrase: "${phrase}"`,
     question ? `Question: ${question}` : "",
     candidateReadings.length

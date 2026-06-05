@@ -34,6 +34,7 @@ export type SpecForgeStage =
   | "data" // data point optimization model (jade-teal)
   | "validation" // experimentation / validation lab (rose-red)
   | "deepening" // iteration timeline / situation-model deepening (deep purple)
+  | "export" // spec exporter / build instruction generator (graphite-blue)
   | "constraints" // accumulated constraint strip (warm amber)
   | "quality"; // causal quality critic / repair report (cyan)
 
@@ -65,6 +66,7 @@ export const STAGE_META: Record<SpecForgeStage, StageMeta> = {
   data: { label: "Data point", color: "#2E9B8C" },
   validation: { label: "Validation plan", color: "#D9486F" },
   deepening: { label: "Iteration deepening", color: "#7C4DFF" },
+  export: { label: "Build spec export", color: "#2F455E" },
   constraints: { label: "Constraint accumulation", color: "#B5743B" },
   quality: { label: "Quality gate", color: "#0EA5A4" },
 };
@@ -87,7 +89,8 @@ export type SpecForgeEngineId =
   | "feature_mechanisms"
   | "data_points"
   | "validation"
-  | "deepening";
+  | "deepening"
+  | "spec_export";
 
 /** The chain the runner executes, in causal order (converge → diverge →
  *  converge). Each engine receives the accumulated context of the ones before
@@ -112,6 +115,7 @@ export const SPECFORGE_CHAIN: SpecForgeEngineId[] = [
   "data_points",
   "validation",
   "deepening",
+  "spec_export",
 ];
 
 /** Human label per engine — used for progress copy ("Forging target user…"). */
@@ -133,6 +137,7 @@ export const ENGINE_LABEL: Record<SpecForgeEngineId, string> = {
   data_points: "Optimizing the data points",
   validation: "Designing the validation plan",
   deepening: "Recording the iteration baseline",
+  spec_export: "Exporting the build spec",
 };
 
 // ── One unfurled card ──────────────────────────────────────────────
@@ -851,6 +856,132 @@ export interface DeepeningResult {
   confidence: number; // 0..100
 }
 
+/** Spec Exporter / Build Instruction Generator — per
+ *  specforge_spec_exporter_build_instruction_generator.md. Terminal engine:
+ *  consumes target_user + problem_tree + desired_result + convergence +
+ *  differentiation + recommendation + feature_cards + feature_mechanisms +
+ *  data_points + evaluation + validation, restates the causal chain with
+ *  build implications, and produces the two genuinely new outputs:
+ *  implementation_tasks (with provenance back to features/mechanisms) and
+ *  coding_agent_prompt (a synthesized prompt for an external coding agent).
+ *  Does NOT regenerate anything upstream — pure synthesis. */
+export interface SpecExportProductSummary {
+  product_name: string;
+  one_liner: string;
+  primary_target_user: string;
+  core_user_problem: string;
+  root_constraint: string;
+  first_principles_need: string;
+  selected_mvp: string;
+  core_product_loop: string;
+  primary_desired_result: string;
+  differentiation_thesis: string;
+}
+
+/** One row in the causal trace table — restates an upstream reasoning artifact
+ *  with the decision it supports + the build implication that falls out. */
+export interface SpecExportCausalTraceRow {
+  /** The reasoning artifact name (e.g. "Root constraint"). */
+  artifact: string;
+  /** What the artifact said in one line. */
+  finding: string;
+  /** The decision downstream of that finding (e.g. "MVP must include …"). */
+  decision_supported: string;
+  /** What the build must include / avoid because of that decision. */
+  build_implication: string;
+}
+
+export interface SpecExportFirstBuildScope {
+  must_build_now: string[];
+  should_build_if_simple: string[];
+  must_delay: string[];
+  must_not_build: string[];
+}
+
+/** One feature requirement — lifted from feature_cards + cross-referenced
+ *  with the mechanism. Does NOT redo feature_cards work; provides the build
+ *  spec's required-fields view (spec §12). */
+export interface SpecExportFeatureRequirement {
+  feature_name: string;
+  function: string;
+  macro_objective_served: string;
+  micro_objective_served: string;
+  root_cause_attacked: string;
+  recommended_mechanism: string;
+  top_acceptance_criterion: string;
+}
+
+/** One mechanism requirement — lifted from feature_mechanisms, condensed to
+ *  the spec §13 required-fields view. */
+export interface SpecExportMechanismRequirement {
+  mechanism_name: string;
+  feature: string;
+  trigger: string;
+  inputs_summary: string;
+  process_summary: string;
+  outputs_summary: string;
+  top_test_method: string;
+}
+
+/** One data requirement — lifted from data_points. */
+export interface SpecExportDataRequirement {
+  data_point: string;
+  source: string;
+  disposition: string;
+  why_it_exists: string;
+  top_constraint: string;
+}
+
+/** One implementation task — the GENUINELY NEW output. Every task MUST link
+ *  back to a feature_cards.features[].name OR feature_mechanisms.mechanisms[].
+ *  mechanism_name (provenance — spec §18). */
+export interface SpecExportImplementationTask {
+  task_name: string;
+  description: string;
+  /** Provenance — either a feature card name or a mechanism name. Required. */
+  source: string;
+  /** "feature" | "mechanism" — narrows the source. */
+  source_kind: "feature" | "mechanism";
+  user_value: string;
+  components: string[];
+  acceptance_criteria: string[];
+  dependencies: string[];
+}
+
+/** Validation plan summary — lifted from validation, NOT regenerated. */
+export interface SpecExportValidationSummary {
+  top_assumption: string;
+  top_experiment: string;
+  success_marker: string;
+  failure_marker: string;
+}
+
+export interface SpecExportResult {
+  product_summary: SpecExportProductSummary;
+  /** The causal chain restated as a 6–10 row provenance table. */
+  causal_trace: SpecExportCausalTraceRow[];
+  first_build_scope: SpecExportFirstBuildScope;
+  user_flow: string[];
+  feature_requirements: SpecExportFeatureRequirement[];
+  mechanism_requirements: SpecExportMechanismRequirement[];
+  data_requirements: SpecExportDataRequirement[];
+  validation_plan_summary: SpecExportValidationSummary;
+  /** The genuinely new output #1: implementation tasks with provenance. */
+  implementation_tasks: SpecExportImplementationTask[];
+  /** Top-level (product-wide) acceptance criteria — NOT per-task. */
+  acceptance_criteria: string[];
+  /** The genuinely new output #2: the synthesized prompt for an external
+   *  coding agent. Per spec §19: must explicitly forbid generic cards, must
+   *  preserve the causal chain, must enumerate non-goals. */
+  coding_agent_prompt: string;
+  /** Sections the engine could NOT fill because the upstream input was
+   *  missing or too thin. Per spec §5: required-input failures must be
+   *  visible, not silently dropped. */
+  missing_inputs: string[];
+  /** Confidence the spec is buildable end-to-end (0–100). */
+  confidence: number;
+}
+
 /** Discriminated map id → result type, for the normalizer. */
 export interface EngineResultMap {
   power_up: PowerUpResult;
@@ -867,6 +998,8 @@ export interface EngineResultMap {
   recommendation: RecommendationResult;
   feature_cards: FeatureCardsResult;
   feature_mechanisms: FeatureMechanismsResult;
+  data_points: DataPointsResult;
   validation: ValidationResult;
   deepening: DeepeningResult;
+  spec_export: SpecExportResult;
 }
