@@ -10,7 +10,7 @@
 
 import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
-import { getBalance } from "@/lib/credits";
+import { getBalance, getSpendable } from "@/lib/credits";
 import { TIERS } from "@/lib/tiers";
 
 export const runtime = "nodejs";
@@ -33,10 +33,26 @@ export async function GET() {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
-  const balance = await getBalance(db, user.id);
+  // Two-bucket model: `balance` = purchased credits (rollover); the weekly plan
+  // allowance + the combined `spendable` come from the profile / get_spendable.
+  const [balance, spendable] = await Promise.all([
+    getBalance(db, user.id),
+    getSpendable(db, user.id),
+  ]);
+  const { data: prof } = await db
+    .from("profiles")
+    .select("allowance_remaining, weekly_allowance, plan")
+    .eq("id", user.id)
+    .maybeSingle();
 
   return NextResponse.json({
+    // `balance` kept as the purchased-credit number for back-compat with
+    // existing chip consumers; `spendable` is what the user can actually spend.
     balance,
+    spendable,
+    plan: prof?.plan ?? "free",
+    allowanceRemaining: prof?.allowance_remaining ?? 0,
+    weeklyAllowance: prof?.weekly_allowance ?? 0,
     // Include tier costs so the UI can render "X credits = Y standard runs"
     // without re-importing the tier config on the client.
     tiers: {

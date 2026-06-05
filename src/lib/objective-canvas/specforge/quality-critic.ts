@@ -31,6 +31,10 @@ import type {
   FeatureMechanism,
   DataPointsResult,
   DataPoint,
+  LayerOptimizationResult,
+  LayerNode,
+  LayerAlignmentCheck,
+  ConsequentialEvaluation,
   ValidationResult,
   ValidationExperiment,
   ValidationAssumption,
@@ -659,6 +663,124 @@ export function evaluateSpecForgeQuality(
 
       const ctx = kept.slice(0, 3).map((p) => clean(p?.name)).filter(Boolean);
       return finalize(engine, issues, repaired, ctx);
+    }
+
+    case "layer_optimization": {
+      const r = result as LayerOptimizationResult;
+      const macro = (r.macro ?? {}) as LayerNode;
+      const micros = arr<LayerNode>(r.micros);
+      const mechs = arr<LayerNode>(r.mechanisms);
+      const checks = arr<LayerAlignmentCheck>(r.alignment_checks);
+      const conseq = arr<ConsequentialEvaluation>(r.consequential_evaluations);
+
+      // Critical: macro must exist with an objective. Without it, no vertical
+      // alignment is meaningful (every check would compare against nothing).
+      add(issues, !clean(macro?.objective), "critical", "downstream usefulness", "missing macro objective", "lift convergence.distilled_product_thesis (or recommendation.recommendation) as macro.objective");
+
+      // Critical (spec §14): at least one micro AND one mechanism are required
+      // for the audit to mean anything. An empty stack is not "aligned" — it's
+      // not even auditable.
+      add(issues, !micros.length, "critical", "downstream usefulness", "no micro layer nodes", "produce one micro node per feature_cards.features[] entry");
+      add(issues, !mechs.length, "critical", "downstream usefulness", "no mechanism layer nodes", "produce one mechanism node per feature_mechanisms.mechanisms[] entry");
+
+      // High: every micro/mechanism MUST have its parent set, OR the layer is
+      // orphaned. This is the central anti-orphan rule of recursive layering
+      // (spec §6 schema field is required for a reason).
+      const orphanedMicros = micros.filter((m) => !clean(m?.parent)).length;
+      const orphanedMechs = mechs.filter((m) => !clean(m?.parent)).length;
+      add(issues, orphanedMicros > 0, "high", "downstream usefulness", `${orphanedMicros} micro node(s) missing parent`, "set every micro.parent to the macro objective");
+      add(issues, orphanedMechs > 0, "high", "downstream usefulness", `${orphanedMechs} mechanism node(s) missing parent`, "set every mechanism.parent to the feature_name it links to");
+
+      // High: every layer node must pass constraints downstream (spec §5.5).
+      // If 'constraints_passed_down' is empty, that layer is a dead-end —
+      // downstream engines lose the narrowing they need.
+      const noDownMicros = micros.filter((m) => !arr<string>(m?.constraints_passed_down).filter(Boolean).length).length;
+      add(issues, noDownMicros > 0, "high", "constraint satisfaction", `${noDownMicros} micro node(s) pass no constraints downstream`, "each micro must name at least one constraint the mechanism layer must obey");
+
+      // High: alignment check COVERAGE (spec §4.4). For the audit to mean
+      // anything, every micro should be checked against the macro and every
+      // mechanism against its micro. We let one or two missing pass as a
+      // medium issue; broad gaps fail high.
+      const microChecks = checks.filter((c) => clean(c?.edge) === "micro_to_macro").length;
+      const mechChecks = checks.filter((c) => clean(c?.edge) === "mechanism_to_micro").length;
+      const microCoverageGap = Math.max(0, micros.length - microChecks);
+      const mechCoverageGap = Math.max(0, mechs.length - mechChecks);
+      add(issues, microCoverageGap >= Math.max(1, Math.ceil(micros.length / 2)), "high", "downstream usefulness", `${microCoverageGap} micro(s) not checked against macro`, "produce one micro_to_macro alignment_check per micro node");
+      add(issues, mechCoverageGap >= Math.max(1, Math.ceil(mechs.length / 2)), "high", "downstream usefulness", `${mechCoverageGap} mechanism(s) not checked against parent feature`, "produce one mechanism_to_micro alignment_check per mechanism node");
+
+      // High: drifted/broken checks MUST have a non-generic
+      // repair_recommendation. Without it, "drift" is just naming — not
+      // actionable for validation to lift.
+      const driftedNoRepair = checks
+        .filter((c) => ["drifted", "broken"].includes(String(c?.verdict)))
+        .filter((c) => !clean(c?.repair_recommendation)).length;
+      add(issues, driftedNoRepair > 0, "high", "evidence honesty", `${driftedNoRepair} drifted/broken check(s) without a repair recommendation`, "for every drifted or broken alignment, name a CONCRETE repair (replace X with mechanism that targets Y) — not generic advice");
+
+      // High (spec §9): four consequential handoffs are required —
+      // recommendation→feature_cards, feature_cards→feature_mechanisms,
+      // feature_mechanisms→data_points, data_points→validation. Anything less
+      // means the engine is not auditing the whole spine.
+      const expectedHandoffs = new Set([
+        "recommendation>feature_cards",
+        "feature_cards>feature_mechanisms",
+        "feature_mechanisms>data_points",
+        "data_points>validation",
+      ]);
+      const seenHandoffs = new Set(
+        conseq
+          .map((c) => `${clean(c?.current_layer)}>${clean(c?.next_layer)}`)
+          .filter((s) => !s.startsWith(">")),
+      );
+      const missingHandoffs = [...expectedHandoffs].filter((h) => !seenHandoffs.has(h));
+      add(issues, missingHandoffs.length > 0, "high", "downstream usefulness", `${missingHandoffs.length} required consequential handoff(s) missing`, `produce a consequential_evaluation for each of: ${missingHandoffs.join(", ")}`);
+
+      // Medium: consequential evaluations need concrete improvements/risks.
+      // Generic "improves quality" doesn't help anyone downstream.
+      const genericConseq = conseq.filter(
+        (c) =>
+          !clean(c?.downstream_improvement) ||
+          !clean(c?.downstream_risk_if_wrong),
+      ).length;
+      add(issues, genericConseq > 0, "medium", "evidence honesty", `${genericConseq} consequential evaluation(s) missing improvement or risk`, "name the SPECIFIC improvement and risk for each handoff — not generic phrases");
+
+      // High: drifted/broken alignment MUST surface in layers_to_repair.
+      // Otherwise the engine has identified a problem and abandoned it.
+      const driftedNames = new Set(
+        checks
+          .filter((c) => ["drifted", "broken"].includes(String(c?.verdict)))
+          .map((c) => clean(c?.child))
+          .filter(Boolean),
+      );
+      const repairs = arr<{ name?: unknown; reason?: unknown }>(r.layers_to_repair);
+      const repairNames = new Set(repairs.map((x) => clean(x?.name)).filter(Boolean));
+      const driftedNotRepaired = [...driftedNames].filter((n) => !repairNames.has(n)).length;
+      add(issues, driftedNotRepaired > 0, "high", "downstream usefulness", `${driftedNotRepaired} drifted/broken layer(s) not in layers_to_repair`, "every drifted or broken alignment child must appear in layers_to_repair with a concrete reason");
+
+      // Medium: alignment_summary must exist — it's the one-line surface
+      // the user reads at a glance.
+      add(issues, !clean(r.alignment_summary), "medium", "downstream usefulness", "missing alignment_summary", "one sentence stating macro→micro→mechanism alignment honestly");
+
+      // Medium (spec §11): if any check is broken OR more than 30% drifted,
+      // confidence MUST be ≤55. Overclaiming alignment is the failure mode.
+      const drifted = checks.filter((c) => String(c?.verdict) === "drifted").length;
+      const broken = checks.filter((c) => String(c?.verdict) === "broken").length;
+      const driftRate = checks.length > 0 ? drifted / checks.length : 0;
+      const conf = Number(r.confidence);
+      add(
+        issues,
+        (broken > 0 || driftRate > 0.3) && Number.isFinite(conf) && conf > 55,
+        "high",
+        "evidence honesty",
+        `confidence ${Math.round(conf)} with ${broken} broken / ${drifted} drifted alignment(s)`,
+        "alignment honesty: cap confidence ≤55 when any check is broken or >30% are drifted",
+      );
+      add(issues, !Number.isFinite(Number(r.confidence)), "medium", "evidence honesty", "missing confidence", "state alignment confidence 0–100 honestly");
+
+      // Context strip downstream: top drifted/broken layer names so
+      // validation can lift them into experiments (closes the loop with the
+      // updated validation prompt).
+      const driftedCtx = [...driftedNames].slice(0, 3);
+      return finalize(engine, issues, repaired, driftedCtx);
     }
 
     case "validation": {

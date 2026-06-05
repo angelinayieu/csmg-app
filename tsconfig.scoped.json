@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/lib/credits.ts",
+    "src/lib/stripe.ts",
+    "src/app/api/credits/balance/route.ts",
+    "src/app/api/stripe/webhook/route.ts",
+    "src/lib/credits/with-charge.ts"
+  ]
+}

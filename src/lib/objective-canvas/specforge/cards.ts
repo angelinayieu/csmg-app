@@ -1375,6 +1375,53 @@ export function summarizeForContext(
         .filter(Boolean)
         .join("\n");
     }
+    case "layer_optimization": {
+      const r = result as LayerOptimizationResult;
+      const checks: LayerAlignmentCheck[] = Array.isArray(r.alignment_checks)
+        ? r.alignment_checks
+        : [];
+      const drifted = checks
+        .filter((c) => clean(c?.verdict) === "drifted")
+        .slice(0, 3)
+        .map((c) => `${clean(c.child)}→${clean(c.parent)}: ${clean(c.rationale)}`)
+        .filter((s) => !s.startsWith("→"))
+        .join("; ");
+      const broken = checks
+        .filter((c) => clean(c?.verdict) === "broken")
+        .slice(0, 3)
+        .map((c) => `${clean(c.child)}→${clean(c.parent)}: ${clean(c.rationale)}`)
+        .filter((s) => !s.startsWith("→"))
+        .join("; ");
+      const repairs = (Array.isArray(r.layers_to_repair) ? r.layers_to_repair : [])
+        .slice(0, 4)
+        .map((x) => `${clean(x?.name)}: ${clean(x?.reason)}`)
+        .filter((s) => !s.startsWith(": "))
+        .join("; ");
+      const conseq: ConsequentialEvaluation[] = Array.isArray(r.consequential_evaluations)
+        ? r.consequential_evaluations
+        : [];
+      const handoffs = conseq
+        .slice(0, 4)
+        .map(
+          (c) =>
+            `${clean(c?.current_layer)}→${clean(c?.next_layer)} (${clean(c?.recommendation) || "?"}, dep=${clean(c?.dependency_strength) || "?"})`,
+        )
+        .filter((s) => !s.startsWith("→"))
+        .join("; ");
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      return [
+        clean(r.alignment_summary) && `Alignment summary: ${clean(r.alignment_summary)}`,
+        broken && `BROKEN alignment: ${broken}`,
+        drifted && `Drifted alignment: ${drifted}`,
+        repairs && `Layers to repair (validation should test these): ${repairs}`,
+        handoffs && `Handoff verdicts: ${handoffs}`,
+        conf !== null && `Layer alignment confidence: ${conf}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
     case "validation": {
       const r = result as ValidationResult;
       const exps: ValidationExperiment[] = Array.isArray(r.experiments)

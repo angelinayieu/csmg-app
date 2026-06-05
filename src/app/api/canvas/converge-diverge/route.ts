@@ -25,6 +25,7 @@ import {
 import { getAnthropicClient } from "@/lib/anthropic";
 import { getResearchTools, parseResearchResponse } from "@/lib/web-search";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
+import { withCharge, creditErrorResponse } from "@/lib/credits/with-charge";
 
 export const maxDuration = 60;
 
@@ -269,7 +270,7 @@ function deriveNodesFromTrace(
 }
 
 export async function POST(request: Request) {
-  const { error: authError } = await safeAuth();
+  const { supabase, user: authUser, error: authError } = await safeAuth();
   if (authError) return authError;
 
   const { data: body, error: parseError } = await safeJsonParse<Body>(request);
@@ -306,6 +307,17 @@ export async function POST(request: Request) {
   }
 
   try {
+    // Charge a flat credit for the verb + meter its token cost. Reserves up
+    // front; commits only if the work below succeeds (a failed/empty pass never
+    // charges), else the reservation is cancelled. CreditError → 402 below.
+    const payload = await withCharge(
+      {
+        db: supabase,
+        userId: authUser.id,
+        operation: "converge_diverge",
+        spaceId: null,
+      },
+      async () => {
     // Fold image observations + (optional) web findings into the idea the verb
     // reasons over. Both pre-passes run in parallel and soft-fail to "".
     const [observed, grounded] = await Promise.all([
@@ -357,8 +369,13 @@ export async function POST(request: Request) {
       items = deriveNodesFromTrace(trace, kind);
     }
 
-    return NextResponse.json({ items, trace });
+    return { items, trace };
+      },
+    );
+    return NextResponse.json(payload);
   } catch (err) {
+    const ce = creditErrorResponse(err);
+    if (ce) return ce;
     const credit = detectCreditError(err);
     if (credit.isCredit) {
       return NextResponse.json(

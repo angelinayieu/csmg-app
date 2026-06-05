@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { getStripe } from "@/lib/stripe";
+import { getStripe, planForPriceId, FREE_WEEKLY_ROUNDS } from "@/lib/stripe";
 import { createServiceClient } from "@/lib/supabase/service";
-import { addCredits } from "@/lib/credits";
+import { addCredits, setUserPlan } from "@/lib/credits";
 import type Stripe from "stripe";
 
 export async function POST(request: Request) {
@@ -49,6 +49,49 @@ export async function POST(request: Request) {
     } catch (err) {
       console.error("[Stripe Webhook] Failed to add credits:", err);
       return NextResponse.json({ error: "Failed to add credits" }, { status: 500 });
+    }
+  }
+
+  // ── Subscription lifecycle → plan + weekly allowance (Phase 3) ──
+  // Requires: (1) recurring prices created in Stripe, their ids set in
+  // STRIPE_PRICE_STANDARD / STRIPE_PRICE_PRO; (2) the subscription carrying
+  // metadata.userId (set it when you create the subscription checkout).
+  if (
+    event.type === "customer.subscription.created" ||
+    event.type === "customer.subscription.updated"
+  ) {
+    const sub = event.data.object as Stripe.Subscription;
+    const userId = sub.metadata?.userId;
+    const priceId = sub.items?.data?.[0]?.price?.id;
+    const resolved = planForPriceId(priceId);
+    const active = sub.status === "active" || sub.status === "trialing";
+
+    if (userId && resolved && active) {
+      try {
+        const supabase = createServiceClient();
+        await setUserPlan(supabase, userId, resolved.plan, resolved.weekly);
+        console.info(
+          `[Stripe Webhook] Set ${userId} → plan ${resolved.plan} (${resolved.weekly} rounds/wk)`,
+        );
+      } catch (err) {
+        console.error("[Stripe Webhook] Failed to set plan:", err);
+        return NextResponse.json({ error: "Failed to set plan" }, { status: 500 });
+      }
+    }
+  }
+
+  // Cancellation / lapse → downgrade to free.
+  if (event.type === "customer.subscription.deleted") {
+    const sub = event.data.object as Stripe.Subscription;
+    const userId = sub.metadata?.userId;
+    if (userId) {
+      try {
+        const supabase = createServiceClient();
+        await setUserPlan(supabase, userId, "free", FREE_WEEKLY_ROUNDS);
+        console.info(`[Stripe Webhook] Downgraded ${userId} → free`);
+      } catch (err) {
+        console.error("[Stripe Webhook] Failed to downgrade plan:", err);
+      }
     }
   }
 

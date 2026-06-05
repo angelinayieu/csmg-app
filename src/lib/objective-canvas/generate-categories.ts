@@ -28,18 +28,23 @@
 //     ("Strategic / Tactical / Operational") is explicitly forbidden.
 
 import { llmJSON } from "@/lib/llm";
+// The pure types + palette + normalizer live in a client-safe module so client
+// components can use them WITHOUT pulling this file's `llmJSON` (→ node:async_hooks)
+// into the browser bundle. Re-exported below for back-compat with existing
+// server importers of generate-categories.
+import {
+  CATEGORY_PALETTE,
+  normalizeRoomCategories,
+  type RoomCategorySet,
+  type RoomCategories,
+} from "./room-categories";
 
-export interface RoomCategorySet {
-  slug: string;
-  label: string;
-  color: string;
-}
-
-export interface RoomCategories {
-  friction: RoomCategorySet[];
-  mechanism: RoomCategorySet[];
-  result: RoomCategorySet[];
-}
+export {
+  CATEGORY_PALETTE,
+  normalizeRoomCategories,
+  type RoomCategorySet,
+  type RoomCategories,
+};
 
 export interface GenerateCategoriesArgs {
   coreObjectiveText: string;
@@ -47,15 +52,6 @@ export interface GenerateCategoriesArgs {
   subObjectiveDescription: string | null;
   clarifyingAnswers: Array<{ question: string; answer: string }>;
 }
-
-/** Color palette per lane — categories cycle through these in order.
- *  Each lane gets its own palette tuned so category chips don't
- *  visually collide with the layer's main color. */
-const CATEGORY_PALETTE: Record<keyof RoomCategories, string[]> = {
-  friction: ["#DC2626", "#EA580C", "#D97706", "#B45309", "#92400E"],
-  mechanism: ["#2563EB", "#7C3AED", "#1D4ED8", "#4338CA", "#0E7490"],
-  result: ["#16A34A", "#059669", "#0D9488", "#15803D", "#84CC16"],
-};
 
 function slugify(label: string): string {
   return label
@@ -265,37 +261,5 @@ Produce 3-5 categories per lane. Each category gets a short slug (snake_case) AN
   };
 }
 
-/** Read-side normalizer — defensive against malformed/legacy data
- *  in the jsonb column. Returns empty arrays for missing lanes so
- *  callers never see undefined. */
-export function normalizeRoomCategories(raw: unknown): RoomCategories {
-  if (!raw || typeof raw !== "object") {
-    return { friction: [], mechanism: [], result: [] };
-  }
-  const r = raw as Record<string, unknown>;
-  const lane = (key: keyof RoomCategories): RoomCategorySet[] => {
-    const v = r[key];
-    if (!Array.isArray(v)) return [];
-    return (v as unknown[])
-      .filter((it): it is Record<string, unknown> =>
-        typeof it === "object" && it !== null,
-      )
-      .filter(
-        (it) => typeof it.slug === "string" && typeof it.label === "string",
-      )
-      .map((it) => ({
-        slug: it.slug as string,
-        label: it.label as string,
-        color:
-          typeof it.color === "string"
-            ? (it.color as string)
-            : CATEGORY_PALETTE[key][0]!,
-      }))
-      .slice(0, 5);
-  };
-  return {
-    friction: lane("friction"),
-    mechanism: lane("mechanism"),
-    result: lane("result"),
-  };
-}
+// normalizeRoomCategories now lives in ./room-categories (client-safe) and is
+// re-exported at the top of this file.

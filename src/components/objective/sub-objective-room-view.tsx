@@ -67,10 +67,12 @@ import { SubsystemSection } from "./subsystem-section";
 import { useLocalPref } from "./causal-map/hooks/useLocalPref";
 import type { OperationalConstraints } from "@/lib/objective-canvas/constraints";
 import { computeChains } from "@/lib/objective-canvas/compute-chains";
+// Pure client-safe module — importing the normalizer from generate-categories
+// would drag llmJSON → node:async_hooks into the client bundle (build error).
 import {
   normalizeRoomCategories,
   type RoomCategories,
-} from "@/lib/objective-canvas/generate-categories";
+} from "@/lib/objective-canvas/room-categories";
 import type { PipelineMode } from "./mode-pill";
 import type { ObjectiveAnnotation } from "./annotated-objective-card";
 import { AnnotatedHeading } from "./annotated-heading";

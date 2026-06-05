@@ -49,6 +49,119 @@ export async function getBalance(
   return data?.credit_balance ?? 0;
 }
 
+/**
+ * Total SPENDABLE credits = lazily-refilled weekly allowance + purchased
+ * credits (the Phase-3 two-bucket model). Use this for affordability checks —
+ * getBalance() only reports the purchased bucket and would wrongly reject a
+ * user who still has weekly allowance. Pure read (does not persist the refill).
+ */
+export async function getSpendable(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: SupabaseClient<any>,
+  userId: string,
+): Promise<number> {
+  if (BYPASS) return 9999;
+  const { data } = await retrySupabaseQuery<number>(
+    () => supabase.rpc("get_spendable", { p_user_id: userId }),
+    {
+      onRetry: (err, attempt, delayMs) =>
+        console.warn(
+          `[credits.getSpendable] retry ${attempt} after ${delayMs}ms:`,
+          err instanceof Error ? err.message : err,
+        ),
+    },
+  );
+  return typeof data === "number" ? data : 0;
+}
+
+export interface SpendResult {
+  success: boolean;
+  /** Credits drawn from the weekly plan allowance. */
+  fromAllowance: number;
+  /** Credits drawn from the purchased (rollover) bucket. */
+  fromCredits: number;
+  /** Allowance left after the spend. */
+  allowanceRemaining: number;
+  /** Purchased credit balance after the spend. */
+  creditBalance: number;
+  required?: number;
+  error?: string;
+}
+
+/**
+ * Atomic two-bucket spend (allowance first, then purchased credits) with lazy
+ * weekly refill. The single source of truth for DEBITING — all commit/deduct
+ * paths route through here. success=false leaves balances untouched.
+ */
+export async function spendTwoBucket(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: SupabaseClient<any>,
+  userId: string,
+  amount: number,
+): Promise<SpendResult> {
+  if (BYPASS) {
+    return {
+      success: true,
+      fromAllowance: 0,
+      fromCredits: 0,
+      allowanceRemaining: 9999,
+      creditBalance: 9999,
+    };
+  }
+  const { data, error } = await supabase.rpc("spend_credits_v2", {
+    p_user_id: userId,
+    p_amount: amount,
+  });
+  if (error || !data) {
+    return {
+      success: false,
+      fromAllowance: 0,
+      fromCredits: 0,
+      allowanceRemaining: 0,
+      creditBalance: 0,
+      error: error?.message ?? "spend_credits_v2 returned no row",
+    };
+  }
+  const r = data as {
+    success?: boolean;
+    from_allowance?: number;
+    from_credits?: number;
+    allowance_remaining?: number;
+    credit_balance?: number;
+    required?: number;
+    error?: string;
+  };
+  return {
+    success: !!r.success,
+    fromAllowance: r.from_allowance ?? 0,
+    fromCredits: r.from_credits ?? 0,
+    allowanceRemaining: r.allowance_remaining ?? 0,
+    creditBalance: r.credit_balance ?? 0,
+    required: r.required,
+    error: r.error,
+  };
+}
+
+/**
+ * Assign a subscription plan + (re)seed the weekly allowance. Call from the
+ * Stripe subscription webhook on create/update. weekly = the plan's
+ * weeklyRounds (see plans.ts).
+ */
+export async function setUserPlan(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: SupabaseClient<any>,
+  userId: string,
+  plan: string,
+  weekly: number,
+): Promise<void> {
+  if (BYPASS) return;
+  await supabase.rpc("set_user_plan", {
+    p_user_id: userId,
+    p_plan: plan,
+    p_weekly: weekly,
+  });
+}
+
 export async function checkCredits(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: SupabaseClient<any>,
@@ -59,7 +172,7 @@ export async function checkCredits(
     return { hasCredits: true, balance: 9999, required: TIERS[tier].credits };
   }
 
-  const balance = await getBalance(supabase, userId);
+  const balance = await getSpendable(supabase, userId);
   const required = TIERS[tier].credits;
   return { hasCredits: balance >= required, balance, required };
 }
@@ -78,7 +191,7 @@ export async function reserveCredits(
   }
 
   const cost = TIERS[tier].credits;
-  const balance = await getBalance(supabase, userId);
+  const balance = await getSpendable(supabase, userId);
 
   if (balance < cost) {
     return {
@@ -126,6 +239,84 @@ export async function reserveCredits(
 }
 
 /**
+ * Reserve an ARBITRARY flat amount of credits (the Phase-2 flat-per-operation
+ * charge model), as opposed to reserveCredits() which derives the amount from
+ * an AnalysisTier. Reuses the same credit_reservations table + the existing
+ * commitReservation()/cancelReservation() (both read the row's `amount`), so
+ * this only needs to handle the insert. The operation key is stored in the
+ * (unconstrained, NOT-NULL) `tier` column so the committed ledger row reads
+ * `analysis_<operation>`, and also in `reason` for clarity.
+ *
+ * Returns the live balance so callers can surface "need X, have Y".
+ */
+export async function reserveCreditsAmount(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: SupabaseClient<any>,
+  userId: string,
+  amount: number,
+  operation: string,
+): Promise<{ reservationId: string; success: boolean; balance: number; error?: string }> {
+  if (BYPASS) {
+    return { reservationId: "bypass", success: true, balance: 9999 };
+  }
+  if (amount <= 0) {
+    // Free operation — nothing to hold.
+    return { reservationId: "free", success: true, balance: await getSpendable(supabase, userId) };
+  }
+
+  const balance = await getSpendable(supabase, userId);
+  if (balance < amount) {
+    return {
+      success: false,
+      reservationId: "",
+      balance,
+      error: `Insufficient credits. Need ${amount}, have ${balance}.`,
+    };
+  }
+
+  try {
+    const { data, error } = await retrySupabaseQuery<{ id: string }>(
+      () =>
+        supabase
+          .from("credit_reservations")
+          .insert({
+            user_id: userId,
+            tier: operation,
+            amount,
+            status: "reserved",
+            reason: `op_${operation}`,
+          })
+          .select("id")
+          .single(),
+      {
+        onRetry: (err, attempt, delayMs) =>
+          console.warn(
+            `[credits.reserveCreditsAmount] retry ${attempt} after ${delayMs}ms (transient Supabase error):`,
+            err instanceof Error ? err.message : err,
+          ),
+      },
+    );
+
+    if (error || !data) {
+      return {
+        success: false,
+        reservationId: "",
+        balance,
+        error: error?.message ?? "reservation insert returned no row",
+      };
+    }
+    return { reservationId: data.id, success: true, balance };
+  } catch (err) {
+    return {
+      success: false,
+      reservationId: "",
+      balance,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
  * Commit a credit reservation using atomic SQL decrement.
  * Uses credit_balance = credit_balance - amount to prevent race conditions.
  */
@@ -167,46 +358,54 @@ export async function commitReservation(
       return { newBalance: 0, success: false, error: errMsg };
     }
 
-    // Atomic decrement: prevents race conditions
-    const { data: updated, error: updateErr } = await retrySupabaseQuery<number>(
-      () =>
-        supabase.rpc("deduct_credits", {
-          p_user_id: reservation.user_id,
-          p_amount: reservation.amount,
-        }),
-      {
-        onRetry: (err, attempt, delayMs) =>
-          console.warn(
-            `[credits.commitReservation:rpc] retry ${attempt} after ${delayMs}ms:`,
-            err instanceof Error ? err.message : err,
-          ),
-      },
+    // Atomic two-bucket spend: weekly allowance first, then purchased credits,
+    // with lazy weekly refill. Prevents race conditions (single SQL function,
+    // row-locked). Replaces the credits-only deduct_credits path.
+    const spend = await spendTwoBucket(
+      supabase,
+      reservation.user_id,
+      reservation.amount,
     );
 
-    if (updateErr) {
-      return { newBalance: 0, success: false, error: updateErr.message ?? "deduct_credits failed" };
+    if (!spend.success) {
+      return {
+        newBalance: spend.creditBalance,
+        success: false,
+        error: spend.error ?? "Insufficient credits",
+      };
     }
 
-    const newBalance = typeof updated === "number" ? updated : 0;
+    const newBalance = spend.creditBalance;
 
-    // If RPC returned -1, insufficient balance
-    if (newBalance < 0) {
-      return { newBalance: 0, success: false, error: "Insufficient credits" };
+    // Log the transaction — one ledger row per bucket actually drawn, tagged
+    // with `bucket` so allowance vs purchased spend is auditable. Best-effort:
+    // the debit already happened atomically, so a ledger blip can't roll it back.
+    const ledgerRows: Record<string, unknown>[] = [];
+    if (spend.fromAllowance > 0) {
+      ledgerRows.push({
+        user_id: reservation.user_id,
+        amount: -spend.fromAllowance,
+        reason: `analysis_${reservation.tier}`,
+        space_id: rootSpaceId ?? null,
+        balance_after: newBalance,
+        bucket: "allowance",
+      });
     }
-
-    // Log the transaction. Ledger writes are best-effort — we already
-    // deducted credits via the atomic RPC above, so a ledger blip
-    // shouldn't roll back the user's debit.
-    await retrySupabaseQuery(
-      () =>
-        supabase.from("credit_ledger").insert({
-          user_id: reservation.user_id,
-          amount: -reservation.amount,
-          reason: `analysis_${reservation.tier}`,
-          space_id: rootSpaceId ?? null,
-          balance_after: newBalance,
-        }),
-    ).catch(() => {});
+    if (spend.fromCredits > 0) {
+      ledgerRows.push({
+        user_id: reservation.user_id,
+        amount: -spend.fromCredits,
+        reason: `analysis_${reservation.tier}`,
+        space_id: rootSpaceId ?? null,
+        balance_after: newBalance,
+        bucket: "credits",
+      });
+    }
+    if (ledgerRows.length > 0) {
+      await retrySupabaseQuery(
+        () => supabase.from("credit_ledger").insert(ledgerRows),
+      ).catch(() => {});
+    }
 
     // Mark reservation as committed
     await retrySupabaseQuery(
@@ -283,50 +482,44 @@ export async function deductCredits(
 
   const cost = TIERS[tier].credits;
 
-  // Try atomic decrement via RPC first
-  const { data: newBalance, error } = await supabase.rpc("deduct_credits", {
-    p_user_id: userId,
-    p_amount: cost,
-  });
+  // Route through the two-bucket spend (allowance first, then credits) so the
+  // legacy one-shot path enforces the weekly plan limit identically to the
+  // reserve→commit path.
+  const spend = await spendTwoBucket(supabase, userId, cost);
+  if (!spend.success) {
+    return { newBalance: spend.creditBalance, success: false };
+  }
 
-  if (!error && typeof newBalance === "number" && newBalance >= 0) {
-    // RPC worked — log transaction
-    await supabase.from("credit_ledger").insert({
+  const newBalance = spend.creditBalance;
+  const ledgerRows: Record<string, unknown>[] = [];
+  if (spend.fromAllowance > 0) {
+    ledgerRows.push({
       user_id: userId,
-      amount: -cost,
+      amount: -spend.fromAllowance,
       reason: `analysis_${tier}`,
       space_id: spaceId ?? null,
       balance_after: newBalance,
+      bucket: "allowance",
     });
-    return { newBalance, success: true };
+  }
+  if (spend.fromCredits > 0) {
+    ledgerRows.push({
+      user_id: userId,
+      amount: -spend.fromCredits,
+      reason: `analysis_${tier}`,
+      space_id: spaceId ?? null,
+      balance_after: newBalance,
+      bucket: "credits",
+    });
+  }
+  if (ledgerRows.length > 0) {
+    await supabase
+      .from("credit_ledger")
+      .insert(ledgerRows)
+      .then(() => {}, () => {});
   }
 
-  // Fallback: read-modify-write (if RPC not deployed yet)
-  const balance = await getBalance(supabase, userId);
-  if (balance < cost) {
-    return { newBalance: balance, success: false };
-  }
-
-  const fallbackBalance = balance - cost;
-  const { error: updateErr } = await supabase
-    .from("profiles")
-    .update({ credit_balance: fallbackBalance })
-    .eq("id", userId);
-
-  if (updateErr) {
-    return { newBalance: balance, success: false };
-  }
-
-  // Best-effort ledger logging
-  await supabase.from("credit_ledger").insert({
-    user_id: userId,
-    amount: -cost,
-    reason: `analysis_${tier}`,
-    space_id: spaceId ?? null,
-    balance_after: fallbackBalance,
-  }).then(() => {}, () => {});
-
-  return { newBalance: fallbackBalance, success: true };
+  return { newBalance, success: true };
 }
 
 /**

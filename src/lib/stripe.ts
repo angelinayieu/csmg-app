@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { getPlan, type PlanId } from "./plans";
 
 /**
  * Stripe client — lazy-initialized so the app doesn't crash at build/startup
@@ -49,4 +50,33 @@ export type CreditPackId = (typeof CREDIT_PACKS)[number]["id"];
 
 export function getPackById(id: string) {
   return CREDIT_PACKS.find((p) => p.id === id);
+}
+
+// ── Subscription plans → Stripe price mapping (Phase 3) ──────────────
+// Maps a Stripe recurring price id (from your Stripe dashboard) to a PlanId.
+// Set STRIPE_PRICE_STANDARD / STRIPE_PRICE_PRO in env once the products exist.
+// The webhook uses planForPriceId() to resolve a subscription event → the plan
+// + weekly allowance to seed via setUserPlan().
+export const PLAN_PRICE_IDS: Record<string, PlanId> = {
+  ...(process.env.STRIPE_PRICE_STANDARD
+    ? { [process.env.STRIPE_PRICE_STANDARD]: "standard" as PlanId }
+    : {}),
+  ...(process.env.STRIPE_PRICE_PRO
+    ? { [process.env.STRIPE_PRICE_PRO]: "pro" as PlanId }
+    : {}),
+};
+
+/** The weekly round quota the free plan grants — the downgrade target when a
+ *  subscription is cancelled. */
+export const FREE_WEEKLY_ROUNDS = getPlan("free")?.weeklyRounds ?? 10;
+
+/** Resolve a Stripe price id to its plan + weekly allowance, or null if the
+ *  price isn't a known plan price (e.g. a one-time pack). */
+export function planForPriceId(
+  priceId: string | null | undefined,
+): { plan: PlanId; weekly: number } | null {
+  if (!priceId) return null;
+  const plan = PLAN_PRICE_IDS[priceId];
+  if (!plan) return null;
+  return { plan, weekly: getPlan(plan)?.weeklyRounds ?? 0 };
 }

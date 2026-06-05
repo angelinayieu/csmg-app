@@ -34,6 +34,8 @@ import type {
   FeatureMechanism,
   DataPointsResult,
   DataPoint,
+  LayerOptimizationResult,
+  LayerAlignmentCheck,
   ValidationResult,
   ValidationExperiment,
 } from "./types";
@@ -529,6 +531,52 @@ export function extractConstraintsFromEngineResult(
           text: `High-friction required input: ${clean(p?.name)} needs onboarding/proxy fallback`,
           why: "collection_friction=high on a required field — UX must justify the ask",
         });
+      }
+      return out;
+    }
+
+    case "layer_optimization": {
+      const r = result as LayerOptimizationResult;
+      // The layer optimizer doesn't generate new product content — but
+      // alignment drift IS a real downstream constraint. Two extractors:
+      //
+      // 1. Every BROKEN alignment → critical buildability constraint. A
+      //    mechanism that doesn't serve its feature is a build-blocker; the
+      //    spec ship can't be considered safe.
+      // 2. Every DRIFTED alignment in layers_to_repair → high evidence
+      //    constraint. The build can ship, but validation must include an
+      //    experiment that tests whether the drifted mechanism still serves
+      //    its parent (the prompt for `validation` already lifts these).
+      const checks = arr<LayerAlignmentCheck>(r.alignment_checks);
+      const brokenChecks = checks
+        .filter((c) => clean(c?.verdict) === "broken")
+        .slice(0, 3);
+      for (const c of brokenChecks) {
+        const child = clean(c?.child);
+        const parent = clean(c?.parent);
+        if (child && parent) {
+          push({
+            type: "buildability",
+            priority: "critical",
+            text: `Broken alignment: ${child} does not serve ${parent}`,
+            why: clean(c?.repair_recommendation) || "named broken by the recursive layer optimizer",
+          });
+        }
+      }
+      const driftedChecks = checks
+        .filter((c) => clean(c?.verdict) === "drifted")
+        .slice(0, 3);
+      for (const c of driftedChecks) {
+        const child = clean(c?.child);
+        const parent = clean(c?.parent);
+        if (child && parent) {
+          push({
+            type: "evidence",
+            priority: "high",
+            text: `Validate alignment: ${child} still serves ${parent}`,
+            why: clean(c?.rationale) || "layer drift surfaced by the recursive optimizer",
+          });
+        }
       }
       return out;
     }

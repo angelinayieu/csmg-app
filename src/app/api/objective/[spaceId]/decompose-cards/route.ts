@@ -137,8 +137,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
   // Shared context: re-framed objective + glossary + resolved intent, so the
   // decomposition reasons WITH the user's taste — not raw, stale space text.
-  const ctx = await buildSpaceContext(db, spaceId);
-  if (!objective) objective = ctx.objective;
+  const spaceCtx = await buildSpaceContext(db, spaceId);
+  if (!objective) objective = spaceCtx.objective;
   if (objective.length < 4) {
     return NextResponse.json({ error: "No objective to decompose." }, { status: 400 });
   }
@@ -147,8 +147,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   try {
     result = await llmJSON({
       system: SYSTEM,
-      user: ctx.preamble
-        ? `${ctx.preamble}\n\n---\n\nDecompose THIS objective into Feature/Variable cards:\n${objective.slice(0, 4000)}`
+      user: spaceCtx.preamble
+        ? `${spaceCtx.preamble}\n\n---\n\nDecompose THIS objective into Feature/Variable cards:\n${objective.slice(0, 4000)}`
         : objective.slice(0, 4000),
       model: "gpt-4o",
       maxTokens: 2000,
