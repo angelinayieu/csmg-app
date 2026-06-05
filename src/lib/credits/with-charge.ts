@@ -23,7 +23,7 @@ import {
   commitReservation,
   cancelReservation,
 } from "../credits";
-import { costForOperation } from "./operation-costs";
+import { costForOperation, ceilingForOperation } from "./operation-costs";
 import { withMetering } from "../llm/usage-meter";
 
 /** Thrown when the user can't afford an operation. Routes catch it and return
@@ -73,6 +73,7 @@ export async function withCharge<T>(
     spaceId: ctx.spaceId ?? null,
     callSite: ctx.operation,
     runId: ctx.runId ?? null,
+    tokenCeiling: ceilingForOperation(ctx.operation),
   };
 
   // Free operation — meter + run, no reservation.

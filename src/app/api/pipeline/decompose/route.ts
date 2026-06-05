@@ -45,6 +45,7 @@ import {
   completePipelineRun,
 } from "@/lib/events/structural-event-bus";
 import { enterMetering } from "@/lib/llm/usage-meter";
+import { ceilingForOperation } from "@/lib/credits/operation-costs";
 import { materializeAndEmitSignatures } from "@/lib/pipeline/materialize-signatures";
 // W6.3 — canonical concept linking for newly-decomposed entities.
 import { linkEntityToCanonicalConcept } from "@/lib/kg/canonical-concept-matcher";
@@ -1286,7 +1287,14 @@ ${enrichedPrompt}`;
     // aggregate to pipeline_runs. Representative wiring — other pipeline routes
     // adopt these two lines incrementally (Phase 2).
     if (runId) {
-      enterMetering({ db, userId: user.id, spaceId, callSite: "decompose", runId });
+      enterMetering({
+        db,
+        userId: user.id,
+        spaceId,
+        callSite: "decompose",
+        runId,
+        tokenCeiling: ceilingForOperation("decompose"),
+      });
     }
     await emitStructuralEvent(db, runId, {
       type: "stage_boundary",

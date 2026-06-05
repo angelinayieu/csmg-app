@@ -15,6 +15,7 @@
 import { NextResponse } from "next/server";
 import { llmJSON, detectCreditError, BEST_TUNABLE_CLAUDE_MODEL } from "@/lib/llm";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
+import { withCharge, creditErrorResponse } from "@/lib/credits/with-charge";
 import { systemForMode, schemaForMode } from "@/lib/synergy/prompts";
 import type { AugmentMode } from "@/lib/synergy/types";
 
@@ -47,7 +48,7 @@ interface Body {
 }
 
 export async function POST(request: Request) {
-  const { user, error: authError } = await safeAuth();
+  const { supabase, user, error: authError } = await safeAuth();
   if (authError) return authError;
 
   const { data: body, error: parseError } = await safeJsonParse<Body>(request);
@@ -87,7 +88,10 @@ export async function POST(request: Request) {
   const schema = schemaForMode(mode);
 
   try {
-    const result = await llmJSON({
+    const result = await withCharge(
+      { db: supabase, userId: user.id, operation: "canvas_op", spaceId: null },
+      () =>
+        llmJSON({
       system,
       user: userMsg,
       maxTokens: 2048,
@@ -97,10 +101,12 @@ export async function POST(request: Request) {
       provider: useClaude ? "anthropic" : undefined,
       model: useClaude ? BEST_TUNABLE_CLAUDE_MODEL : undefined,
       responseSchema: schema as { name: string; schema: Record<string, unknown> },
-    });
-    void user; // user identity not required beyond auth check; kept for future audit logging
+        }),
+    );
     return NextResponse.json({ mode, result });
   } catch (err) {
+    const ce = creditErrorResponse(err);
+    if (ce) return ce;
     const credit = detectCreditError(err);
     if (credit.isCredit) {
       return NextResponse.json(

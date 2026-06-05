@@ -25,6 +25,8 @@ import {
 } from "@/lib/web-search";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 import { buildSpaceContext } from "@/lib/objective-canvas/build-space-context";
+import { withCharge, creditErrorResponse } from "@/lib/credits/with-charge";
+import { recordLlmUsage } from "@/lib/llm/usage-meter";
 
 export const runtime = "nodejs";
 // Opus + several web searches runs long; lift the platform timeout where
@@ -195,6 +197,16 @@ export async function POST(req: Request, ctx: RouteContext) {
   const tools = getResearchTools("standard", 8);
 
   try {
+    // Charge a flat credit for the synthesis + meter its Opus token cost.
+    // Empty result → throw → reservation cancelled (no charge for nothing).
+    const out = await withCharge(
+      {
+        db: auth.supabase,
+        userId: auth.user.id,
+        operation: "deep_synthesize",
+        spaceId,
+      },
+      async () => {
     const { map, searchesPerformed } = await instrumentedLLMCall(
       {
         db: auth.supabase,
@@ -216,6 +228,10 @@ export async function POST(req: Request, ctx: RouteContext) {
           { timeout: 10 * 60 * 1000 },
         );
         const final = await stream.finalMessage();
+        // This route calls the Anthropic SDK directly (web_search streaming),
+        // bypassing llm.ts — so meter its tokens here. The active withCharge
+        // metering context records it into llm_call_log.
+        recordLlmUsage(OPUS_MODEL, "anthropic", final.usage);
         const parsed = parseResearchResponse(final.content);
         let rawMap: RawMap;
         try {
@@ -232,18 +248,28 @@ export async function POST(req: Request, ctx: RouteContext) {
     );
 
     if (!map.branches.length) {
+      // No usable output — throw so withCharge cancels the reservation.
+      throw new Error("EMPTY_SYNTHESIS");
+    }
+
+    return {
+      hub: map.hub,
+      branches: map.branches,
+      searchesPerformed,
+    };
+      },
+    );
+
+    return NextResponse.json(out);
+  } catch (err) {
+    const ce = creditErrorResponse(err);
+    if (ce) return ce;
+    if (err instanceof Error && err.message === "EMPTY_SYNTHESIS") {
       return NextResponse.json(
         { error: "No synthesis produced." },
         { status: 502 },
       );
     }
-
-    return NextResponse.json({
-      hub: map.hub,
-      branches: map.branches,
-      searchesPerformed,
-    });
-  } catch (err) {
     console.error("[objective/deep-synthesize] generation failed:", err);
     return NextResponse.json({ error: "Generation failed" }, { status: 502 });
   }

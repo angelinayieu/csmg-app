@@ -10,6 +10,7 @@
 import { NextResponse } from "next/server";
 import { llmJSON, detectCreditError, BEST_TUNABLE_CLAUDE_MODEL } from "@/lib/llm";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
+import { withCharge, creditErrorResponse } from "@/lib/credits/with-charge";
 
 export const maxDuration = 45;
 
@@ -57,7 +58,7 @@ const RESPONSE_SCHEMA = {
 } as const;
 
 export async function POST(request: Request) {
-  const { error: authError } = await safeAuth();
+  const { supabase, user, error: authError } = await safeAuth();
   if (authError) return authError;
 
   const { data: body, error: parseError } = await safeJsonParse<Body>(request);
@@ -78,6 +79,9 @@ export async function POST(request: Request) {
   }
 
   try {
+    const items = await withCharge(
+      { db: supabase, userId: user.id, operation: "canvas_op", spaceId: null },
+      async () => {
     const result = await llmJSON({
       system: SYSTEM,
       user: `Instruction:\n${prompt}\n\nContent:\n${text.slice(0, 6000)}`,
@@ -103,8 +107,14 @@ export async function POST(request: Request) {
         type: typeof it.type === "string" ? it.type : "factor",
       }));
 
+        return items;
+      },
+    );
+
     return NextResponse.json({ items });
   } catch (err) {
+    const ce = creditErrorResponse(err);
+    if (ce) return ce;
     const credit = detectCreditError(err);
     if (credit.isCredit) {
       return NextResponse.json(

@@ -5,7 +5,7 @@ import { ValidationError } from "@/lib/validation/llm-validators";
 import { RecoveryStrategy } from "@/lib/validation/error-recovery";
 import { repairTruncatedJson } from "@/lib/llm/repair-truncated-json";
 import { getAnthropicClient } from "@/lib/anthropic";
-import { recordLlmUsage } from "@/lib/llm/usage-meter";
+import { recordLlmUsage, assertWithinBudget } from "@/lib/llm/usage-meter";
 
 const MODEL = "gpt-4o";
 
@@ -222,6 +222,9 @@ export async function llmGenerate(opts: {
    *  (e.g. "claude-sonnet-4-5-20251001" or "gpt-4o"). */
   images?: LlmImageInput[];
 }): Promise<string> {
+  // Runaway-fan-out guard: if this run already hit its token ceiling, abort now
+  // (before any API call or retry). No-op unless a metering context set one.
+  assertWithinBudget();
   return withRetry(async () => {
     if (opts.provider === "anthropic") {
       const anthropic = getAnthropicClient();
@@ -547,6 +550,7 @@ export async function llmJSON<T = unknown>(opts: {
   validator?: (data: unknown) => T;
   fallback?: T;
 }): Promise<T> {
+  assertWithinBudget();
   return withRetry(async () => {
     // Anthropic has no `response_format`; route to a forced tool call whose
     // arguments ARE the structured result, then validate identically.

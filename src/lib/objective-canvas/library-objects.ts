@@ -27,7 +27,11 @@ export type LibraryObjectType =
   | "recommendation"
   | "variation"
   | "variable"
-  | "brainstorm_cluster";
+  | "brainstorm_cluster"
+  // Context-frontier (CONTEXT_FRONTIER_PLAN.md): the per-space intake
+  // context anchor + one object per extracted prior-idea/reference concept.
+  | "context_anchor"
+  | "context_concept";
 
 export type SelectionStatus = "candidate" | "selected" | "rejected";
 

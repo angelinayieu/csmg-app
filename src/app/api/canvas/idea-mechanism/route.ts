@@ -13,6 +13,7 @@
 import { NextResponse } from "next/server";
 import { detectCreditError } from "@/lib/llm";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
+import { withCharge, creditErrorResponse } from "@/lib/credits/with-charge";
 import {
   enrichMechanismSpec,
   type EnrichMechanismSpecInput,
@@ -67,7 +68,7 @@ function flattenSpec(spec: MechanismSpec): Item[] {
 }
 
 export async function POST(request: Request) {
-  const { error: authError } = await safeAuth();
+  const { supabase, user, error: authError } = await safeAuth();
   if (authError) return authError;
 
   const { data: body, error: parseError } = await safeJsonParse<Body>(request);
@@ -89,10 +90,22 @@ export async function POST(request: Request) {
   };
 
   try {
-    const spec = await enrichMechanismSpec(input);
-    if (!spec) return NextResponse.json({ items: [] });
-    return NextResponse.json({ items: flattenSpec(spec) });
+    const items = await withCharge(
+      { db: supabase, userId: user.id, operation: "make_technical", spaceId: null },
+      async () => {
+        const spec = await enrichMechanismSpec(input);
+        if (!spec) throw new Error("EMPTY_SPEC");
+        return flattenSpec(spec);
+      },
+    );
+    return NextResponse.json({ items });
   } catch (err) {
+    const ce = creditErrorResponse(err);
+    if (ce) return ce;
+    if (err instanceof Error && err.message === "EMPTY_SPEC") {
+      // No mechanism produced — don't charge (reservation already cancelled).
+      return NextResponse.json({ items: [] });
+    }
     const credit = detectCreditError(err);
     if (credit.isCredit) {
       return NextResponse.json(

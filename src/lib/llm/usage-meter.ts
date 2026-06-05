@@ -19,7 +19,16 @@
 // are safe and we never write a row without an authed db (RLS-respecting).
 // This is metering ONLY; it does not charge credits (that's Phase 2).
 
-import { AsyncLocalStorage } from "node:async_hooks";
+// NOTE: AsyncLocalStorage is loaded WITHOUT a static `node:async_hooks` import.
+// Why: this module is imported by src/lib/llm.ts, and llm.ts gets pulled into
+// CLIENT bundles through several pure-helper chains (priority-vector →
+// priority-strip, generate-categories, …). A static `node:` import makes
+// webpack fail EVERY such client bundle with UnhandledSchemeError ("Reading
+// from 'node:async_hooks' is not handled") — it can't resolve `node:` for the
+// browser. Metering only ever runs on the server, so we load AsyncLocalStorage
+// through a webpack-opaque runtime require, guarded to the server. In the
+// browser `als` stays null and every metering function below cleanly no-ops.
+import type { AsyncLocalStorage as AsyncLocalStorageT } from "node:async_hooks";
 import { computeCostUsd } from "./pricing";
 import { recordLLMCall } from "@/lib/objective-canvas/record-llm-call";
 
@@ -35,6 +44,10 @@ export interface MeteringContext {
   callSite: string;
   /** When set, the per-run aggregate is flushed to this pipeline_runs row. */
   runId?: string | null;
+  /** Optional per-run token budget (Phase 4 runaway guard). Once the run's
+   *  accumulated tokens reach this, the NEXT LLM call aborts via
+   *  assertWithinBudget(). Undefined → no ceiling. */
+  tokenCeiling?: number;
 }
 
 interface MeterTotals {
@@ -49,7 +62,24 @@ interface MeterStore extends MeteringContext {
   totals: MeterTotals;
 }
 
-const als = new AsyncLocalStorage<MeterStore>();
+// Server-only, webpack-opaque load (see top-of-file note). `eval("require")` is
+// invisible to webpack's static analyzer, so `node:async_hooks` never enters
+// any bundle; the `typeof window` guard means this only runs on the server.
+let als: AsyncLocalStorageT<MeterStore> | null = null;
+if (typeof window === "undefined") {
+  try {
+    // eslint-disable-next-line no-eval
+    const nodeRequire = eval("require") as NodeRequire;
+    // Cast the opaque require result to the real module type so the generic
+    // `new AsyncLocalStorage<MeterStore>()` call is allowed (TS2347 otherwise).
+    const { AsyncLocalStorage } = nodeRequire(
+      "node:async_hooks",
+    ) as typeof import("node:async_hooks");
+    als = new AsyncLocalStorage<MeterStore>();
+  } catch {
+    als = null;
+  }
+}
 
 function makeStore(ctx: MeteringContext): MeterStore {
   return {
@@ -92,7 +122,7 @@ export function recordLlmUsage(
   provider: LlmUsageProvider,
   rawUsage: unknown,
 ): void {
-  const store = als.getStore();
+  const store = als?.getStore();
   if (!store) return;
   try {
     const u = normalize(provider, rawUsage);
@@ -128,6 +158,40 @@ export function recordLlmUsage(
   }
 }
 
+/** Thrown by assertWithinBudget when a run has burned its token ceiling. Lets a
+ *  runaway fan-out abort cleanly (caught by the route / withCharge → reservation
+ *  cancelled, so the user isn't charged for the cut-off run). */
+export class TokenCeilingError extends Error {
+  readonly operation: string;
+  readonly tokensUsed: number;
+  readonly ceiling: number;
+  constructor(operation: string, tokensUsed: number, ceiling: number) {
+    super(
+      `Token ceiling exceeded for "${operation}": ${tokensUsed} >= ${ceiling} tokens.`,
+    );
+    this.name = "TokenCeilingError";
+    this.operation = operation;
+    this.tokensUsed = tokensUsed;
+    this.ceiling = ceiling;
+  }
+}
+
+/** Called by src/lib/llm.ts BEFORE each provider request. Throws
+ *  TokenCeilingError if the active run has already reached its token ceiling —
+ *  cutting off the NEXT call rather than after spending more. No-op when there's
+ *  no active context or no ceiling, so un-budgeted callers are unaffected. */
+export function assertWithinBudget(): void {
+  const store = als?.getStore();
+  if (!store || !store.tokenCeiling) return;
+  if (store.totals.total >= store.tokenCeiling) {
+    throw new TokenCeilingError(
+      store.callSite,
+      store.totals.total,
+      store.tokenCeiling,
+    );
+  }
+}
+
 /** Flush the accumulated per-run aggregate to pipeline_runs. Reads from the
  *  active store; no-op without a runId or without any recorded calls. */
 async function flushAggregate(store: MeterStore | undefined): Promise<void> {
@@ -158,6 +222,8 @@ export async function withMetering<T>(
   ctx: MeteringContext,
   fn: () => Promise<T>,
 ): Promise<T> {
+  // No metering context available (e.g. browser/edge) → run uninstrumented.
+  if (!als) return fn();
   const store = makeStore(ctx);
   return als.run(store, async () => {
     try {
@@ -178,7 +244,7 @@ export async function withMetering<T>(
  *  — use setMeteredRunId() once the run id is known. Pair with
  *  flushMeteredRun() at completion. */
 export function enterMetering(ctx: MeteringContext): void {
-  als.enterWith(makeStore(ctx));
+  als?.enterWith(makeStore(ctx));
 }
 
 /** Attach the pipeline_runs id to the active metering context after the run
@@ -186,12 +252,12 @@ export function enterMetering(ctx: MeteringContext): void {
  *  it must run in the same async context that called enterMetering. No-op when
  *  no context is active. */
 export function setMeteredRunId(runId: string | null): void {
-  const store = als.getStore();
+  const store = als?.getStore();
   if (store) store.runId = runId;
 }
 
 /** Explicit flush for the enterMetering path (called by completePipelineRun).
  *  Reads the active store set by enterMetering. */
 export async function flushMeteredRun(): Promise<void> {
-  await flushAggregate(als.getStore());
+  await flushAggregate(als?.getStore());
 }

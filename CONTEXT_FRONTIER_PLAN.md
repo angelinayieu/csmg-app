@@ -75,47 +75,72 @@ is to go beyond them.
 
 ## 3. Architecture
 
-### 3.1 Data model
+### 3.0 Substrate audit (verified — this is what we must wire into)
 
-**Context blocks** live as `ingested_files` rows (raw text stays out of the space row), referenced by a
-lightweight registry in `synthesis_data.objective_canvas.context`:
+| Layer | Canonical store | Notes for context |
+|---|---|---|
+| Objective root | `improvement_goals` (root, `parent_goal_id IS NULL`) + `objective-card` shape | ~15 routes resolve root via `parent_goal_id` — **do not disturb** |
+| Objective text metadata | `improvement_goals.annotations` (JSONB) → glossary | annotation lens already keyed by `concept_slug` |
+| Object layer (NEW, canonical for OC) | `library_objects` + `object_links` (+ `concept_slug` via glossary) | oc-card / artifact-card / decompose cards back here; surfaces in Library rail + `object-detail-drawer` + `object-cluster-graph` automatically |
+| Old KG (legacy) | `entities` + `edges`; `/api/spaces/[id]/graph` still reads it | per [[project_old_build_deprecation]] — **do NOT write context here** |
+| Glossary | `spaces.synthesis_data.glossary`, source ∈ `user>annotation>entity>llm`, pinned-immutable | merge dedupes by `concept_slug` first |
+| Files / pasted text | `ingested_files` (`source_type='text'\|'file'\|'url'`, `normalized_text`, vision cols) | already claimable to a space |
+| **Per-object user metadata** | **`library_object_notes`** (`kind IN 'idea','intention','taste','note'`) | **EXISTS, RLS set, ZERO writers** — purpose-built for "prior ideas/intentions" |
+| **Object ↔ file provenance** | **`library_object_sources`** (`object_id → ingested_file_id`, `role`) | **EXISTS, RLS set, ZERO writers** — purpose-built for "context files behind an object" |
+| Board state | `objective_boards.snapshot` (durable) + `objective_board_snapshots` (history, 40 cap) + localStorage mirror | text/sticky shapes are **snapshot-only, NOT DB-backed** |
+| Versioning | `artifacts` + `artifact_versions` (append-only, `appendArtifactVersion()`); `pipeline_run_events`; `sub_objective_decisions` (append log) | all reusable |
+| ⚠️ `synthesis_data` | overwrite-in-place, **last-write-wins, no optimistic lock** | concurrent sessions clobber → **avoid as primary store for context** |
+
+**Two consequences that rewrite v1:**
+- The right home for context is **rows in the object layer** (activating the two orphan tables), *not* a
+  `synthesis_data` block — both because `synthesis_data` clobbers under parallel sessions, and because
+  row storage makes context auto-surface in the Library rail / detail drawer / cluster graph with no new
+  UI.
+- This is precisely the "addressable Object below the entity row" foundation from
+  [[project_object_flow_diagnosis]] — so it must be **LOCKED + coordinated**, not built solo (see §9).
+
+### 3.1 Data model (row-based — reuses + activates the object layer)
+
+Context attaches to an **intake context anchor**: one `library_objects` row representing the objective's
+intake (`object_type='context_anchor'`, `source_sub_objective_id = root goal id`). The objective stays
+`improvement_goals` — the anchor is a *companion* object so we can hang notes/sources/links off it
+without touching root resolution. From there everything reuses existing tables:
+
+```
+improvement_goals (root objective)         ← unchanged
+   └─ library_objects (context_anchor)      ← NEW row, companion to root
+        ├─ library_object_sources ──────────→ ingested_files  (each pasted/uploaded context block)
+        │     role = 'prior_ideas' | 'reference'
+        ├─ library_object_notes              ← extracted ideas/intentions/taste (kind already exists)
+        │     kind = 'idea' | 'intention' | 'taste' | 'note'
+        └─ object_links (relation='derived_from')
+              └─ library_objects (one per extracted ContextConcept, object_type='variable'|'insight')
+                    concept_slug ← joins glossary + annotations namespace
+```
 
 ```ts
-// synthesis_data.objective_canvas.context
-interface ContextState {
-  blocks: ContextBlock[];          // user-entered context, registry only (text in ingested_files)
-  frontier: ContextConcept[];      // deduped concept set extracted across all blocks
-  extracted_at: string | null;
-}
-
-interface ContextBlock {
-  id: string;
-  role: "prior_ideas" | "reference";   // surpass vs honor
-  source: "paste" | "file" | "url";
-  ingested_file_id: string;            // raw text/normalized_text lives here (source_type='text'|'file'|'url')
-  label: string;                       // short user/auto label for the chip
-  created_at: string;
-}
-
-// The unit that joins the objective's metadata namespace.
+// Returned by the extraction pass; each becomes a library_objects row + (optionally) a note.
 interface ContextConcept {
   concept: string;                 // canonical noun phrase (≤4 words)
-  concept_slug: string;            // SAME slug space as annotations + glossary
+  concept_slug: string;            // SAME slug space as annotations + glossary (dedupe key)
   kind: "idea" | "constraint" | "fact" | "question";
+  role: "prior_ideas" | "reference";   // surpass vs honor
   summary: string;                 // 1 line — what the user already said/meant
-  source_block_id: string;
-  source_phrase: string;           // verbatim span, for trace-back + underline
-  role: "prior_ideas" | "reference";
+  source_ingested_file_id: string; // trace-back to the raw block
+  source_phrase: string;           // verbatim span (for underline + chip → source)
 }
 ```
 
-Why JSONB-registry + `ingested_files` for the body, not a new table: pasted context can be large;
-bloating the `spaces` row read on every board render is the failure mode. `ingested_files` already
-has `source_type='text'`, `extraction_method='paste'`, `normalized_text`, and `space_id` claiming.
-This mirrors how `prompt_sharpening` / `voice_notes` / `journal` keep heavy artifacts referenced from
-`synthesis_data` rather than inline. **No migration required** for the text path; only an optional
-`role` annotation, stored in the registry (not on `ingested_files`), so we don't touch the shared
-ingest schema.
+What this buys, for free:
+- **Library / sidebar / KG visibility:** the anchor + its derived concept objects render in `library-rail.tsx`
+  and `object-detail-drawer.tsx` + `object-cluster-graph.tsx` with **no new surface** — they read
+  `library_objects`/`object_links` already.
+- **Glossary join:** each concept's `concept_slug` dedupes against objective annotations on merge; glossary
+  gains `source:'context'`.
+- **Durability + audit:** `ingested_files`/`library_object_*` are immutable-ish rows (not a clobbered blob).
+- **No schema invention:** only additions are the `object_type='context_anchor'` value, the `source:'context'`
+  glossary enum value, and *writers* for two tables that already exist. (A small `synthesis_data.objective_canvas.context.frontier`
+  cache is allowed as a denormalized read-optimization, rebuildable from rows — never the source of truth.)
 
 ### 3.2 Extraction pass — "text → metadata"
 
@@ -193,7 +218,7 @@ Reuse existing render primitives; only the pointing target is new.
 
 | Phase | Scope | Touches | Gate |
 |---|---|---|---|
-| **0 — Types + storage** | `ContextState`/`ContextBlock`/`ContextConcept` types; reuse `ingested_files` text path; registry in `synthesis_data` | new `context-state.ts` | no migration |
+| **0 — Types + storage** | `ContextConcept` type; `context_anchor` object_type; **writers** for `library_object_sources` + `library_object_notes` (activate orphans); `source:'context'` glossary enum | `library-objects.ts`, `generate-glossary.ts` | tiny migration: enum value only |
 | **1 — Input channel** | chatbox second pane + role toggle; `POST …/context` route; persistence | `chatbox-card-shape.tsx`, new route | context visible on board |
 | **2 — Extraction** | `extract-context-frontier.ts` (reuse salience); `after()` fire; metered | new helper, `…/context` route | `frontier` populated + deduped by slug |
 | **3 — Frontier → decompose** | `coveredFrontier` + `contextGrounding` args + `frontier_relation` (the core win) | `decompose-prompt.ts`, `generate-sub-objectives.ts` (additive) | proposals carry relations; no echo on a paste-heavy test |
@@ -227,7 +252,91 @@ value before 4–5 if needed.
 
 ---
 
-## 6. Definition of done
+## 6. Wiring matrix — does context reach every card / object / surface?
+
+| Surface / object | Backed by | Contributes TO context? | Receives context? | How |
+|---|---|---|---|---|
+| objective-card | `improvement_goals` | n/a (it's the target) | yes | anchor object hangs off root goal |
+| oc-card / artifact-card | `library_objects` | **yes** | yes | concepts already in object namespace; join via `concept_slug` |
+| decompose cards | `library_objects` + `object_links` | yes (after accepted) | yes | covered-frontier block in `decompose-prompt.ts` |
+| sticky-note / text shapes | **board snapshot only** | yes **but must be harvested** | indirect | §7 harvest pass reads tagged stickies/text from snapshot → notes (seam) |
+| voice-note-card / journal-card | snapshot (+ `synthesis_data`) | yes (transcript) | yes | extraction pass over transcript → frontier |
+| objective-image-card | `ingested_files` (vision cols) | **yes** | yes | `image_description` + `extracted_entities` already structured → concepts |
+| insight-card (kept) | snapshot | yes (accepted only) | yes | accepted insight → note/concept on anchor |
+| comment-card | `comments` | optional | no | user annotation, not idea-context by default |
+| glossary | `synthesis_data.glossary` | yes | yes | `source:'context'` terms; `concept_slug` dedupe |
+| Library rail / detail drawer / cluster graph | `library_objects`/`object_links` | — | renders | auto-surfaces anchor + concept objects, no new UI |
+| old KG (`entities`/`edges`) | legacy | no | no | deprecated — context never writes here |
+
+Two seams this exposes (both real, both addressed in §7):
+1. **Snapshot-only text** (stickies, text shapes, voice transcripts) isn't DB-backed, so it must be
+   *harvested* from the board snapshot to count as context. This is the same harvest the frontier-scope
+   query needs anyway.
+2. **The anchor object** is the one new modeling primitive; it's what lets all the orphan-table wiring hang
+   together (see §9 — it's a schema decision to lock).
+
+## 7. Context accumulation — "do linked things keep feeding context?"
+
+**Yes — and this is the most powerful part.** Context is not a one-shot intake field; it's a *growing scope*.
+As the user works, everything they link to the objective becomes part of the covered frontier, so later
+generations never repeat what's already on the board.
+
+Define one scope resolver (the audit confirmed **no centralized "what's linked" view exists today** — this
+is the missing piece):
+
+```
+getObjectiveContextScope(spaceId) =
+    initial pasted/uploaded context  (library_object_sources → ingested_files)
+  ∪ user idea/intention notes        (library_object_notes)
+  ∪ accepted insight-cards + kept oc/artifact cards (library_objects, selection_status)
+  ∪ harvested tagged stickies/text + voice transcripts (board snapshot)
+  ∪ image extractions                (ingested_files vision cols)
+  → dedupe by concept_slug → split by role (prior_ideas vs reference)
+```
+
+This single function feeds the covered-frontier block in decompose **and** every other metadata utilization
+(§3.3). The frontier grows monotonically; the anti-duplication gets stronger the longer the user works. New
+links append (`object_links`, `library_object_notes` are append-only), so accumulation is natural.
+
+## 8. Versioning — reuse, don't invent
+
+- **Don't version the `synthesis_data` blob** — it's overwrite-in-place + clobber-prone; that's exactly why
+  context lives in rows.
+- **Context blocks are naturally durable:** each is an `ingested_files` row + a `library_object_notes` row
+  (append-only). Editing an idea = new note row or in-place update; nothing is lost silently.
+- **Milestone snapshots of "the objective's understanding at time T":** model an `artifacts` row
+  (`artifact_type='intake_understanding'`) and use the existing `appendArtifactVersion()` — every
+  frontier re-extraction or major reframe appends an immutable `artifact_versions` snapshot with
+  `change_type` + `change_summary`. Full history + rollback, zero new infra.
+- **Audit trail of context events:** log `context_added` / `frontier_extracted` / `context_reframed` to the
+  existing append-only `sub_objective_decisions` (it already logs `annotations_generated`,
+  `constraints_set`, etc.) — gives a replayable timeline that plugs into the notebook fork-tree.
+
+## 9. Locked decisions (2026-06-04 — verified against live schema)
+
+Verification before lock: `library_objects.object_type` is **free-text (no CHECK)**; both
+`library_object_sources` and `library_object_notes` have **zero writers in src/**;
+`library_object_notes.kind` is already `CHECK IN ('idea','intention','taste','note')` and
+`library_object_sources.role` is free-text. ⇒ The whole foundation is **migration-free** and additive.
+
+1. **Anchor object — LOCKED.** `library_objects.object_type='context_anchor'`, one per space, companion to
+   the root `improvement_goals` (via `source_sub_objective_id = root goal id`). No migration (free-text
+   type). Chosen over a dedicated `objective_context` table because it activates the two orphan tables and
+   auto-surfaces in the Library rail / detail drawer / cluster graph. Satisfies the object-flow north star
+   ([[project_object_flow_diagnosis]]) additively without disturbing root resolution.
+2. **Roles — LOCKED.** `library_object_sources.role ∈ {'prior_ideas','reference'}` (free-text, no
+   migration); extracted ideas → `library_object_notes.kind ∈ {'idea','intention','taste'}` (fits existing
+   CHECK).
+3. **Snapshot harvest scope — LOCKED (v1).** `sticky-note` with a non-null `dimension` + committed voice
+   transcripts count as context; plain text shapes are opt-in (Phase 7).
+4. **Concurrency — LOCKED.** Context is **row-backed** (`ingested_files` / `library_object_*` /
+   `object_links`), never primary-stored in `synthesis_data`. Any denormalized `synthesis_data` cache is
+   rebuildable and written read-modify-write with full-superset re-assert ([[project_parallel_workstreams]]).
+5. **File-touch discipline — LOCKED.** Phases 0–2 + 7 land in **new files**; the only hot-file edits are the
+   additive `decompose-prompt.ts` block (Phase 3) and the `GlossarySource` enum (`+'context'`), both
+   back-compat and gated behind `git`/`list_migrations` coordination.
+
+## 10. Definition of done
 
 - A user can paste/attach context tagged Ideas vs Reference; it persists and renders as annotated,
   concept-extracted metadata.

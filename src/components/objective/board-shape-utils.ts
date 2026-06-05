@@ -14,6 +14,7 @@ import { SubsystemKgShapeUtil } from "./shapes/subsystem-kg-shape";
 import { LayerBandShapeUtil } from "./shapes/layer-band-shape";
 import { SpecForgeCardShapeUtil } from "./shapes/specforge-card-shape";
 import { TechSpecCardShapeUtil } from "./shapes/tech-spec-card-shape";
+import { SpecFeedbackCardShapeUtil } from "./shapes/spec-feedback-card-shape";
 import { PrototypeCardShapeUtil } from "./shapes/prototype-card-shape";
 import { UiPlanCardShapeUtil } from "./shapes/ui-plan-card-shape";
 import { PromptSharpeningCardShapeUtil } from "./shapes/prompt-sharpening-card-shape";
@@ -38,6 +39,7 @@ export const CUSTOM_SHAPE_UTILS = [
   LayerBandShapeUtil,
   SpecForgeCardShapeUtil,
   TechSpecCardShapeUtil,
+  SpecFeedbackCardShapeUtil,
   UiPlanCardShapeUtil,
   PrototypeCardShapeUtil,
   PromptSharpeningCardShapeUtil,

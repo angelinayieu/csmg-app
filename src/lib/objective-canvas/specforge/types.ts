@@ -150,6 +150,66 @@ export const ENGINE_LABEL: Record<SpecForgeEngineId, string> = {
   spec_export: "Exporting the build spec",
 };
 
+// ── Phase grouping — 5 acts the user can think about ───────────────
+//
+// The chain has grown to 20 engines + 3 meta artifacts. Without grouping
+// the progress chip is just "13/20" — high arousal, low information. These
+// 5 phases give the user a sense of which ACT they're in and roughly how
+// much remains. Faithful to the spec's narrative arc:
+//   1. Frame    — clarify the idea + lay the modeling foundation
+//   2. Interweave — check the model is coherent, surface what's unknown
+//   3. Decide   — pick the thesis, narrow to one MVP via rubric
+//   4. Build    — allocate complexity, decompose into features+mechanisms+data
+//   5. Validate — audit alignment, design tests, snapshot, export
+export type SpecForgePhase =
+  | "frame"
+  | "interweave"
+  | "decide"
+  | "build"
+  | "validate";
+
+export const PHASE_ORDER: SpecForgePhase[] = [
+  "frame",
+  "interweave",
+  "decide",
+  "build",
+  "validate",
+];
+
+export const PHASE_LABEL: Record<SpecForgePhase, string> = {
+  frame: "Frame",
+  interweave: "Interweave",
+  decide: "Decide",
+  build: "Build",
+  validate: "Validate",
+};
+
+/** Each engine's phase. Read by the runner to emit phase progress + by the
+ *  chip to render the act header. Adding a new engine REQUIRES a phase
+ *  assignment — TypeScript exhaustiveness catches the omission. */
+export const PHASE_OF_ENGINE: Record<SpecForgeEngineId, SpecForgePhase> = {
+  power_up: "frame",
+  target_user: "frame",
+  problem_tree: "frame",
+  desired_result: "frame",
+  cross_analysis: "interweave",
+  question_expansion: "interweave",
+  convergence: "decide",
+  differentiation: "decide",
+  solution_families: "decide",
+  mvp_variations: "decide",
+  evaluation: "decide",
+  recommendation: "decide",
+  complexity_allocation: "build",
+  feature_cards: "build",
+  feature_mechanisms: "build",
+  data_points: "build",
+  layer_optimization: "validate",
+  validation: "validate",
+  deepening: "validate",
+  spec_export: "validate",
+};
+
 // ── One unfurled card ──────────────────────────────────────────────
 /** A normalized decision card. `body` may carry bullet lines separated by
  *  "\n" (the shape renders each as a row). `layout` lets the runner place

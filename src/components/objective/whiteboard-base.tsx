@@ -48,8 +48,30 @@ import {
 import {
   OPEN_TECH_SPEC_EVENT,
   BUILD_PROTOTYPE_EVENT,
+  TOGGLE_TECH_SPEC_EXPAND_EVENT,
+  REFINE_SECTION_EVENT,
+  SECTION_OP_EVENT,
   type OpenTechSpecDetail,
+  type ToggleTechSpecExpandDetail,
+  type RefineSectionDetail,
+  type SectionOpDetail,
+  type TechSpecCardShape,
 } from "./shapes/tech-spec-card-shape";
+import {
+  ATTACH_TO_SECTION_EVENT,
+  type AttachToSectionDetail,
+  type SpecFeedbackCardShape,
+} from "./shapes/spec-feedback-card-shape";
+import {
+  SECTION_LABEL,
+  parseSectionMeta,
+  serializeSectionMeta,
+  emptySectionMeta,
+  asSectionId,
+  getSectionValue,
+  type TechSpecSectionId,
+  type SectionMetaMap,
+} from "@/lib/objective-canvas/tech-spec/sections";
 import {
   PROTOTYPE_REFINE_EVENT,
   type PrototypeCardShape,
@@ -64,7 +86,12 @@ import { reserveSpace } from "./canvas-interactions/placement";
 import { TechSpecPanel } from "./tech-spec-panel";
 import { CausalModelPanel } from "./causal-model-panel";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
-import type { ProblemTreeResult } from "@/lib/objective-canvas/specforge/types";
+import {
+  PHASE_LABEL,
+  PHASE_ORDER,
+  SPECFORGE_CHAIN,
+  type ProblemTreeResult,
+} from "@/lib/objective-canvas/specforge/types";
 import {
   runForgePipeline,
   type InspirationImage,
@@ -121,7 +148,15 @@ import { NotebookMount } from "./canvas-interactions/notebook-panel";
 import type { TLComponents, TLPageId } from "tldraw";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 import { useFocusMode } from "@/components/synergy/focus-mode/use-focus-mode";
-import { ListChecks, Wand2, Loader2, Check, Globe, AlertTriangle } from "lucide-react";
+import {
+  ListChecks,
+  Wand2,
+  Loader2,
+  Check,
+  Globe,
+  AlertTriangle,
+  ArrowRight,
+} from "lucide-react";
 import { BoardHint } from "./board-hint";
 import { FavoritesSidebar } from "./favorites-sidebar";
 import { useObjectiveBoardPersistence } from "./use-objective-board-persistence";
@@ -1550,6 +1585,264 @@ export function WhiteboardBase({
     return () => window.removeEventListener(OPEN_CAUSAL_MODEL_EVENT, onOpen);
   }, []);
 
+  // ── Tech-spec inline expand + per-section ops + refine + attach ─────
+  // Four board-bus events from the expanded tech-spec card:
+  //   TOGGLE_EXPAND  — flip the card's collapsed/expanded layout + resize
+  //   SECTION_OP     — Ask | Variations | Improve → POST → spec-feedback-card
+  //   ATTACH_TO_SECTION — feedback card pushed into a section's pending queue
+  //   REFINE_SECTION — POST refine → swap section value + bump version + flash
+  useEffect(() => {
+    function findTechSpecCard(shapeId: string): TechSpecCardShape | null {
+      const editor = editorRef.current;
+      if (!editor) return null;
+      const shape = editor.getShape(shapeId as TechSpecCardShape["id"]);
+      if (!shape || shape.type !== "tech-spec-card") return null;
+      return shape as TechSpecCardShape;
+    }
+
+    function onToggleExpand(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const d = (e as CustomEvent<ToggleTechSpecExpandDetail>).detail;
+      const card = findTechSpecCard(d.shapeId);
+      if (!card) return;
+      const COLLAPSED_W = 308;
+      const COLLAPSED_H = 184;
+      const EXPANDED_W = 640;
+      const EXPANDED_H = 640;
+      editor.updateShape<TechSpecCardShape>({
+        id: card.id,
+        type: "tech-spec-card",
+        props: {
+          expanded: d.expanded,
+          w: d.expanded ? EXPANDED_W : COLLAPSED_W,
+          h: d.expanded ? EXPANDED_H : COLLAPSED_H,
+        },
+      });
+    }
+
+    async function onSectionOp(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const d = (e as CustomEvent<SectionOpDetail>).detail;
+      const card = findTechSpecCard(d.specCardId);
+      if (!card) return;
+      let spec: TechSpec | null = null;
+      try {
+        spec = JSON.parse(card.props.specJson) as TechSpec;
+      } catch {
+        return;
+      }
+      // Place a "thinking" feedback card immediately so the user has feedback.
+      const cardBounds = editor.getShapePageBounds(card.id);
+      if (!cardBounds) return;
+      const feedbackW = 320;
+      const feedbackH = 240;
+      const ignore = new Set<TLShapeId>();
+      ignore.add(card.id as TLShapeId);
+      // Place to the RIGHT of the spec card by default — anchor center sits
+      // a half-width past the right edge so reserveSpace lays it out
+      // side-by-side; if it can't, reserveSpace will relocate downward.
+      const anchorMidX = cardBounds.x + cardBounds.w + 24 + feedbackW / 2;
+      const preferredTop = cardBounds.y;
+      const spot = reserveSpace(
+        editor,
+        { w: feedbackW, h: feedbackH },
+        { anchorMidX, preferredTop, gap: 16, ignore },
+      );
+      const feedbackId = createShapeId();
+      const newShape: TLShapePartial<SpecFeedbackCardShape> = {
+        id: feedbackId,
+        type: "spec-feedback-card",
+        x: spot.x,
+        y: spot.y,
+        props: {
+          w: feedbackW,
+          h: feedbackH,
+          kind: d.kind,
+          sectionLabel: d.sectionLabel,
+          sectionId: d.sectionId,
+          specCardId: card.id,
+          selection: d.selection,
+          content: "Thinking…",
+          attached: false,
+        },
+      };
+      editor.createShapes([newShape]);
+      // Arrow: spec card → feedback card.
+      const arrowId = createShapeId();
+      const arrow: TLShapePartial<TLArrowShape> = {
+        id: arrowId,
+        type: "arrow",
+        props: { color: "grey", size: "s", dash: "dashed", arrowheadEnd: "arrow" },
+        meta: { specFeedbackFor: card.id, sectionId: d.sectionId },
+      };
+      editor.createShapes([arrow]);
+      editor.createBindings([
+        {
+          fromId: arrowId,
+          toId: card.id,
+          type: "arrow",
+          props: {
+            terminal: "start",
+            normalizedAnchor: { x: 0.5, y: 0.5 },
+            isExact: false,
+            isPrecise: false,
+          },
+        },
+        {
+          fromId: arrowId,
+          toId: feedbackId,
+          type: "arrow",
+          props: {
+            terminal: "end",
+            normalizedAnchor: { x: 0.5, y: 0.5 },
+            isExact: false,
+            isPrecise: false,
+          },
+        },
+      ]);
+      try {
+        const res = await fetch("/api/canvas/tech-spec/section-op", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            spaceId,
+            spec,
+            sectionId: d.sectionId,
+            selection: d.selection,
+            kind: d.kind,
+            prompt: d.prompt,
+          }),
+        });
+        if (!res.ok) throw new Error(`section-op ${res.status}`);
+        const json = (await res.json()) as { content?: string };
+        const content = typeof json.content === "string" ? json.content : "(no content)";
+        editor.updateShape<SpecFeedbackCardShape>({
+          id: feedbackId,
+          type: "spec-feedback-card",
+          props: { content },
+        });
+      } catch (err) {
+        console.warn("[board] section-op failed:", err);
+        editor.updateShape<SpecFeedbackCardShape>({
+          id: feedbackId,
+          type: "spec-feedback-card",
+          props: {
+            content:
+              "Section op failed. Try again, or refine your selection / prompt and retry.",
+          },
+        });
+      }
+    }
+
+    function onAttachToSection(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const d = (e as CustomEvent<AttachToSectionDetail>).detail;
+      const sectionId = asSectionId(d.sectionId);
+      if (!sectionId) return;
+      const card = findTechSpecCard(d.specCardId);
+      if (!card) return;
+      const meta: SectionMetaMap = parseSectionMeta(card.props.sectionMeta);
+      const slot = meta[sectionId] ?? emptySectionMeta();
+      slot.pending = [
+        ...slot.pending,
+        {
+          source: "card",
+          content: d.content,
+          cardId: d.feedbackCardId,
+          addedAt: Date.now(),
+        },
+      ];
+      meta[sectionId] = slot;
+      editor.updateShape<TechSpecCardShape>({
+        id: card.id,
+        type: "tech-spec-card",
+        props: { sectionMeta: serializeSectionMeta(meta) },
+      });
+      // Mark the source feedback card as attached.
+      const fbShape = editor.getShape(d.feedbackCardId as SpecFeedbackCardShape["id"]);
+      if (fbShape && fbShape.type === "spec-feedback-card") {
+        editor.updateShape<SpecFeedbackCardShape>({
+          id: d.feedbackCardId as SpecFeedbackCardShape["id"],
+          type: "spec-feedback-card",
+          props: { attached: true },
+        });
+      }
+    }
+
+    async function onRefineSection(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const d = (e as CustomEvent<RefineSectionDetail>).detail;
+      const card = findTechSpecCard(d.specCardId);
+      if (!card) return;
+      let spec: TechSpec | null = null;
+      try {
+        spec = JSON.parse(card.props.specJson) as TechSpec;
+      } catch {
+        return;
+      }
+      const meta = parseSectionMeta(card.props.sectionMeta);
+      const slot = meta[d.sectionId];
+      if (!slot || !slot.pending.length) return;
+      const versionHistory = slot.versions.map((v) => v.value);
+      try {
+        const res = await fetch("/api/canvas/tech-spec/refine-section", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            spaceId,
+            spec,
+            sectionId: d.sectionId,
+            pendingImprovements: slot.pending.map((p) => ({
+              source: p.source,
+              content: p.content,
+            })),
+            versionHistory,
+          }),
+        });
+        if (!res.ok) throw new Error(`refine-section ${res.status}`);
+        const json = (await res.json()) as { value?: unknown };
+        if (json.value === undefined) throw new Error("refine returned no value");
+        // Roll the OLD value into versions (cap 5), clear pending, stamp time.
+        const prior = getSectionValue(spec, d.sectionId);
+        slot.versions = [
+          ...slot.versions,
+          { value: prior, createdAt: Date.now() },
+        ].slice(-5);
+        slot.pending = [];
+        slot.lastRefinedAt = Date.now();
+        meta[d.sectionId] = slot;
+        const nextSpec = { ...spec, [d.sectionId]: json.value } as TechSpec;
+        editor.updateShape<TechSpecCardShape>({
+          id: card.id,
+          type: "tech-spec-card",
+          props: {
+            specJson: JSON.stringify(nextSpec),
+            sectionMeta: serializeSectionMeta(meta),
+            lastChangedSection: d.sectionId,
+            lastChangedAt: Date.now(),
+          },
+        });
+      } catch (err) {
+        console.warn("[board] refine-section failed:", err);
+      }
+    }
+
+    window.addEventListener(TOGGLE_TECH_SPEC_EXPAND_EVENT, onToggleExpand);
+    window.addEventListener(SECTION_OP_EVENT, onSectionOp);
+    window.addEventListener(ATTACH_TO_SECTION_EVENT, onAttachToSection);
+    window.addEventListener(REFINE_SECTION_EVENT, onRefineSection);
+    return () => {
+      window.removeEventListener(TOGGLE_TECH_SPEC_EXPAND_EVENT, onToggleExpand);
+      window.removeEventListener(SECTION_OP_EVENT, onSectionOp);
+      window.removeEventListener(ATTACH_TO_SECTION_EVENT, onAttachToSection);
+      window.removeEventListener(REFINE_SECTION_EVENT, onRefineSection);
+    };
+  }, [spaceId]);
+
   return (
     <div className="absolute inset-0 oc-board">
       <Tldraw
@@ -2493,9 +2786,19 @@ function BoardOverlay({
     if ((forging && forging.phase === "running") || techSpecBusy) return;
     if (!target.text.trim()) return;
     setForgeKind(opts?.autoPrototype ? "prototype" : "spec");
-    setForging({ phase: "running", done: 0, total: 9, label: "Starting…" });
+    // Bootstrap progress state with the real chain length and the first act —
+    // the chip then transitions smoothly to the runner's first onProgress call.
+    setForging({
+      phase: "running",
+      done: 0,
+      total: SPECFORGE_CHAIN.length,
+      label: "Starting…",
+      act: "frame",
+      actIndex: 1,
+      actTotal: PHASE_ORDER.length,
+    });
     void (async () => {
-      // 1) Run the SpecForge unfurl (existing 9 engines).
+      // 1) Run the SpecForge unfurl — full causal chain.
       let forge;
       try {
         forge = await runSpecForge(editor, target, { onProgress: setForging });
@@ -2991,10 +3294,28 @@ function BoardOverlay({
 // ── SpecForge progress chip ───────────────────────────────────────
 // A calm, centered glass status pill shown while the causal-spec chain runs.
 // Reads the runner's onProgress stream; on completion it flips to a "Spec
-// ready" confirmation before the host clears it.
+// ready" confirmation before the host clears it. With the chain at 20 stages,
+// "12/20" alone is high-arousal and low-information — we show the act
+// (Frame / Interweave / Decide / Build / Validate) so the user knows which
+// scene of the play they're in.
 function SpecForgeProgressChip({ progress }: { progress: SpecForgeProgress }) {
+  const editor = useEditor();
   const done = progress.phase === "done";
   const pct = Math.round((progress.done / Math.max(1, progress.total)) * 100);
+  const actLabel = progress.act ? PHASE_LABEL[progress.act] : null;
+  const canJump = done && !!progress.focusShapeId;
+
+  const handleJump = () => {
+    if (!canJump || !progress.focusShapeId) return;
+    try {
+      const id = progress.focusShapeId as TLShapeId;
+      editor.select(id);
+      editor.zoomToSelection({ animation: { duration: 420 } });
+    } catch {
+      // Shape was deleted between completion and click — soft-fail.
+    }
+  };
+
   return (
     <div
       style={{
@@ -3035,7 +3356,27 @@ function SpecForgeProgressChip({ progress }: { progress: SpecForgeProgress }) {
           <Wand2 style={{ width: 12.5, height: 12.5 }} strokeWidth={2.2} />
         )}
       </span>
-      <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
+      <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.2, minWidth: 0 }}>
+        {/* Act header (only while running). Reads like "Act 3 of 5 · Decide" — */}
+        {/* gives the user a sense of scene without exposing the 20-stage count. */}
+        {!done && actLabel && (
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 10,
+              fontWeight: 600,
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+              color: appleVibe.text.faint,
+            }}
+          >
+            <span>{`Act ${progress.actIndex} of ${progress.actTotal}`}</span>
+            <span aria-hidden style={{ color: appleVibe.text.faint, opacity: 0.55 }}>·</span>
+            <span style={{ color: appleVibe.text.tertiary }}>{actLabel}</span>
+          </span>
+        )}
         <span
           style={{
             fontSize: 12.5,
@@ -3080,6 +3421,33 @@ function SpecForgeProgressChip({ progress }: { progress: SpecForgeProgress }) {
             style={{ width: 13, height: 13, color: appleVibe.text.faint }}
           />
         </span>
+      )}
+      {/* Done + we captured the recommendation card's id: offer a one-tap */}
+      {/* zoom-to-recommendation. The hero "first build" card is otherwise */}
+      {/* buried mid-spine and users routinely miss it. */}
+      {canJump && (
+        <button
+          type="button"
+          onClick={handleJump}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            border: "1px solid var(--glass-border)",
+            background: "rgba(15,23,42,0.04)",
+            color: appleVibe.text.primary,
+            padding: "5px 11px",
+            borderRadius: 999,
+            fontFamily: appleVibe.font.stack,
+            fontSize: 11.5,
+            fontWeight: 600,
+            cursor: "pointer",
+            letterSpacing: "-0.005em",
+          }}
+        >
+          Jump to first build
+          <ArrowRight style={{ width: 12, height: 12 }} strokeWidth={2.2} />
+        </button>
       )}
     </div>
   );

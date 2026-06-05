@@ -1002,7 +1002,12 @@ declare module "@tldraw/tlschema" {
     // SpecForge → Tech Spec — the engineering-grade spec generated at the end
     // of a forge run (Opus + UI agent skill). Holds the spec as JSON + the
     // rendered markdown; "Open spec" fires objective-board:open-tech-spec to
-    // mount the full-screen TechSpecPanel.
+    // mount the full-screen TechSpecPanel. When `expanded=true`, the card
+    // grows in place and renders all sections inline with per-section refine
+    // + Ask/Variations/Improve chips. `sectionMeta` is a JSON-stringified
+    // Partial<Record<TechSpecSectionId, SectionMeta>> tracking pending
+    // improvements + per-section version history (see lib/objective-canvas/
+    // tech-spec/sections.ts). `lastChangedSection` flashes a diff highlight.
     "tech-spec-card": {
       w: number;
       h: number;
@@ -1011,6 +1016,10 @@ declare module "@tldraw/tlschema" {
       markdown: string;
       featureCount: number;
       phaseCount: number;
+      expanded: boolean;
+      sectionMeta: string;
+      lastChangedSection: string;
+      lastChangedAt: number;
     };
     // Objective board — one UI-plan variant forked from any selected card
     // (objective-board:build-ui-plans). Holds a TechSpecUiPlan + the source
@@ -1025,6 +1034,22 @@ declare module "@tldraw/tlschema" {
       sourceText: string;
       uiPlanJson: string;
       status: "generating" | "ready" | "error";
+    };
+    // Objective board — spec-feedback-card. Output of an inline op (Ask /
+    // Variations / Improve) on a tech-spec section. Anchors back to the
+    // source spec card + section; the "Attach to §section" button queues
+    // this card's content as a pending improvement on the spec (drained
+    // by per-section refine). Fires objective-board:attach-to-section.
+    "spec-feedback-card": {
+      w: number;
+      h: number;
+      kind: "ask" | "variations" | "improve";
+      sectionLabel: string;
+      sectionId: string;
+      specCardId: string;
+      selection: string;
+      content: string;
+      attached: boolean;
     };
     // Objective board — interactive Claude prototype: self-contained HTML/CSS
     // (no JS, sanitized) rendered in a sandboxed iframe and iterated in place

@@ -25,6 +25,9 @@ export const OPERATION_COST = {
   // Compound canvas verbs — multi-pass (questions → answers → distil).
   converge_diverge: 2,
 
+  // Mechanism / technical spec generation (ROUND_COSTS lists "make technical" = 2).
+  make_technical: 2,
+
   // Objective-canvas heavy single ops.
   deep_synthesize: 3,
 
@@ -46,4 +49,24 @@ export const DEFAULT_OP_COST = 1;
 export function costForOperation(operation: string): number {
   const v = (OPERATION_COST as Record<string, number>)[operation];
   return typeof v === "number" ? v : DEFAULT_OP_COST;
+}
+
+// ── Per-run token ceilings (Phase 4 — runaway fan-out guard) ─────────
+// When a metering context accumulates >= the ceiling, the NEXT LLM call in that
+// run aborts (TokenCeilingError → reservation cancelled, no charge). Only the
+// MULTI-CALL ops need one — single-call ops can't run away, so they're omitted
+// (→ no ceiling, no check). Generous headroom over expected real usage so a
+// normal run never trips it; tune down once the meter shows real medians.
+export const OPERATION_TOKEN_CEILING: Record<string, number> = {
+  converge_diverge: 40_000,
+  deep_synthesize: 150_000,
+  decompose: 120_000,
+  synthesize: 150_000,
+  research: 200_000,
+  research_deep: 400_000,
+};
+
+/** The per-run token ceiling for an operation, or undefined (no ceiling). */
+export function ceilingForOperation(operation: string): number | undefined {
+  return OPERATION_TOKEN_CEILING[operation];
 }

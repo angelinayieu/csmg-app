@@ -44,6 +44,11 @@ const PACKS = [
 
 interface BalanceResponse {
   balance: number;
+  /** Two-bucket model (Phase 3): allowance + purchased, what's actually spendable. */
+  spendable?: number;
+  plan?: string;
+  allowanceRemaining?: number;
+  weeklyAllowance?: number;
   tiers: {
     quick: number;
     standard: number;
@@ -122,9 +127,38 @@ export default function CreditsPage() {
               {balanceData.balance}
             </span>
             <span className="text-[12px] text-indigo-700">
-              {balanceData.balance === 1 ? "credit" : "credits"}
+              purchased {balanceData.balance === 1 ? "credit" : "credits"} · rolls over
             </span>
           </div>
+          {/* Weekly plan allowance — the other bucket. Resets every 7 days, no
+              rollover. Spent BEFORE purchased credits. */}
+          {typeof balanceData.weeklyAllowance === "number" &&
+            balanceData.weeklyAllowance > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-indigo-800">
+                <span className="rounded-full bg-white/70 px-2 py-0.5 font-semibold capitalize">
+                  {balanceData.plan ?? "free"} plan
+                </span>
+                <span>
+                  <span className="font-mono font-semibold tabular-nums">
+                    {balanceData.allowanceRemaining ?? 0}
+                  </span>
+                  {" / "}
+                  <span className="font-mono tabular-nums">
+                    {balanceData.weeklyAllowance}
+                  </span>{" "}
+                  weekly rounds left
+                </span>
+                {typeof balanceData.spendable === "number" && (
+                  <span className="text-indigo-700/70">
+                    ·{" "}
+                    <span className="font-mono font-semibold tabular-nums">
+                      {balanceData.spendable}
+                    </span>{" "}
+                    total spendable
+                  </span>
+                )}
+              </div>
+            )}
           {tiers && (
             <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-indigo-700/80">
               <span>

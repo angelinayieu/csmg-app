@@ -21,8 +21,12 @@ import type { SpecForgeCardShape } from "../shapes/specforge-card-shape";
 import {
   SPECFORGE_CHAIN,
   ENGINE_LABEL,
+  PHASE_OF_ENGINE,
+  PHASE_LABEL,
+  PHASE_ORDER,
   type SpecForgeCard,
   type SpecForgeEngineId,
+  type SpecForgePhase,
   type PowerUpResult,
   type RecommendationResult,
 } from "@/lib/objective-canvas/specforge/types";
@@ -55,6 +59,17 @@ export interface SpecForgeProgress {
   total: number;
   /** Human label for the engine currently running (or last finished). */
   label: string;
+  /** Which of the 5 acts (frame / interweave / decide / build / validate) the
+   *  current engine sits in. `null` while idle, during the final meta cards
+   *  (constraints/quality), or after the chain ends. */
+  act: SpecForgePhase | null;
+  /** 1-indexed act position ("Act 3 of 5"). 0 when no act is active. */
+  actIndex: number;
+  actTotal: number;
+  /** When the chain has finished, the shape id of the recommendation card
+   *  (the "first build" hero). Lets the chip offer a "Jump to first build"
+   *  action so the user doesn't have to scroll through 20 cards to find it. */
+  focusShapeId?: string;
 }
 
 interface RunOptions {
@@ -187,20 +202,33 @@ export async function runSpecForge(
   let constraints: Constraint[] = [];
   let recommendationResult: RecommendationResult | null = null;
 
+  // Track the recommendation card so we can offer a "jump to first build"
+  // affordance on completion (the most-asked navigation in user testing).
+  let recommendationShapeId: string | undefined;
+
+  const firstEngine = SPECFORGE_CHAIN[0];
+  const firstAct = PHASE_OF_ENGINE[firstEngine];
   opts.onProgress?.({
     phase: "running",
     done: 0,
     total,
-    label: ENGINE_LABEL[SPECFORGE_CHAIN[0]],
+    label: ENGINE_LABEL[firstEngine],
+    act: firstAct,
+    actIndex: PHASE_ORDER.indexOf(firstAct) + 1,
+    actTotal: PHASE_ORDER.length,
   });
 
   for (let idx = 0; idx < SPECFORGE_CHAIN.length; idx++) {
     const engine = SPECFORGE_CHAIN[idx];
+    const act = PHASE_OF_ENGINE[engine];
     opts.onProgress?.({
       phase: "running",
       done: idx,
       total,
       label: ENGINE_LABEL[engine],
+      act,
+      actIndex: PHASE_ORDER.indexOf(act) + 1,
+      actTotal: PHASE_ORDER.length,
     });
 
     // Prepend the accumulated constraint strip so this engine sees the
@@ -222,6 +250,12 @@ export async function runSpecForge(
         cursorY = batch.cursorY;
         allPlaced.push(...batch.placed);
         createdAny = true;
+        // Remember the recommendation's hero card as the focus target for the
+        // "jump to first build" affordance.
+        if (engine === "recommendation" && batch.placed.length > 0) {
+          const hero = batch.placed.find((p) => p.layout === "hero") ?? batch.placed[0];
+          recommendationShapeId = hero.id;
+        }
       }
 
       // Capture the recommendation for the constraint alignment check.
@@ -310,6 +344,11 @@ export async function runSpecForge(
     done: total,
     total,
     label: "Spec complete",
+    // No active act once the chain finishes — the chip flips to "done" copy.
+    act: null,
+    actIndex: 0,
+    actTotal: PHASE_ORDER.length,
+    focusShapeId: recommendationShapeId,
   });
 
   // Reveal the whole unfurl without yanking the zoom too hard.
