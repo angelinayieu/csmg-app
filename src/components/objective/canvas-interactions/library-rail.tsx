@@ -556,6 +556,20 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
   const [view, setView] = useState<View>("objects");
   const [objects, setObjects] = useState<LibObject[] | null>(null);
 
+  // Escape always closes the panel — a guaranteed exit independent of the
+  // header's close ✕ (which could be obscured/clipped on some viewports).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (full) setFull(false);
+        else setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, full]);
+
   // While the panel is open, push the top-right style palette LEFT of it
   // (rail is 384px at right:12) so the palette can't sit on top of the close
   // X. Mirrors the same trick PowerupRail uses; reset on close/unmount.
@@ -619,20 +633,23 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
     <>
       <div onPointerDown={(e) => e.stopPropagation()} style={railStyle(full)}>
         <div style={railHeader}>
-          <LibraryIcon style={{ width: 15, height: 15, color: appleVibe.text.secondary }} strokeWidth={2.2} />
-          <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "-0.01em", color: appleVibe.text.primary }}>Library</span>
+          <LibraryIcon style={{ width: 15, height: 15, color: appleVibe.text.secondary, flexShrink: 0 }} strokeWidth={2.2} />
           <div style={tabBar}>
             {tabs.map((t) => {
               const active = view === t.id;
               return (
                 <button key={t.id} type="button" onClick={() => setView(t.id)} style={tabBtn(active)}>
-                  <t.Icon style={{ width: 12, height: 12 }} strokeWidth={2.2} />
+                  <t.Icon style={{ width: 12, height: 12, flexShrink: 0 }} strokeWidth={2.2} />
                   {t.label}
                 </button>
               );
             })}
           </div>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 2 }}>
+          {/* flexShrink:0 keeps the expand + close buttons pinned and on-screen.
+              Without it the fixed-width tabs pushed the close ✕ past the 384px
+              rail's right edge (and off the viewport), so the panel couldn't be
+              closed. The tab bar (minWidth:0) yields space instead. */}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 2, flexShrink: 0 }}>
             <button type="button" title={full ? "Restore" : "Expand to full screen"} onClick={() => setFull((f) => !f)} style={iconBtn}>
               {full ? <Minimize2 style={{ width: 14, height: 14 }} strokeWidth={2.2} /> : <Maximize2 style={{ width: 14, height: 14 }} strokeWidth={2.2} />}
             </button>
@@ -711,6 +728,10 @@ const tabBar: CSSProperties = {
   padding: 2,
   borderRadius: appleVibe.radius.pill,
   background: appleVibe.surface.chip,
+  // Let the tab bar be the flex item that gives way when the header is tight,
+  // so the expand/close buttons (flexShrink:0) always stay on-screen.
+  minWidth: 0,
+  overflow: "hidden",
 };
 const tabBtn = (active: boolean): CSSProperties => ({
   display: "inline-flex",
