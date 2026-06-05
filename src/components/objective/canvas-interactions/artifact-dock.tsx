@@ -22,14 +22,14 @@ import { useValue, type Editor } from "tldraw";
 import {
   Boxes,
   NotebookPen,
-  Image as ImageIcon,
+  ImageIcon,
   Megaphone,
   Wand2,
   Plus,
   Check,
   Loader2,
   type LucideIcon,
-} from "lucide-react";
+} from "@/lib/cute-icons";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { shapeToScanTarget } from "./shape-node-adapter";
 import { executeCardOperation } from "./operation-executor";

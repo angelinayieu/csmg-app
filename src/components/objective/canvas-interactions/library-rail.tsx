@@ -38,7 +38,7 @@ import {
   RefreshCw,
   Sparkles,
   NotebookPen,
-  Image as ImageIcon,
+  ImageIcon,
   Megaphone,
   Wand2,
   Folder,
@@ -52,7 +52,7 @@ import {
   History,
   Library as LibraryIcon,
   type LucideIcon,
-} from "lucide-react";
+} from "@/lib/cute-icons";
 import { useRouter } from "next/navigation";
 import { deployFolderToBoard } from "./deploy-folder";
 import { CrossRoomBrowser } from "./cross-room-browser";
@@ -96,6 +96,11 @@ interface LibObject {
   subsystem: string | null;
   /** The blueprint layer slot (1-based ordinal). null → "Unlayered". */
   layerOrdinal: number | null;
+  /** Provenance key — used to group flow-step siblings under their
+   *  mechanism parent in the catalog (op:{opId}:{slug} → all share prefix). */
+  sourceRef: string | null;
+  /** Selection status — "rejected" = archived (hidden from the default list). */
+  selectionStatus: string;
 }
 
 /** A space layer ({ ordinal, name }) — the GET route now returns the real
@@ -168,7 +173,65 @@ function mapObject(o: any): LibObject {
       typeof o.subsystem === "string" && o.subsystem.trim() ? o.subsystem.trim() : null,
     layerOrdinal:
       typeof o.blueprint_layer_ordinal === "number" ? o.blueprint_layer_ordinal : null,
+    sourceRef: typeof o.source_ref === "string" ? o.source_ref : null,
+    selectionStatus: typeof o.selection_status === "string" ? o.selection_status : "candidate",
   };
+}
+
+/**
+ * Group flow-step siblings under their mechanism parent.
+ *
+ * The decompose / idea-mechanism operations emit ONE library_objects row per
+ * spec item (the root mechanism + "How it works" + every numbered flow step),
+ * all sharing the same `op:{opId}:` sourceRef prefix. The user sees these as
+ * confusing top-level peers in the catalog; here we collapse them so only the
+ * PARENT renders at top level, with its children counted as "+N steps" (and
+ * surfaced inside the detail drawer's content_snapshot view).
+ *
+ * Parent heuristic: among siblings with the same `op:{opId}:` prefix, pick the
+ * one whose title is NOT "How it works" and does NOT start with "N." — that's
+ * the root mechanism. If nothing fits (e.g. only flow steps survived an old
+ * cleanup), the first sibling becomes the parent so nothing is lost.
+ *
+ * Pure FE — no schema change, retroactive on the 82 existing objects.
+ */
+const FLOW_STEP_TITLE = /^\s*\d+\s*[\.:)]/;
+const HOW_IT_WORKS = /^how it works$/i;
+function opPrefix(ref: string | null): string | null {
+  if (!ref || !ref.startsWith("op:")) return null;
+  // "op:{opId}:{slug}" → "op:{opId}"
+  const i = ref.indexOf(":", 3);
+  return i === -1 ? null : ref.slice(0, i);
+}
+function collapseFlowSteps(rows: LibObject[]): { roots: LibObject[]; childCount: Map<string, number> } {
+  const groups = new Map<string, LibObject[]>();
+  const loose: LibObject[] = [];
+  for (const r of rows) {
+    const k = opPrefix(r.sourceRef);
+    if (!k) {
+      loose.push(r);
+      continue;
+    }
+    const arr = groups.get(k);
+    if (arr) arr.push(r);
+    else groups.set(k, [r]);
+  }
+  const roots: LibObject[] = [...loose];
+  const childCount = new Map<string, number>();
+  for (const siblings of groups.values()) {
+    if (siblings.length <= 1) {
+      roots.push(...siblings);
+      continue;
+    }
+    // Parent = first row that is NOT a flow step and NOT "How it works".
+    let parent = siblings.find(
+      (s) => !FLOW_STEP_TITLE.test(s.title) && !HOW_IT_WORKS.test(s.title),
+    );
+    if (!parent) parent = siblings[0];
+    roots.push(parent);
+    childCount.set(parent.id, siblings.length - 1);
+  }
+  return { roots, childCount };
 }
 
 /** Find the board card whose title/text matches a term, select + center it. */
@@ -944,16 +1007,30 @@ function ObjectsView({
     [layers],
   );
 
+  // Collapse flow-step siblings into their mechanism parent, and hide archived
+  // (selection_status === "rejected") rows from the default catalog list. Both
+  // are pure-FE filters; nothing is deleted.
+  const visibleObjects = useMemo(() => {
+    if (!objects) return null;
+    const live = objects.filter((o) => o.selectionStatus !== "rejected");
+    return live;
+  }, [objects]);
+  const { roots: visibleRoots, childCount: flowChildCount } = useMemo(
+    () => (visibleObjects ? collapseFlowSteps(visibleObjects) : { roots: [], childCount: new Map() }),
+    [visibleObjects],
+  );
+
   // Folder universe = every `subsystem` in use + locally-created empties.
   const folderNames = useMemo(() => {
     const s = new Set<string>();
-    for (const o of objects ?? []) if (o.subsystem) s.add(o.subsystem);
+    for (const o of visibleRoots) if (o.subsystem) s.add(o.subsystem);
     for (const f of extraFolders) s.add(f);
     return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [objects, extraFolders]);
+  }, [visibleRoots, extraFolders]);
 
   const shelves = useMemo(() => {
-    if (!objects) return [];
+    if (!visibleObjects) return [];
+    const objects = visibleRoots;
     const bucket = (keyOf: (o: LibObject) => string) => {
       const m = new Map<string, LibObject[]>();
       for (const o of objects) {
@@ -1022,13 +1099,13 @@ function ObjectsView({
           ? { key, label: "Unfiled", items, dot: appleVibe.text.faint as string | undefined }
           : { key, label: key, items, dot: FOLDER_DOT as string | undefined },
       );
-  }, [objects, axis, folderNames, layerName, rooms]);
+  }, [visibleObjects, visibleRoots, axis, folderNames, layerName, rooms]);
 
   // Feature tally for the catalog subline, and the running catalog number
   // each shelf starts at (001, 002, … continuous across shelves — tile mode).
   const featureCount = useMemo(
-    () => (objects ?? []).filter((o) => o.type === "feature").length,
-    [objects],
+    () => (visibleObjects ?? []).filter((o) => o.type === "feature").length,
+    [visibleObjects],
   );
   const shelfStarts = useMemo(() => {
     const starts: number[] = [];
@@ -1043,6 +1120,25 @@ function ObjectsView({
   function showFlash(msg: string, ms = 1800) {
     setFlash(msg);
     window.setTimeout(() => setFlash((c) => (c === msg ? null : c)), ms);
+  }
+
+  async function archiveObject(o: LibObject) {
+    // Optimistic: flip selectionStatus → "rejected" so collapseFlowSteps + the
+    // rejected-filter drop it from the visible list. No schema change needed:
+    // selection_status is already on the row, just unused by the current UI.
+    setObjects((prev) =>
+      prev?.map((x) => (x.id === o.id ? { ...x, selectionStatus: "rejected" } : x)) ?? prev,
+    );
+    showFlash(`Archived "${o.title.slice(0, 32)}${o.title.length > 32 ? "…" : ""}"`);
+    try {
+      await fetch(objectsUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "select", objectId: o.id, status: "rejected" }),
+      });
+    } catch {
+      /* soft-fail — the optimistic UI is the user-visible truth */
+    }
   }
 
   async function moveToFolder(o: LibObject, folder: string | null) {
@@ -1231,8 +1327,8 @@ function ObjectsView({
         </div>
       </div>
       <div style={objCaption}>
-        {objects
-          ? `${objects.length} object${objects.length === 1 ? "" : "s"}${featureCount > 0 ? ` · ${featureCount} feature${featureCount === 1 ? "" : "s"}` : ""}`
+        {visibleObjects
+          ? `${visibleRoots.length} object${visibleRoots.length === 1 ? "" : "s"}${featureCount > 0 ? ` · ${featureCount} feature${featureCount === 1 ? "" : "s"}` : ""}`
           : "—"}
         <span style={{ marginLeft: 8, color: appleVibe.text.faint, fontWeight: 500 }}>· node-link map coming</span>
       </div>
@@ -1345,6 +1441,8 @@ function ObjectsView({
                         number={shelfStarts[shelfIdx] + i + 1}
                         hueIndex={shelfIdx}
                         onOpen={() => onOpen(o)}
+                        onArchive={() => archiveObject(o)}
+                        childCount={flowChildCount.get(o.id) ?? 0}
                       />
                     ))}
                   </div>
@@ -1372,13 +1470,59 @@ function ObjectsView({
                         >
                           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             <span style={termName}>{o.title}</span>
+                            {(flowChildCount.get(o.id) ?? 0) > 0 && (
+                              <span
+                                title={`${flowChildCount.get(o.id)} nested flow step${(flowChildCount.get(o.id) ?? 0) === 1 ? "" : "s"}`}
+                                style={{
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  padding: "1px 6px",
+                                  borderRadius: 999,
+                                  background: appleVibe.surface.chip,
+                                  color: appleVibe.text.tertiary,
+                                  flexShrink: 0,
+                                }}
+                              >
+                                +{flowChildCount.get(o.id)}
+                              </span>
+                            )}
                             {o.onWhiteboard && (
                               <span
                                 style={{ width: 6, height: 6, borderRadius: 999, flexShrink: 0, background: appleVibe.accent.primary }}
                                 title="On the board"
                               />
                             )}
-                            <ChevronRight style={{ width: 12, height: 12, color: appleVibe.text.faint, marginLeft: "auto" }} strokeWidth={2.4} />
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              aria-label="Archive"
+                              title="Archive"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void archiveObject(o);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  void archiveObject(o);
+                                }
+                              }}
+                              style={{
+                                marginLeft: "auto",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                width: 18,
+                                height: 18,
+                                borderRadius: 999,
+                                color: appleVibe.text.faint,
+                                cursor: "pointer",
+                              }}
+                            >
+                              <X size={12} />
+                            </span>
+                            <ChevronRight size={12} style={{ color: appleVibe.text.faint }} />
                           </span>
                           {o.summary && <span style={termDef}>{o.summary}</span>}
                         </div>
@@ -2180,6 +2324,8 @@ const objToolbar: CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   gap: 8,
+  rowGap: 6,
+  flexWrap: "wrap",
   padding: "10px 12px 6px",
 };
 const segWrap: CSSProperties = {

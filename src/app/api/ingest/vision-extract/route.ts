@@ -29,6 +29,7 @@ import {
   type StructuredImageExtraction,
 } from "@/lib/ingest/extractors";
 import { emitStructuralEvent } from "@/lib/events/structural-event-bus";
+import { materializeImageContext } from "@/lib/objective-canvas/materialize-image-context";
 
 // Vision call is ~3-6s, generous slack for upload + DB writes.
 export const maxDuration = 60;
@@ -183,6 +184,49 @@ export async function POST(request: Request) {
     );
   }
 
+  // Materialize the extraction into the context/taste layer:
+  //   - one library_objects (context_concept) per entity, slugified into
+  //     the same concept_slug namespace as glossary + annotations
+  //   - library_object_sources row attaching this image to the per-space
+  //     context anchor as a `reference`
+  //   - taste-prose Claude pass writing ingested_files.image_narrative
+  // Soft-fail: if any of this throws the route still returns 200 with
+  // the structured payload. We are decorating the substrate, not gating it.
+  let materialized: Awaited<ReturnType<typeof materializeImageContext>> | null =
+    null;
+  if (fileRow.space_id) {
+    try {
+      // Pull the root objective text so the taste-prose pass can anchor
+      // its narrative in the user's actual goal rather than generic prose.
+      let objectiveText: string | null = null;
+      try {
+        const { data: goal } = await db
+          .from("improvement_goals")
+          .select("description, title")
+          .eq("space_id", fileRow.space_id)
+          .is("parent_goal_id", null)
+          .maybeSingle();
+        objectiveText =
+          (goal?.description as string | null) ??
+          (goal?.title as string | null) ??
+          null;
+      } catch {
+        /* soft-fail — taste pass tolerates null */
+      }
+
+      materialized = await materializeImageContext(db, {
+        spaceId: fileRow.space_id,
+        userId: user.id,
+        ingestedFileId: fileRow.id,
+        extraction: structured,
+        objectiveText,
+        runNarrativePass: true,
+      });
+    } catch (materErr) {
+      console.warn("[vision-extract] materialize failed (soft):", materErr);
+    }
+  }
+
   const durationMs = Date.now() - startedAt;
 
   // Emit the SSE event last — persist-then-emit per the project's
@@ -215,5 +259,17 @@ export async function POST(request: Request) {
     relationships: structured.relationships,
     duration_ms: durationMs,
     vision_model: extraction.model,
+    // The materialized context/taste seam: callers (objective-image-mount,
+    // file-card) can show "+ N concepts → Library" without an extra round
+    // trip. null when no space context (paste-from-clipboard without a
+    // space, or soft-fail on the materializer side).
+    context: materialized
+      ? {
+          anchor_id: materialized.anchorId,
+          concept_ids: materialized.conceptIds,
+          concept_slugs: materialized.conceptSlugs,
+          narrative_written: materialized.narrativeWritten,
+        }
+      : null,
   });
 }

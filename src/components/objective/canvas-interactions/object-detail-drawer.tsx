@@ -12,7 +12,7 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import type { Editor, TLShape, TLShapeId } from "tldraw";
-import { X, Loader2, Boxes, ArrowRight, ArrowLeft, MapPin, Target, Star, Sparkles, Pencil } from "lucide-react";
+import { X, Loader2, Boxes, ArrowRight, ArrowLeft, MapPin, Target, Star, Sparkles, Pencil } from "@/lib/cute-icons";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { labelFor, panToShape } from "../favorites-sidebar";
 import { ObjectClusterGraph } from "./object-cluster-graph";
@@ -39,11 +39,61 @@ interface LibObjectFull {
   on_whiteboard?: boolean;
   board_shape_id?: string | null;
   source_entity_id?: string | null;
+  source_ref?: string | null;
   subsystem?: string | null;
+  updated_at?: string | null;
+  created_at?: string | null;
+}
+interface SiblingRef {
+  id: string;
+  title: string;
+  type: string;
+  summary: string | null;
+}
+/** Image evidence — the trace-back surface for context_concept rows
+ *  materialized from a vision extraction. */
+interface ImageEvidence {
+  ingestedFileId: string;
+  imageUrl: string | null;
+  sourceName: string | null;
+  description: string | null;
+  narrative: string | null;
+  sourcePhrase: string | null;
 }
 interface DetailResponse {
   object: LibObjectFull | null;
   links: ObjectLinkRef[];
+  siblings?: SiblingRef[];
+  imageEvidence?: ImageEvidence | null;
+}
+
+/** Human-friendly "5m ago" / "2h ago" for the freshness chip. */
+function timeAgo(iso?: string | null): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  const diff = Date.now() - t;
+  const s = Math.round(diff / 1000);
+  if (s < 45) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.round(d / 30);
+  return `${mo}mo ago`;
+}
+
+/** Provenance label for a source_ref like "op:{opId}:{slug}". Falls back to a
+ *  generic "From canvas operation" when we can't decode the op kind. */
+function provenanceLabel(ref?: string | null): string | null {
+  if (!ref) return null;
+  if (ref.startsWith("op:")) return "From canvas operation";
+  if (ref.startsWith("converge:")) return "From a converge pass";
+  if (ref.startsWith("synthesis:")) return "From deep-synthesize";
+  if (ref.startsWith("decompose:")) return "From decompose";
+  return null;
 }
 
 const titleCase = (s: string) =>
@@ -86,6 +136,118 @@ function Gallery({ snapshot }: { snapshot: unknown }) {
         </section>
       ))}
     </>
+  );
+}
+
+/** Image evidence panel — the trace-back surface for context_concept rows
+ *  materialized from a vision extraction. Renders only when the detail
+ *  endpoint populated `imageEvidence`. Shows:
+ *    - thumbnail of the original image
+ *    - taste-aware narrative (rich prose, the second-pass output)
+ *    - technical description (the dry vision extraction summary)
+ *    - the verbatim phrase this concept was lifted from
+ *  Soft on missing fields — any single piece can be null. */
+function ImageEvidencePanel({ evidence }: { evidence: ImageEvidence }) {
+  const hasThumb = !!evidence.imageUrl;
+  const hasAny =
+    evidence.narrative ||
+    evidence.description ||
+    evidence.sourcePhrase ||
+    hasThumb;
+  if (!hasAny) return null;
+  return (
+    <section style={{ marginTop: 14 }}>
+      <div style={sectionLabel}>From your image</div>
+      <div
+        style={{
+          marginTop: 8,
+          display: "flex",
+          gap: 12,
+          padding: 10,
+          borderRadius: 12,
+          border: `1px solid ${appleVibe.stroke.soft}`,
+          background: appleVibe.surface.chip,
+        }}
+      >
+        {hasThumb && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={evidence.imageUrl!}
+            alt={evidence.sourceName ?? "Source image"}
+            style={{
+              width: 96,
+              height: 96,
+              objectFit: "cover",
+              borderRadius: 8,
+              border: `1px solid ${appleVibe.stroke.soft}`,
+              flexShrink: 0,
+            }}
+          />
+        )}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            minWidth: 0,
+          }}
+        >
+          {evidence.narrative && (
+            <p
+              style={{
+                margin: 0,
+                fontSize: 12.5,
+                lineHeight: 1.5,
+                color: appleVibe.text.primary,
+                fontFamily: appleVibe.font.stack,
+              }}
+            >
+              {evidence.narrative}
+            </p>
+          )}
+          {evidence.description && evidence.description !== evidence.narrative && (
+            <p
+              style={{
+                margin: 0,
+                fontSize: 11.5,
+                lineHeight: 1.45,
+                color: appleVibe.text.tertiary,
+                fontFamily: appleVibe.font.stack,
+              }}
+            >
+              {evidence.description}
+            </p>
+          )}
+          {evidence.sourcePhrase && (
+            <p
+              style={{
+                margin: 0,
+                fontSize: 11.5,
+                lineHeight: 1.45,
+                color: appleVibe.text.secondary,
+                fontStyle: "italic",
+                fontFamily: appleVibe.font.stack,
+                paddingLeft: 8,
+                borderLeft: `2px solid ${appleVibe.accent.primary}`,
+              }}
+            >
+              “{evidence.sourcePhrase}”
+            </p>
+          )}
+          {evidence.sourceName && (
+            <span
+              style={{
+                fontSize: 10.5,
+                color: appleVibe.text.faint,
+                fontFamily: appleVibe.font.stack,
+              }}
+            >
+              {evidence.sourceName}
+            </span>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -339,6 +501,19 @@ function ObjectDetailDrawer({
                 )}
                 {obj.on_whiteboard && <span style={statusPill}>On board</span>}
                 {obj.subsystem && <span style={subsystemPill}>{obj.subsystem}</span>}
+                {provenanceLabel(obj.source_ref) && (
+                  <span
+                    style={{ ...statusPill, opacity: 0.85 }}
+                    title={obj.source_ref ?? ""}
+                  >
+                    {provenanceLabel(obj.source_ref)}
+                  </span>
+                )}
+                {timeAgo(obj.updated_at) && (
+                  <span style={{ ...statusPill, opacity: 0.75 }} title={obj.updated_at ?? ""}>
+                    Updated {timeAgo(obj.updated_at)}
+                  </span>
+                )}
               </div>
 
               {/* Taste receipt — the defined terms that shaped this card. "Yours"
@@ -429,6 +604,65 @@ function ObjectDetailDrawer({
                 ))}
 
               <Gallery snapshot={obj.content_snapshot} />
+
+              {/* Image evidence — when this object is a context_concept that was
+                  materialized from a vision extraction, render the trace-back
+                  panel: thumbnail + technical description + taste-aware
+                  narrative + the verbatim phrase this concept was lifted from.
+                  Closes the "how does meta-data trace back to the image" loop. */}
+              {data?.imageEvidence && (
+                <ImageEvidencePanel evidence={data.imageEvidence} />
+              )}
+
+              {/* Sibling rows from the same canvas operation — "How it works"
+                  + numbered flow steps — surfaced here so the parent mechanism
+                  shows its full breakdown without forcing the user to open every
+                  child separately. Hidden in the catalog (collapsed to "+N steps"
+                  on the parent's tile). */}
+              {data?.siblings && data.siblings.length > 0 && (
+                <section style={{ marginTop: 14 }}>
+                  <div style={sectionLabel}>
+                    Flow ({data.siblings.length} step{data.siblings.length === 1 ? "" : "s"})
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                    {data.siblings.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => {
+                          // navigate the drawer to the sibling without re-mounting
+                          window.dispatchEvent(
+                            new CustomEvent(OPEN_CARD_DETAIL_EVENT, { detail: { objectId: s.id } }),
+                          );
+                        }}
+                        style={{
+                          textAlign: "left",
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          border: "1px solid rgba(15,23,42,0.06)",
+                          background: appleVibe.surface.chip,
+                          cursor: "pointer",
+                          fontFamily: appleVibe.font.stack,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 3,
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = appleVibe.surface.chipHover)}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = appleVibe.surface.chip)}
+                      >
+                        <span style={{ fontSize: 12.5, fontWeight: 600, color: appleVibe.text.primary }}>
+                          {s.title}
+                        </span>
+                        {s.summary && (
+                          <span style={{ fontSize: 11.5, lineHeight: 1.4, color: appleVibe.text.tertiary }}>
+                            {s.summary}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               {/* cluster — this object + its linked neighborhood, plus a
                   "+ Link" affordance that persists a real object_link. */}

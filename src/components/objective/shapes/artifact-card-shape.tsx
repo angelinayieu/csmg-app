@@ -21,7 +21,7 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { ArrowUpRight, GripVertical } from "lucide-react";
+import { ArrowUpRight, GripVertical } from "@/lib/cute-icons";
 import { OPEN_ROOM_EVENT } from "./room-card-shape";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 

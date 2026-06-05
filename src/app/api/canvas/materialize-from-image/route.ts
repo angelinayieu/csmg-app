@@ -1,5 +1,23 @@
 // ── /api/canvas/materialize-from-image ─────────────────────────────
 //
+// DEPRECATED 2026-06-05 — writes to the OLD `entities` + `edges` KG
+// layer that the project is retiring (see [[project_old_build_deprecation]]).
+// Neither trigger path described below was ever wired (no client
+// listens for `image_extracted`; the "Decompose into entities" button
+// was never added). Live path is now:
+//
+//   /api/ingest/vision-extract
+//     → src/lib/objective-canvas/materialize-image-context.ts
+//        → library_objects (object_type='context_concept'), one per
+//          extracted entity, slugified into the concept_slug namespace
+//        → library_object_sources (image → context anchor, role='reference')
+//        → ingested_files.image_narrative (taste-prose pass)
+//
+// That seam is what feeds getObjectiveContextScope / glossary /
+// prompt-sharpening / brief. This route is left in place for any
+// external callers but should not be referenced from new UI; remove
+// once we confirm zero callers in the repo for a release cycle.
+//
 // Bulk-creates KG entities + edges from a previously-vision-analyzed
 // image (see /api/ingest/vision-extract). The cached extraction lives
 // on `ingested_files` (image_description, extracted_entities,
@@ -7,12 +25,6 @@
 // inserts entities + edges into the KG with `source_tag: "implicit"`
 // and `requires_user_approval: true` so the user can accept or reject
 // the additions like any other AI-proposed item.
-//
-// Two trigger paths:
-//   - Auto: client receives the `image_extracted` SSE event (or
-//     /api/ingest/vision-extract response) and calls this immediately
-//   - Manual: file-card "Decompose into entities" button calls this
-//     on demand
 //
 // Idempotency: re-running this endpoint for the same ingested_file_id
 // is safe — entities are deduped by name within the same call, but

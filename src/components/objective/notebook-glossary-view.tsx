@@ -11,7 +11,7 @@
 // across regenerations (the merge in generate-glossary.ts respects it).
 
 import { useCallback, useEffect, useState } from "react";
-import { Check, Loader2, Pencil, Pin, RefreshCw, X } from "lucide-react";
+import { Check, Loader2, Pencil, Pin, RefreshCw, X } from "@/lib/cute-icons";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type {
   GlossaryTerm,
