@@ -63,11 +63,19 @@ const nextConfig: NextConfig = {
   // grows. This flag drops webpack's retained in-memory caches during the
   // build (slightly slower build, materially lower peak RSS). Safe + stable.
   // https://nextjs.org/docs/app/api-reference/config/next-config-js/webpackMemoryOptimizations
-  // DIAGNOSTIC: webpackMemoryOptimizations frees module sources mid-build; on
-  // Next 16 + Node 24 a later hash reads one back as `undefined`, crashing
-  // `next build --webpack` with ERR_INVALID_ARG_TYPE. Disabled to confirm.
+  // ENV-GATED, because the two build environments need opposite settings:
+  //   • Vercel (Node 22.x, per package.json `engines`) — its 8 GB build
+  //     container OOMs (SIGKILL) on `next build --webpack` without this flag.
+  //     Node 22 does NOT hit the hash bug below, so enabling it is safe + is
+  //     the fix for the production OOM.
+  //   • Local (Node 24) — webpackMemoryOptimizations frees module sources
+  //     mid-build and a later hash reads one back as `undefined`, crashing
+  //     with ERR_INVALID_ARG_TYPE. So it stays OFF locally.
+  // `process.env.VERCEL` is "1" during Vercel builds only, so this is true on
+  // Vercel and false everywhere else — fixes the OOM without reintroducing the
+  // local Node-24 crash.
   experimental: {
-    webpackMemoryOptimizations: false,
+    webpackMemoryOptimizations: !!process.env.VERCEL,
   },
 
   // ── Webpack: avoid the bundled WASM hasher ───────────────────────────
