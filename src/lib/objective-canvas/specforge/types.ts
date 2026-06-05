@@ -29,9 +29,11 @@ export type SpecForgeStage =
   | "mvp" // top MVP variations (warm gold)
   | "evaluation" // narrowing rubric over MVPs (slate-blue)
   | "recommendation" // recommended first build (green)
+  | "budget" // complexity allocation: where to spend complexity (slate-gold)
   | "features" // feature card system (forest-green)
   | "mechanisms" // feature mechanism generator (sage-green)
   | "data" // data point optimization model (jade-teal)
+  | "layers" // recursive layer optimization: macro→micro→mechanism alignment (deep teal)
   | "validation" // experimentation / validation lab (rose-red)
   | "deepening" // iteration timeline / situation-model deepening (deep purple)
   | "export" // spec exporter / build instruction generator (graphite-blue)
@@ -61,9 +63,11 @@ export const STAGE_META: Record<SpecForgeStage, StageMeta> = {
   mvp: { label: "MVP variation", color: "#C8923A" },
   evaluation: { label: "Evaluation rubric", color: "#4F6B8C" },
   recommendation: { label: "Recommended first build", color: "#2FA968" },
+  budget: { label: "Complexity budget", color: "#8C6E2E" },
   features: { label: "Feature card", color: "#3C8B5A" },
   mechanisms: { label: "Feature mechanism", color: "#5A9E70" },
   data: { label: "Data point", color: "#2E9B8C" },
+  layers: { label: "Layer alignment", color: "#0F766E" },
   validation: { label: "Validation plan", color: "#D9486F" },
   deepening: { label: "Iteration deepening", color: "#7C4DFF" },
   export: { label: "Build spec export", color: "#2F455E" },
@@ -85,9 +89,11 @@ export type SpecForgeEngineId =
   | "mvp_variations"
   | "evaluation"
   | "recommendation"
+  | "complexity_allocation"
   | "feature_cards"
   | "feature_mechanisms"
   | "data_points"
+  | "layer_optimization"
   | "validation"
   | "deepening"
   | "spec_export";
@@ -110,9 +116,11 @@ export const SPECFORGE_CHAIN: SpecForgeEngineId[] = [
   "mvp_variations",
   "evaluation",
   "recommendation",
+  "complexity_allocation",
   "feature_cards",
   "feature_mechanisms",
   "data_points",
+  "layer_optimization",
   "validation",
   "deepening",
   "spec_export",
@@ -132,9 +140,11 @@ export const ENGINE_LABEL: Record<SpecForgeEngineId, string> = {
   mvp_variations: "Shaping MVP variations",
   evaluation: "Scoring against the rubric",
   recommendation: "Choosing the first build",
+  complexity_allocation: "Allocating the complexity budget",
   feature_cards: "Decomposing the build into features",
   feature_mechanisms: "Designing the feature mechanisms",
   data_points: "Optimizing the data points",
+  layer_optimization: "Auditing macro–micro–mechanism alignment",
   validation: "Designing the validation plan",
   deepening: "Recording the iteration baseline",
   spec_export: "Exporting the build spec",
@@ -547,6 +557,94 @@ export interface RecommendationResult {
   next_best_action: string;
 }
 
+/** Complexity Allocation Engine — per specforge_complexity_allocation_engine.md.
+ *  Sits between recommendation and feature_cards. Decides where to spend
+ *  product/UI/technical/interaction/data/evaluation complexity for v1 by
+ *  scoring each candidate module on a complexity-to-value ratio + downstream
+ *  leverage, then producing overbuilt/underbuilt warnings and a first_build
+ *  vs delayed_scope split that feature_cards is forced to honor.
+ *
+ *  Anti-duplication rules (enforced by the prompt + the quality critic):
+ *   - Does NOT pick the recommendation (recommendation's job)
+ *   - Does NOT decompose features (feature_cards's job — but its delayed_scope
+ *     becomes a hard delay constraint feature_cards must respect)
+ *   - Does NOT design mechanisms (feature_mechanisms's job)
+ *   - Does NOT design experiments (validation's job)
+ *   - Does NOT pick a depth level (depth_selection's job — depth = how deep to
+ *     analyze upstream; this = where to spend build effort downstream) */
+export type ComplexityLevel = "very_low" | "low" | "medium" | "high" | "very_high";
+
+export interface ComplexityBudget {
+  /** Total = 100. The six bucket budgets must sum to ~100 (±5 tolerated). */
+  total: number;
+  reasoning: number;
+  ui: number;
+  technical: number;
+  interaction: number;
+  data: number;
+  evaluation: number;
+  /** One-line summary of the allocation philosophy (e.g. "reasoning + evaluation dominate; UI stays minimal until value proves out"). */
+  philosophy: string;
+}
+
+export interface ComplexityModuleScore {
+  /** Module identity — must match a module spec the prompt was given (e.g.
+   *  "Multifactor Causal Modeling", "Full Graph View", "Spec Exporter"). */
+  module_name: string;
+  reasoning_complexity: ComplexityLevel;
+  ui_complexity: ComplexityLevel;
+  technical_complexity: ComplexityLevel;
+  user_comprehension_cost: ComplexityLevel;
+  /** Value created if built well. Drives the complexity-to-value ratio. */
+  value_return: ComplexityLevel;
+  /** How many downstream modules this improves. */
+  downstream_leverage: ComplexityLevel;
+  /** value / cost rule of thumb — drives the build_recommendation. */
+  complexity_to_value_ratio: "high" | "medium" | "low";
+  /** What the engine decided about this module. */
+  build_recommendation:
+    | "build_full"
+    | "build_partial"
+    | "build_minimal"
+    | "delay"
+    | "remove";
+}
+
+export interface ComplexityWarning {
+  /** Module being warned about. */
+  module: string;
+  /** Free-text reason — must cite WHY (depends on upstream, low downstream leverage, generic output without rigor, etc.). */
+  reason: string;
+}
+
+export interface ComplexityReallocation {
+  /** Module to reduce complexity on. */
+  reduce: string;
+  /** Module to give that complexity to. */
+  increase: string;
+  /** Why the reallocation creates more leverage. */
+  rationale: string;
+}
+
+export interface ComplexityAllocationResult {
+  /** The MVP this allocation is for — must echo recommendation.recommendation. */
+  selected_mvp: string;
+  budget: ComplexityBudget;
+  module_scores: ComplexityModuleScore[];
+  overbuilt_warnings: ComplexityWarning[];
+  underbuilt_warnings: ComplexityWarning[];
+  reallocation_recommendations: ComplexityReallocation[];
+  /** Modules feature_cards MUST decompose into the first build. */
+  first_build_scope: string[];
+  /** Modules feature_cards MUST delay (build_priority="delay"). */
+  delayed_scope: string[];
+  /** Modules to drop entirely from v1 — feature_cards must not surface them. */
+  removed_scope: string[];
+  /** Hard rule for downstream: 1–3 sentences feature_cards / spec_export must obey. */
+  build_discipline_rule: string;
+  confidence: number; // 0..100
+}
+
 /** Feature Card System — per specforge_feature_card_system.md.
  *  Sits between recommendation and validation. Expands the SINGLE recommended
  *  first build into 3–5 traceable feature cards, each grounded in the upstream
@@ -735,6 +833,100 @@ export interface DataPointsResult {
   data_flow_summary: string;
   /** Overall data risks: privacy, reliability, friction, unavailability. */
   risks: string[];
+  confidence: number; // 0..100
+}
+
+/** Recursive Layer Optimization Engine — per specforge_recursive_layer_optimization_engine.md.
+ *  Sits AFTER data_points, BEFORE validation. The system's vertical alignment
+ *  auditor: walks macro → micro → mechanism, checks each layer still serves
+ *  its parent (cross-layer alignment per spec §4.4), runs consequential
+ *  evaluation per §9 ("does this layer's output improve the next layer?"),
+ *  and produces repair recommendations when alignment drifts.
+ *
+ *  Strictly anti-duplication: does NOT pick the macro objective (convergence's
+ *  job), does NOT decompose features (feature_cards's job), does NOT design
+ *  mechanisms (feature_mechanisms's job), does NOT allocate complexity
+ *  (complexity_allocation's job), does NOT extract constraints (the
+ *  accumulator's job). Its UNIQUE contribution: vertical alignment between
+ *  layers and consequential lift between adjacent stages of the chain. */
+export type LayerType = "macro" | "micro" | "mechanism";
+
+export type LayerAlignmentVerdict = "aligned" | "drifted" | "broken";
+
+export type LayerRepairAction = "accept" | "deepen" | "repair" | "reject";
+
+export interface LayerObjective {
+  /** Free-text objective for this layer (e.g. macro: "structured confidence"). */
+  text: string;
+  /** Parent objective this objective serves (empty for macro). */
+  parent: string;
+}
+
+export interface LayerNode {
+  /** "macro", a feature name (micro), or a mechanism name. */
+  name: string;
+  layer_type: LayerType;
+  objective: string;
+  /** Empty for macro. For micro = macro objective. For mechanism = feature objective. */
+  parent: string;
+  /** Top 1–3 selected outputs surfaced from the upstream engine. */
+  selected_output: string;
+  /** 0–3 alternatives the upstream engine rejected — kept for repair context. */
+  rejected_alternatives: string[];
+  /** Constraints THIS layer passes downstream (so downstream knows what to obey). */
+  constraints_passed_down: string[];
+  /** Quality-gate verdict from spec §14. */
+  quality_gate_status: "passed" | "needs_repair";
+}
+
+export interface LayerAlignmentCheck {
+  /** Child name (mechanism for mechanism→micro, micro for micro→macro). */
+  child: string;
+  /** Parent name being aligned-against. */
+  parent: string;
+  /** Type of edge being checked. */
+  edge: "micro_to_macro" | "mechanism_to_micro";
+  /** Does the child still serve the parent? */
+  verdict: LayerAlignmentVerdict;
+  /** Short reason for the verdict. */
+  rationale: string;
+  /** If drifted/broken, the repair recommendation. */
+  repair_recommendation: string;
+}
+
+export interface ConsequentialEvaluation {
+  /** Which engine's output this evaluates (e.g. "feature_cards"). */
+  current_layer: string;
+  /** The downstream engine that consumes it (e.g. "feature_mechanisms"). */
+  next_layer: string;
+  /** Concrete downstream improvement this layer enables. */
+  downstream_improvement: string;
+  /** Concrete downstream risk if the current layer is wrong. */
+  downstream_risk_if_wrong: string;
+  /** How tightly the next layer's quality depends on this one. */
+  dependency_strength: "low" | "medium" | "high";
+  recommendation: LayerRepairAction;
+}
+
+export interface LayerOptimizationResult {
+  /** Macro layer (one node). */
+  macro: LayerNode;
+  /** Micro layer — one node per feature card. */
+  micros: LayerNode[];
+  /** Mechanism layer — one node per feature mechanism. */
+  mechanisms: LayerNode[];
+  /** Vertical alignment checks: every micro must be checked against macro,
+   *  and every mechanism against its micro. Length = micros.length + mechanisms.length. */
+  alignment_checks: LayerAlignmentCheck[];
+  /** Consequential evaluation per spec §9 — at least one per major handoff
+   *  (recommendation→feature_cards, feature_cards→feature_mechanisms,
+   *  feature_mechanisms→data_points, data_points→validation). */
+  consequential_evaluations: ConsequentialEvaluation[];
+  /** Layers/modules that should be deepened next iteration (spec §5.7 repair). */
+  layers_to_repair: { name: string; reason: string }[];
+  /** One-line summary of macro→micro→mechanism alignment health. */
+  alignment_summary: string;
+  /** Overall confidence the whole system still serves the macro mission. */
   confidence: number; // 0..100
 }
 
@@ -996,9 +1188,11 @@ export interface EngineResultMap {
   mvp_variations: MvpVariationsResult;
   evaluation: EvaluationResult;
   recommendation: RecommendationResult;
+  complexity_allocation: ComplexityAllocationResult;
   feature_cards: FeatureCardsResult;
   feature_mechanisms: FeatureMechanismsResult;
   data_points: DataPointsResult;
+  layer_optimization: LayerOptimizationResult;
   validation: ValidationResult;
   deepening: DeepeningResult;
   spec_export: SpecExportResult;

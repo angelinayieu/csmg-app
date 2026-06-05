@@ -27,6 +27,7 @@ import type {
   MvpVariationsResult,
   EvaluationResult,
   RecommendationResult,
+  ComplexityAllocationResult,
   FeatureCardsResult,
   FeatureCard,
   FeatureMechanismsResult,
@@ -332,6 +333,59 @@ export function extractConstraintsFromEngineResult(
             why: "if this assumption fails, the rubric winner flips",
           });
         }
+      }
+      return out;
+    }
+
+    case "complexity_allocation": {
+      const r = result as ComplexityAllocationResult;
+      // The build_discipline_rule is THE hard rule downstream engines obey —
+      // critical buildability constraint. (Spec §17 — "discipline rule is the
+      // guardrail".)
+      const rule = clean(r.build_discipline_rule);
+      if (rule) {
+        push({
+          type: "buildability",
+          priority: "critical",
+          text: rule,
+          why: "complexity allocation discipline rule — feature_cards / spec_export must obey verbatim",
+        });
+      }
+      // Removed scope = hard exclusion from v1 (spec §13). High priority because
+      // it should kill features outright in feature_cards, not just delay them.
+      const removed = arr<string>(r.removed_scope).map(clean).filter(Boolean).slice(0, 4);
+      for (const m of removed) {
+        push({
+          type: "buildability",
+          priority: "high",
+          text: `Must not surface: ${m}`,
+          why: "removed from v1 by complexity allocation (low value-to-cost ratio)",
+        });
+      }
+      // Delayed scope = lower-priority cap on what feature_cards can mark
+      // must_have. Medium so it constrains without dominating.
+      const delayed = arr<string>(r.delayed_scope).map(clean).filter(Boolean).slice(0, 4);
+      for (const m of delayed) {
+        push({
+          type: "buildability",
+          priority: "medium",
+          text: `Delay past v1: ${m}`,
+          why: "complexity allocation delayed scope",
+        });
+      }
+      // Underbuilt warnings = mechanism constraints — feature_mechanisms must
+      // not produce shallow mechanisms in these modules.
+      const under = (Array.isArray(r.underbuilt_warnings) ? r.underbuilt_warnings : [])
+        .map((w) => ({ module: clean(w?.module), reason: clean(w?.reason) }))
+        .filter((w) => w.module)
+        .slice(0, 2);
+      for (const w of under) {
+        push({
+          type: "mechanism",
+          priority: "high",
+          text: `Must give depth to: ${w.module}`,
+          why: w.reason || "flagged as underbuilt by complexity allocation",
+        });
       }
       return out;
     }

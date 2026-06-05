@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { shapeToScanTarget } from "./shape-node-adapter";
+import { executeCardOperation } from "./operation-executor";
 import { labelFor } from "@/components/objective/favorites-sidebar";
 import type { OperationTarget } from "@/lib/objective-canvas/canvas-operations";
 import {
@@ -42,7 +43,11 @@ import {
   type ArtifactEngineKey,
 } from "@/lib/objective-canvas/artifact-engines";
 import { getAiSettings } from "@/lib/objective-canvas/ai-settings";
-import { deployJournalCard, openNotebook } from "@/components/objective/board-bus";
+import {
+  deployJournalCard,
+  openNotebook,
+  deployImageCard,
+} from "@/components/objective/board-bus";
 import {
   BUILD_UI_PLANS_EVENT,
   type BuildUiPlansDetail,
@@ -72,6 +77,9 @@ export function ArtifactDock({
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [running, setRunning] = useState<ArtifactEngineKey | null>(null);
   const [toast, setToast] = useState<Toast>(null);
+  // Inline composer shared by the prompt-driven engines (custom + image).
+  const [composerFor, setComposerFor] = useState<ArtifactEngineKey | null>(null);
+  const [composerText, setComposerText] = useState("");
 
   useEffect(() => {
     setPinned(readPinnedEngines(spaceId));
@@ -233,6 +241,100 @@ export function ArtifactDock({
     }
   }, [spaceId, editor, flash]);
 
+  /** Combined selection text (for grounding image / custom runs). */
+  const selectionText = useCallback(() => {
+    return editor
+      .getSelectedShapes()
+      .map(shapeToScanTarget)
+      .filter((t): t is OperationTarget => !!t)
+      .map((t) => t.text)
+      .join("\n\n");
+  }, [editor]);
+
+  const runCustom = useCallback(async () => {
+    const prompt = composerText.trim();
+    if (!prompt) return;
+    const shapes = editor.getSelectedShapes();
+    const target = shapes.map(shapeToScanTarget).find((t): t is OperationTarget => !!t);
+    if (!target) {
+      flash("Select a card or text to run your operation on.", "error");
+      return;
+    }
+    setRunning("custom");
+    setComposerFor(null);
+    try {
+      const settings = getAiSettings();
+      const res = await executeCardOperation(editor, target, "custom", {
+        prompt,
+        temperature: settings.temperature,
+        webSearch: settings.webSearch,
+        spaceId,
+      });
+      if (res.error) {
+        flash("Couldn't run that — try again.", "error");
+        return;
+      }
+      // Record the run as a custom artifact (shows in the Artifacts Library).
+      void fetch(`/api/objective/${spaceId}/artifacts`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "upsert",
+          engineKey: `custom:${prompt.slice(0, 40)}`,
+          artifactType: "custom",
+          title: prompt.length > 60 ? `${prompt.slice(0, 59)}…` : prompt,
+          status: "ready",
+          content: { instruction: prompt, resultCount: res.count },
+          lastUpdatedBy: "user",
+          appendVersion: true,
+        }),
+      }).catch(() => {});
+      setComposerText("");
+      flash(res.count ? `Custom op produced ${res.count} card${res.count === 1 ? "" : "s"}.` : "Custom op ran.");
+    } catch {
+      flash("Couldn't run that — try again.", "error");
+    } finally {
+      setRunning((c) => (c === "custom" ? null : c));
+    }
+  }, [composerText, editor, spaceId, flash]);
+
+  const runImage = useCallback(async () => {
+    const prompt = composerText.trim();
+    if (!prompt) return;
+    setRunning("image");
+    setComposerFor(null);
+    const context = selectionText();
+    try {
+      const res = await fetch(`/api/canvas/artifact/image`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ spaceId, prompt, context }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        flash(j.error || "Image generation failed.", "error");
+        return;
+      }
+      const j = (await res.json()) as { id?: string; imageUrl?: string; title?: string };
+      if (j.imageUrl) {
+        deployImageCard({
+          imageFileId: j.id || `img-${j.imageUrl}`,
+          imageName: j.title || prompt,
+          imageUrl: j.imageUrl,
+          description: prompt,
+          entityCount: 0,
+          entitiesJson: "[]",
+        });
+      }
+      setComposerText("");
+      flash("Image generated.");
+    } catch {
+      flash("Image generation failed.", "error");
+    } finally {
+      setRunning((c) => (c === "image" ? null : c));
+    }
+  }, [composerText, selectionText, spaceId, flash]);
+
   const runEngine = useCallback(
     (engine: ArtifactEngineDef) => {
       if (running) return;
@@ -246,6 +348,8 @@ export function ArtifactDock({
       }
       if (engine.key === "build_prototype") runPrototype();
       else if (engine.key === "notebook") void runNotebook();
+      else if (engine.key === "custom" || engine.key === "image")
+        setComposerFor((v) => (v === engine.key ? null : engine.key));
     },
     [running, sel.count, flash, runPrototype, runNotebook],
   );
@@ -497,6 +601,118 @@ export function ArtifactDock({
           </div>
         )}
       </div>
+
+      {/* Prompt composer — shared by Custom (own instruction) + Image (gpt-image). */}
+      {composerFor && (() => {
+        const isImage = composerFor === "image";
+        const canRun = composerText.trim().length > 0 && sel.count > 0;
+        const grad = isImage
+          ? "linear-gradient(140deg, #F59E0B, #F43F5E)"
+          : "linear-gradient(140deg, #64748B, #6366F1)";
+        return (
+          <div
+            style={{
+              position: "absolute",
+              left: 56,
+              top: "50%",
+              transform: "translateY(-50%)",
+              width: 280,
+              padding: 12,
+              borderRadius: 16,
+              background: "var(--glass-modal-bg, var(--glass-float-bg))",
+              backdropFilter: "blur(var(--blur-modal, 28px)) saturate(1.7)",
+              WebkitBackdropFilter: "blur(var(--blur-modal, 28px)) saturate(1.7)",
+              border: "1px solid var(--glass-border)",
+              boxShadow: appleVibe.shadow.cardHover ?? appleVibe.shadow.card,
+              fontFamily: appleVibe.font.stack,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 10.5,
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                textTransform: "uppercase",
+                color: appleVibe.text.faint,
+                marginBottom: 8,
+              }}
+            >
+              {isImage ? "Generate image" : "Custom operation"}
+              {sel.count > 0 && (
+                <span style={{ color: appleVibe.text.tertiary, fontWeight: 500 }}>
+                  {" "}
+                  · {sel.count} selected
+                </span>
+              )}
+            </div>
+            <textarea
+              value={composerText}
+              onChange={(e) => setComposerText(e.target.value)}
+              autoFocus
+              placeholder={
+                isImage
+                  ? "Describe the image to create…"
+                  : "e.g. Turn these into a 3-step launch plan…"
+              }
+              style={{
+                width: "100%",
+                minHeight: 72,
+                resize: "none",
+                border: `1px solid ${appleVibe.stroke.soft}`,
+                borderRadius: 10,
+                padding: "8px 10px",
+                fontSize: 12.5,
+                lineHeight: 1.5,
+                fontFamily: appleVibe.font.stack,
+                color: appleVibe.text.primary,
+                background: "rgba(15,23,42,0.02)",
+                outline: "none",
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  if (isImage) void runImage();
+                  else void runCustom();
+                }
+              }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 8 }}>
+              <button
+                type="button"
+                onClick={() => setComposerFor(null)}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: 999,
+                  border: "none",
+                  cursor: "pointer",
+                  background: "rgba(15,23,42,0.05)",
+                  color: appleVibe.text.tertiary,
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => (isImage ? void runImage() : void runCustom())}
+                disabled={!canRun}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 999,
+                  border: "none",
+                  cursor: canRun ? "pointer" : "default",
+                  background: canRun ? grad : appleVibe.surface.chip,
+                  color: canRun ? "white" : appleVibe.text.tertiary,
+                  fontSize: 12,
+                  fontWeight: 650,
+                }}
+              >
+                {isImage ? "Generate" : "Run"}
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Toast */}
       {toast && (

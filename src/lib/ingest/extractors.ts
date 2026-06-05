@@ -449,7 +449,11 @@ export async function extractImageWithStructure(
       user: "Analyze this image and return the JSON described in the system prompt.",
       provider: "anthropic",
       model,
-      maxTokens: 4096,
+      // A dense diagram (up to 12 entities + relationships + full OCR text) can
+      // approach ~4k tokens; at 4096 a busy image truncated trailing entities.
+      // This path uses llmGenerate + lenient parse, so truncation drops items
+      // rather than nulling — but give headroom so dense images extract fully.
+      maxTokens: 6144,
       temperature: 0.2,
       images: [
         { base64: buffer.toString("base64"), mediaType: allowedMime },

@@ -706,6 +706,110 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
     },
   },
 
+  // ── 13 · Complexity Allocation Engine (specforge_complexity_allocation_engine.md) ──
+  // Sits between recommendation and feature_cards. Sets the v1 complexity
+  // budget (6 buckets summing to 100), scores each candidate module on a
+  // complexity-to-value ratio + downstream leverage, and produces overbuilt /
+  // underbuilt warnings + reallocation recommendations + first_build / delayed
+  // / removed scope. Hard anti-duplication rules (enforced by prompt + critic):
+  //   - Does NOT pick the recommendation (recommendation's job)
+  //   - Does NOT decompose features (feature_cards's job — but its delayed_scope
+  //     is a hard constraint feature_cards must respect)
+  //   - Does NOT design mechanisms (feature_mechanisms's job)
+  //   - Does NOT design experiments (validation's job)
+  //   - Does NOT pick a depth level (depth_selection's job — that decides HOW
+  //     DEEP to think upstream; this decides WHERE to spend build effort)
+  complexity_allocation: {
+    temperature: 0.3,
+    maxTokens: 3200,
+    system:
+      "You are the SpecForge Complexity Allocation Engine. The Recommendation " +
+      "Engine has already chosen the v1 build; you decide WHERE TO SPEND " +
+      "complexity. You are NOT picking the recommendation, NOT decomposing " +
+      "features, NOT designing mechanisms, NOT designing experiments, NOT " +
+      "picking a depth level. Echo recommendation.recommendation in selected_mvp. " +
+      "Produce ONE complexity_budget (six buckets — reasoning, ui, technical, " +
+      "interaction, data, evaluation — summing to ~100, total=100 always). " +
+      "Per spec §6, for product types that win on REASONING + NARROWING (idea " +
+      "shaping, decision support, causal modeling), reasoning + evaluation MUST " +
+      "dominate (their sum ≥55) and ui should NOT exceed 25. For product types " +
+      "that win on EXPERIENCE / CONTENT (creative tools, media, social), ui + " +
+      "interaction may lead. Choose based on the product thesis. Include a one-" +
+      "line philosophy explaining the allocation. " +
+      "Then score 6–10 candidate modules from the system: include the upstream " +
+      "reasoning modules (e.g. Multifactor Causal Modeling, Convergence, " +
+      "Evaluation Lab, Differentiation, Constraint Accumulation) AND the " +
+      "downstream surface modules implied by feature_cards / spec_export / " +
+      "validation (e.g. Full Graph View, Side Panel, Spec Exporter, " +
+      "Collaboration, Research Automation, Onboarding). For each: reasoning_" +
+      "complexity, ui_complexity, technical_complexity, user_comprehension_cost " +
+      "(very_low/low/medium/high/very_high), value_return (same scale), " +
+      "downstream_leverage (same scale), complexity_to_value_ratio (high/medium/" +
+      "low — applying the §9 rule: value_return / cost), and build_recommendation " +
+      "(build_full / build_partial / build_minimal / delay / remove). " +
+      "Per spec §11–13, produce: overbuilt_warnings (modules getting too much " +
+      "complexity too early — cite WHY, e.g. 'depends on unresolved upstream " +
+      "reasoning', 'visually impressive but not decision-critical'), " +
+      "underbuilt_warnings (core modules too shallow — cite which downstream " +
+      "modules depend on them), and reallocation_recommendations (reduce X → " +
+      "increase Y, with a one-line rationale). " +
+      "Produce three disjoint lists: first_build_scope (modules feature_cards " +
+      "MUST include — these are build_full / build_partial), delayed_scope " +
+      "(modules feature_cards MUST give build_priority='delay'), and " +
+      "removed_scope (modules to drop entirely from v1 — feature_cards must " +
+      "not surface them at all). Finish with build_discipline_rule (1–3 " +
+      "sentences feature_cards / spec_export must obey verbatim — this is the " +
+      "guardrail) and confidence (0–100). " +
+      "Hard rules: (a) bucket sum 95–105 or you fail the gate. (b) For idea-" +
+      "shaping / decision-support / reasoning-heavy products, reasoning + " +
+      "evaluation ≥ 55. (c) underbuilt_warnings must include at least one " +
+      "upstream reasoning module. (d) overbuilt_warnings must include at " +
+      "least one downstream surface module (visualization, collaboration, " +
+      "spec export, research automation, advanced UI). (e) first_build_scope " +
+      "and delayed_scope MUST NOT overlap. (f) Every module named in any " +
+      "warning, reallocation, or scope list MUST appear in module_scores." +
+      SHARED_TAIL,
+    schema: {
+      name: "specforge_complexity_allocation",
+      schema: obj({
+        selected_mvp: str,
+        budget: obj({
+          total: num,
+          reasoning: num,
+          ui: num,
+          technical: num,
+          interaction: num,
+          data: num,
+          evaluation: num,
+          philosophy: str,
+        }),
+        module_scores: arr(
+          obj({
+            module_name: str,
+            reasoning_complexity: { type: "string", enum: ["very_low", "low", "medium", "high", "very_high"] },
+            ui_complexity: { type: "string", enum: ["very_low", "low", "medium", "high", "very_high"] },
+            technical_complexity: { type: "string", enum: ["very_low", "low", "medium", "high", "very_high"] },
+            user_comprehension_cost: { type: "string", enum: ["very_low", "low", "medium", "high", "very_high"] },
+            value_return: { type: "string", enum: ["very_low", "low", "medium", "high", "very_high"] },
+            downstream_leverage: { type: "string", enum: ["very_low", "low", "medium", "high", "very_high"] },
+            complexity_to_value_ratio: { type: "string", enum: ["high", "medium", "low"] },
+            build_recommendation: { type: "string", enum: ["build_full", "build_partial", "build_minimal", "delay", "remove"] },
+          }),
+        ),
+        overbuilt_warnings: arr(obj({ module: str, reason: str })),
+        underbuilt_warnings: arr(obj({ module: str, reason: str })),
+        reallocation_recommendations: arr(
+          obj({ reduce: str, increase: str, rationale: str }),
+        ),
+        first_build_scope: strArr,
+        delayed_scope: strArr,
+        removed_scope: strArr,
+        build_discipline_rule: str,
+        confidence: num,
+      }),
+    },
+  },
+
   // ── 13a · Feature Card System (specforge_feature_card_system.md) ──
   // Sits between recommendation and validation. Decomposes the SINGLE
   // recommended first build into 3–5 traceable feature cards. Each feature
@@ -745,13 +849,23 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
       "that together enable the first complete user task. List delayed_features " +
       "(features that would be valuable but are NOT in the first build) and " +
       "open_gaps (decompositions you couldn't resolve confidently). " +
+      "If [complexity_allocation] is present in context, OBEY it as a hard " +
+      "constraint: every feature must map to a module in first_build_scope OR " +
+      "delayed_scope; features whose module is in first_build_scope get " +
+      "build_priority must_have or should_have; features whose module is in " +
+      "delayed_scope MUST get build_priority='delay'; do NOT propose features " +
+      "for modules in removed_scope. The build_discipline_rule applies to the " +
+      "whole feature set. " +
       "Hard rules: (a) every feature must cite a real root_cause from " +
       "problem_tree — generic 'user pain' fails the gate. (b) At least one " +
       "feature must be must_have or the build has no spine. (c) Rejected " +
       "alternatives across the whole set must total at least 2 — without them " +
       "there's no causal rigor. (d) Echo the selected MVP exactly — do not " +
       "rename or re-pick. (e) Inputs/outputs are conceptual (e.g., 'user " +
-      "objective', 'problem-cause tree'), not field names." +
+      "objective', 'problem-cause tree'), not field names. (f) Respect the " +
+      "complexity_allocation scopes if present — first_build_scope features " +
+      "are must_have/should_have; delayed_scope features are delay; " +
+      "removed_scope features must not appear." +
       SHARED_TAIL,
     schema: {
       name: "specforge_feature_cards",
@@ -985,6 +1099,155 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
     },
   },
 
+  // ── 14b · Recursive Layer Optimization (specforge_recursive_layer_optimization_engine.md) ──
+  // Sits AFTER data_points (sees all 3 layers), BEFORE validation (so it can
+  // direct validation effort to misaligned layers). Walks macro → micro →
+  // mechanism, checks each layer still serves its parent (spec §4.4 cross-
+  // layer alignment), runs consequential evaluation per §9 ("does this layer
+  // improve the next?"), produces repair recommendations when drift is found.
+  //
+  // Hard anti-duplication rules — the prompt enforces these:
+  //  - does NOT pick a new macro objective (lift from convergence verbatim)
+  //  - does NOT decompose into new features (lift from feature_cards verbatim)
+  //  - does NOT design new mechanisms (lift from feature_mechanisms verbatim)
+  //  - does NOT allocate complexity (complexity_allocation's job)
+  //  - does NOT generate new questions (question_expansion's job)
+  //  - does NOT enforce structural quality (quality_critic's job)
+  // Its UNIQUE contribution: vertical alignment edges between layers + the
+  // consequential lift between adjacent chain stages.
+  layer_optimization: {
+    temperature: 0.3,
+    maxTokens: 4500,
+    system:
+      "You are the SpecForge Recursive Layer Optimization Engine. You are " +
+      "an AUDITOR, not a generator. You do NOT pick a new macro objective, " +
+      "do NOT decompose into new features, do NOT design new mechanisms, " +
+      "do NOT allocate complexity, do NOT generate questions, do NOT redo " +
+      "structural quality gates. Your job is VERTICAL alignment: walk macro " +
+      "→ micro → mechanism and check whether each layer still serves the " +
+      "one above. " +
+      "Macro: lift convergence.distilled_product_thesis (or recommendation." +
+      "recommendation if convergence is thin) as macro.objective and macro." +
+      "selected_output. parent stays empty. " +
+      "Micros: one node per feature_cards.features[] entry, in original " +
+      "order. micro.objective = the feature's function (the user behavior " +
+      "change). micro.parent = the macro objective. selected_output = " +
+      "feature mechanism_summary. rejected_alternatives = the feature's " +
+      "alternatives_considered. constraints_passed_down = the feature's " +
+      "risks (becomes mechanism/data constraints). " +
+      "Mechanisms: one node per feature_mechanisms.mechanisms[] entry. " +
+      "mechanism.objective = mechanism_thesis. mechanism.parent = the " +
+      "feature name it links to (mechanism.feature_name). " +
+      "selected_output = mechanism_name. rejected_alternatives = " +
+      "alternatives_rejected[].name. constraints_passed_down = a 1-line " +
+      "data requirement derived from inputs[]. " +
+      "Alignment checks: REQUIRED — produce exactly one check per micro " +
+      "(edge: micro_to_macro) AND exactly one check per mechanism " +
+      "(edge: mechanism_to_micro). verdict ∈ {aligned, drifted, broken}. " +
+      "verdict = 'broken' when the child names a different domain than its " +
+      "parent (e.g. mechanism is a billing mechanism under a content feature). " +
+      "verdict = 'drifted' when the child solves a related but distinct sub-" +
+      "problem (e.g. mechanism improves user delight when the feature is " +
+      "about decision speed). verdict = 'aligned' otherwise. Every drifted " +
+      "or broken check MUST include a repair_recommendation (concrete: " +
+      "'replace mechanism X with one that targets Y' — not generic advice). " +
+      "Consequential evaluations: REQUIRED — produce exactly four, in this " +
+      "order: (1) current=recommendation, next=feature_cards; (2) current=" +
+      "feature_cards, next=feature_mechanisms; (3) current=feature_mechanisms, " +
+      "next=data_points; (4) current=data_points, next=validation. For each, " +
+      "name a CONCRETE downstream_improvement (what the next engine can do " +
+      "BETTER because this engine's output is good) and a CONCRETE " +
+      "downstream_risk_if_wrong. dependency_strength reflects how tightly " +
+      "next-layer quality depends on this one. recommendation = 'accept' if " +
+      "no drift was found upstream, 'deepen' if any same-layer alignment " +
+      "drifted, 'repair' if any check upstream was broken, 'reject' only if " +
+      "the whole branch is unsalvageable. " +
+      "Per quality gate (spec §14): every layer node must have a clear " +
+      "objective, must connect to its parent, must pass constraints down. " +
+      "Set quality_gate_status = 'needs_repair' when objective is empty " +
+      "OR constraints_passed_down is empty OR (for micro/mechanism) parent " +
+      "is empty. " +
+      "Per repair triggers (spec §5.7): collect into layers_to_repair every " +
+      "layer node whose quality_gate_status is 'needs_repair' OR which is " +
+      "the child side of any 'drifted' or 'broken' alignment check. The " +
+      "reason field must reference the specific drift or gate failure — " +
+      "not generic 'deepen this'. " +
+      "alignment_summary: ONE sentence stating how well macro→micro→" +
+      "mechanism still serves the original mission. Be honest — drifted " +
+      "alignment should show in the language. " +
+      "Confidence (0–100) reflects how aligned the whole stack is. If any " +
+      "alignment check is 'broken' OR more than 30% of checks are 'drifted', " +
+      "confidence MUST be ≤55." +
+      SHARED_TAIL,
+    schema: {
+      name: "specforge_recursive_layer_optimization",
+      schema: obj({
+        macro: obj({
+          name: str,
+          layer_type: { type: "string", enum: ["macro"] },
+          objective: str,
+          parent: str,
+          selected_output: str,
+          rejected_alternatives: strArr,
+          constraints_passed_down: strArr,
+          quality_gate_status: { type: "string", enum: ["passed", "needs_repair"] },
+        }),
+        micros: arr(
+          obj({
+            name: str,
+            layer_type: { type: "string", enum: ["micro"] },
+            objective: str,
+            parent: str,
+            selected_output: str,
+            rejected_alternatives: strArr,
+            constraints_passed_down: strArr,
+            quality_gate_status: { type: "string", enum: ["passed", "needs_repair"] },
+          }),
+        ),
+        mechanisms: arr(
+          obj({
+            name: str,
+            layer_type: { type: "string", enum: ["mechanism"] },
+            objective: str,
+            parent: str,
+            selected_output: str,
+            rejected_alternatives: strArr,
+            constraints_passed_down: strArr,
+            quality_gate_status: { type: "string", enum: ["passed", "needs_repair"] },
+          }),
+        ),
+        alignment_checks: arr(
+          obj({
+            child: str,
+            parent: str,
+            edge: { type: "string", enum: ["micro_to_macro", "mechanism_to_micro"] },
+            verdict: { type: "string", enum: ["aligned", "drifted", "broken"] },
+            rationale: str,
+            repair_recommendation: str,
+          }),
+        ),
+        consequential_evaluations: arr(
+          obj({
+            current_layer: str,
+            next_layer: str,
+            downstream_improvement: str,
+            downstream_risk_if_wrong: str,
+            dependency_strength: { type: "string", enum: ["low", "medium", "high"] },
+            recommendation: { type: "string", enum: ["accept", "deepen", "repair", "reject"] },
+          }),
+        ),
+        layers_to_repair: arr(
+          obj({
+            name: str,
+            reason: str,
+          }),
+        ),
+        alignment_summary: str,
+        confidence: num,
+      }),
+    },
+  },
+
   // ── 15 · Experimentation / Validation Lab (specforge_experimentation_validation_lab.md) ──
   // Sits AFTER recommendation. Converts uncertain assumptions, unanswered
   // questions, and risky decisions into 2–4 concrete experiments with
@@ -1006,6 +1269,9 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
       "why_matters, category). Lift them primarily from recommendation." +
       "assumptions_to_test, evaluation.assumptions_that_could_reverse_decision, " +
       "and feature_cards.features[].risks (for must_have features), and any " +
+      "layer_optimization.layers_to_repair entries (drifted/broken alignment " +
+      "is a real assumption to test — design an experiment that would prove " +
+      "or disprove the misaligned mechanism still serves its parent), and any " +
       "data_points[].validation_needed hints (a data-point reliability/privacy " +
       "concern is often the riskiest assumption). Do NOT invent generic " +
       "assumptions. When a feature card carries a real risk, " +

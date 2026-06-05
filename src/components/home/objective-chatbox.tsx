@@ -559,10 +559,29 @@ export function ObjectiveChatbox({
             aria-label="Create objective"
             whileHover={canSubmit ? { scale: 1.05 } : undefined}
             whileTap={canSubmit ? { scale: 0.94 } : undefined}
+            // Once there's submittable text, the Create button comes alive:
+            // a soft, breathing blue glow signals it's now actionable. Fades
+            // back to the inert gray pill when the box is empty.
+            animate={
+              canSubmit
+                ? {
+                    boxShadow: [
+                      "0 2px 8px rgba(59,130,246,0.40), 0 0 0 0 rgba(59,130,246,0)",
+                      "0 4px 18px rgba(59,130,246,0.70), 0 0 16px 2px rgba(59,130,246,0.45)",
+                      "0 2px 8px rgba(59,130,246,0.40), 0 0 0 0 rgba(59,130,246,0)",
+                    ],
+                  }
+                : { boxShadow: "0 0 0 0 rgba(59,130,246,0)" }
+            }
+            transition={{
+              boxShadow: canSubmit
+                ? { duration: 2, repeat: Infinity, ease: "easeInOut" }
+                : { duration: 0.25 },
+            }}
             className="flex h-9 w-9 items-center justify-center rounded-full transition-colors"
             style={{
               background: canSubmit
-                ? appleVibe.accent.primary
+                ? "linear-gradient(180deg, #60A5FA 0%, #3B82F6 100%)"
                 : "rgba(15,23,42,0.06)",
               color: canSubmit ? "white" : appleVibe.text.faint,
               cursor: canSubmit ? "pointer" : "not-allowed",

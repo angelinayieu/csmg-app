@@ -44,6 +44,7 @@ import {
   emitBatchEvents,
   completePipelineRun,
 } from "@/lib/events/structural-event-bus";
+import { enterMetering } from "@/lib/llm/usage-meter";
 import { materializeAndEmitSignatures } from "@/lib/pipeline/materialize-signatures";
 // W6.3 — canonical concept linking for newly-decomposed entities.
 import { linkEntityToCanonicalConcept } from "@/lib/kg/canonical-concept-matcher";
@@ -1276,6 +1277,16 @@ ${enrichedPrompt}`;
         pipeline: "decompose",
         initialPrompt: text.slice(0, 2000),
       });
+    }
+    // Open the LLM usage-metering context HERE, in the handler's own async
+    // context — enterWith only persists forward from this point, never back to
+    // a callee, so it can't live inside startPipelineRun. Every llmJSON/
+    // llmGenerate call below now accumulates token + $ cost against this run
+    // (and writes a per-call llm_call_log row); completePipelineRun flushes the
+    // aggregate to pipeline_runs. Representative wiring — other pipeline routes
+    // adopt these two lines incrementally (Phase 2).
+    if (runId) {
+      enterMetering({ db, userId: user.id, spaceId, callSite: "decompose", runId });
     }
     await emitStructuralEvent(db, runId, {
       type: "stage_boundary",

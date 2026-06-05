@@ -21,6 +21,7 @@ import type {
   VoiceNoteAnalysisDetail,
   JournalCardDetail,
 } from "../board-bus";
+import { reserveSpace } from "./placement";
 
 // Re-export the utils so whiteboard-base can register them from one import.
 export { VoiceNoteCardShapeUtil, JournalCardShapeUtil };
@@ -75,8 +76,16 @@ export function deployVoiceNoteOnBoard(
     .getCurrentPageShapes()
     .filter((s) => s.type === "voice-note-card").length;
   const anchor = anchorPoint(editor);
-  const x = anchor.x - NOTE_W - 40;
-  const y = anchor.y + 64 + noteCount * (NOTE_H + NOTE_GAP);
+  const slotX = anchor.x - NOTE_W - 40;
+  const slotY = anchor.y + 64 + noteCount * (NOTE_H + NOTE_GAP);
+  // Passive drop → yield only: settle in clear space, never shove existing work.
+  const spot = reserveSpace(
+    editor,
+    { w: NOTE_W, h: NOTE_H },
+    { anchorMidX: slotX + NOTE_W / 2, preferredTop: slotY, gap: NOTE_GAP, allowPush: false },
+  );
+  const x = spot.x;
+  const y = spot.y;
 
   const id = createShapeId();
   editor.createShape<VoiceNoteCardShape>({
@@ -154,10 +163,17 @@ export function deployJournalOnBoard(
     return;
   }
 
-  // Place to the right of the objective/notes column.
+  // Place to the right of the objective/notes column — yield into clear space.
   const anchor = anchorPoint(editor);
-  const x = anchor.x + 60;
-  const y = anchor.y + 64;
+  const JOURNAL_W = 380;
+  const JOURNAL_H = 320;
+  const spot = reserveSpace(
+    editor,
+    { w: JOURNAL_W, h: JOURNAL_H },
+    { anchorMidX: anchor.x + 60 + JOURNAL_W / 2, preferredTop: anchor.y + 64, gap: 24, allowPush: false },
+  );
+  const x = spot.x;
+  const y = spot.y;
   const id = createShapeId();
   editor.createShape<JournalCardShape>({
     id,

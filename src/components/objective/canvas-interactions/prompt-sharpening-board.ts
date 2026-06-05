@@ -5,6 +5,7 @@
 // the createShape + createBindings arrow recipe from synthesis-map.ts.
 
 import { createShapeId, type Editor, type TLShapeId } from "tldraw";
+import { reserveSpace } from "./placement";
 import {
   SHARPEN_COLOR,
   type PromptSharpeningCardShape,
@@ -91,8 +92,16 @@ export function deployPromptSharpeningOnBoard(
   const srcBounds = objId ? editor.getShapePageBounds(objId) : null;
   const vp = editor.getViewportPageBounds();
   const cx = srcBounds ? srcBounds.midX : vp.center.x;
-  const y = srcBounds ? srcBounds.maxY + 56 : vp.center.y + 40;
-  const x = cx - CARD_W / 2;
+  const preferredTop = srcBounds ? srcBounds.maxY + 56 : vp.center.y + 40;
+  // Passive drop → yield only: settle in clear space below the objective
+  // without pushing any existing work aside.
+  const spot = reserveSpace(
+    editor,
+    { w: CARD_W, h: CARD_H },
+    { anchorMidX: cx, preferredTop, gap: 40, allowPush: false },
+  );
+  const x = spot.x;
+  const y = spot.y;
 
   const cardId = createShapeId();
   editor.createShape<PromptSharpeningCardShape>({

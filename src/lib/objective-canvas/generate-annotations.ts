@@ -154,7 +154,13 @@ export async function generateObjectiveAnnotations(
     user: buildUserPrompt(opts),
     responseSchema: RESPONSE_SCHEMA,
     temperature: 0.4,
-    maxTokens: 4200,
+    // RESPONSE_SCHEMA emits 7–9 annotations, each with ~18 required fields
+    // (dimensions[3-5], inference_chain[3-5], analogies[3-5] w/ extensions,
+    // fragility, tensions). Worst case is ~6–9k tokens, so 4200 truncated
+    // every rich run (gpt-4o's repair path salvaged a SHORT partial set rather
+    // than nulling — hence "missing annotations" instead of a hard error).
+    // 8192 covers the full set; still well under gpt-4o's 16384 output ceiling.
+    maxTokens: 8192,
   });
 
   const rawItems = Array.isArray(raw?.annotations) ? raw.annotations : [];

@@ -5,6 +5,7 @@ import { ValidationError } from "@/lib/validation/llm-validators";
 import { RecoveryStrategy } from "@/lib/validation/error-recovery";
 import { repairTruncatedJson } from "@/lib/llm/repair-truncated-json";
 import { getAnthropicClient } from "@/lib/anthropic";
+import { recordLlmUsage } from "@/lib/llm/usage-meter";
 
 const MODEL = "gpt-4o";
 
@@ -259,6 +260,7 @@ export async function llmGenerate(opts: {
         system: opts.system,
         messages: [{ role: "user", content: userContent }],
       });
+      recordLlmUsage(anthropicModel, "anthropic", resp.usage);
       // Claude returns a content array of blocks; concatenate text blocks.
       // Avoid the strict TextBlock predicate (SDK requires a `citations`
       // field there) — narrow via filter + cast. Behavior identical.
@@ -304,6 +306,11 @@ export async function llmGenerate(opts: {
         { role: "user", content: userMessage as any },
       ],
     });
+    recordLlmUsage(
+      opts.model ?? MODEL_DEFAULTS.openai.reasoning,
+      "openai",
+      response.usage,
+    );
     return response.choices[0]?.message?.content ?? "";
   });
 }
@@ -446,6 +453,20 @@ async function anthropicStructured(opts: {
       timeout: 60_000,
       maxRetries: 1,
     });
+    recordLlmUsage(model, "anthropic", resp.usage);
+    // Truncation guard: a forced tool-call that hits the token cap returns a
+    // PARTIAL arguments object — the schema's trailing fields silently drop off
+    // (this is exactly how the prompt-sharpening heatmap + the depth pass's
+    // salience map vanished). The SDK does NOT throw, so without this warning
+    // the truncation is invisible and reads as a "broken" or "out of credits"
+    // card. Surface it loudly so a too-small maxTokens is diagnosable.
+    if (resp.stop_reason === "max_tokens") {
+      console.warn(
+        `[LLM] anthropic structured output hit max_tokens ` +
+          `(model=${model}, max_tokens=${opts.maxTokens ?? 8192}, tool=${toolName}) ` +
+          `— result is TRUNCATED; trailing schema fields are missing. Raise maxTokens for this call.`,
+      );
+    }
     const toolUse = resp.content.find(
       (b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use",
     );
@@ -588,6 +609,7 @@ export async function llmJSON<T = unknown>(opts: {
     }
 
     const response = await openai.chat.completions.create(params as ChatCompletionCreateParamsNonStreaming);
+    recordLlmUsage(model, "openai", response.usage);
     const raw = response.choices[0]?.message?.content ?? "";
 
     // Parse JSON — with truncation-repair as a last resort before

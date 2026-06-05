@@ -60,7 +60,7 @@ import {
   type BuildUiPlansDetail,
   type UiPlanCardShape,
 } from "./shapes/ui-plan-card-shape";
-import { lowestClearTop } from "./canvas-interactions/placement";
+import { reserveSpace } from "./canvas-interactions/placement";
 import { TechSpecPanel } from "./tech-spec-panel";
 import { CausalModelPanel } from "./causal-model-panel";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
@@ -1564,12 +1564,13 @@ export function WhiteboardBase({
       {editor && showUi && (
         <div
           style={{
-            // Top-right corner — the consolidated nav pill now lives on the
-            // left, so Saved gets the right edge to itself. Tucks behind the
-            // Powerups panel when it's open (it's a passive, pointer-events:none status).
+            // Unified right toolbar baseline (top:16) — fifth stop in the row:
+            // palette · Share · Powerups · Library · Saved · collaborators.
+            // Passive (pointer-events:none); tucks behind a launcher panel
+            // when one is open.
             position: "absolute",
-            top: 18,
-            right: 64,
+            top: 16,
+            right: 390,
             zIndex: 69,
             display: "inline-flex",
             alignItems: "center",
@@ -1619,9 +1620,11 @@ export function WhiteboardBase({
       {editor && showUi && collab.collaborators.length > 0 && (
         <div
           style={{
+            // Unified right toolbar baseline (top:16) — sixth/leftmost stop;
+            // only present while others are on the board.
             position: "absolute",
-            top: 18,
-            right: 224,
+            top: 16,
+            right: 478,
             zIndex: 70,
             display: "inline-flex",
             alignItems: "center",
@@ -1817,8 +1820,20 @@ function createArtifactCard(editor: Editor, d: ArtifactCardDetail) {
   const w = 240;
   const h = 150;
   const cascade = (artifactCount % 6) * 26;
-  const x = center.x - w / 2 + cascade;
-  const y = center.y - h / 2 + cascade;
+  // Passive drop → yield only: land in clear space near the viewport center
+  // without shoving existing work (allowPush: false).
+  const spot = reserveSpace(
+    editor,
+    { w, h },
+    {
+      anchorMidX: center.x + cascade,
+      preferredTop: center.y - h / 2 + cascade,
+      gap: 28,
+      allowPush: false,
+    },
+  );
+  const x = spot.x;
+  const y = spot.y;
   const id = createShapeId();
   editor.createShape<ArtifactCardShape>({
     id,
@@ -2017,6 +2032,33 @@ function PrototypeEventBridge({
     const PROTO_W = 420;
     const PROTO_H = 540;
 
+    // Persist a finished prototype as an `artifacts` row (so it shows in the
+    // Artifacts Library + survives as a continuously-updated final product).
+    // Idempotent on (engine_key, board_shape_id); soft-fail.
+    function persistPrototype(
+      shapeId: TLShapeId,
+      title: string,
+      html: string,
+      specJson: string,
+    ) {
+      void fetch(`/api/objective/${spaceId}/artifacts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "upsert",
+          engineKey: "build_prototype",
+          artifactType: "prototype",
+          title: title || "Prototype",
+          status: "ready",
+          content: { html, specJson },
+          boardShapeId: shapeId,
+          lastUpdatedBy: "agent:build_prototype",
+          appendVersion: true,
+          changeType: "generated",
+        }),
+      }).catch(() => {});
+    }
+
     async function onBuild(e: Event) {
       const d = (e as CustomEvent<OpenTechSpecDetail>).detail;
       if (!d?.specJson) return;
@@ -2098,6 +2140,7 @@ function PrototypeEventBridge({
           type: "prototype-card",
           props: { html, status: "ready", version: 1 },
         });
+        persistPrototype(id, d.title || "Prototype", html, d.specJson);
       } catch (err) {
         console.warn("[board] prototype build failed:", err);
         try {
@@ -2149,6 +2192,12 @@ function PrototypeEventBridge({
           type: "prototype-card",
           props: { html, status: "ready", version: prevVersion + 1 },
         });
+        persistPrototype(
+          shape.id,
+          shape.props.title || "Prototype",
+          html,
+          shape.props.specJson,
+        );
       } catch (err) {
         console.warn("[board] prototype refine failed:", err);
         try {
@@ -2202,16 +2251,19 @@ function UiPlanEventBridge({
         : undefined;
       const vp = editor.getViewportPageBounds();
       const totalW = count * CARD_W + (count - 1) * GAP_X;
-      const left = anchor
-        ? anchor.midX - totalW / 2
-        : vp.center.x - totalW / 2;
+      const anchorMidX = anchor ? anchor.midX : vp.center.x;
       const preferredTop = anchor ? anchor.maxY + GAP_BELOW : vp.center.y - CARD_H / 2;
-      const top = lowestClearTop(
+      // Active generator → push-then-yield: make room for the row of plan cards
+      // (else relocate it), ignoring the source it grows from.
+      const ignore = new Set<TLShapeId>();
+      if (d.sourceShapeId) ignore.add(d.sourceShapeId as TLShapeId);
+      const spot = reserveSpace(
         editor,
-        { left, right: left + totalW },
-        preferredTop,
-        GAP_BELOW,
+        { w: totalW, h: CARD_H },
+        { anchorMidX, preferredTop, gap: GAP_BELOW, ignore },
       );
+      const left = spot.x;
+      const top = spot.y;
 
       // Create N placeholder cards + arrows from the source.
       const cardIds: TLShapeId[] = [];

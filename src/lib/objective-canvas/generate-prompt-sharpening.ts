@@ -18,6 +18,7 @@ import {
   type PromptSharpeningArtifact,
 } from "./prompt-sharpening-prompt";
 import { patchObjectiveCanvasState } from "./clarifying-state";
+import { withMetering } from "../llm/usage-meter";
 
 // Speed is the priority for the intake card — it's the first thing the user
 // waits on, and Opus made it take 30–60s. Sonnet is ~3–4x faster for this
@@ -64,18 +65,31 @@ export async function generatePromptSharpeningForSpace(
     // ── Agent: generate the sharpening artifact ──
     // Fast Sonnet + a trimmed visible-only schema → snappy intake. The
     // validator normalizes + guarantees all 10 heatmap zones are present.
-    let artifact = await llmJSON<PromptSharpeningArtifact>({
-      system: SHARPENING_AGENT_SYSTEM,
-      user: SHARPENING_AGENT_USER(raw),
-      provider: "anthropic",
-      model: PROMPT_SHARPENING_MODEL,
-      // Trimmed schema → small output (~600 tokens). 2048 is a safe cap with
-      // headroom so a slightly verbose model can't truncate → invalid JSON →
-      // a failed parse → a card stuck "loading".
-      maxTokens: 2048,
+    // Wrap in a metering context so this call's token + $ cost lands in
+    // llm_call_log (no runId → no pipeline_runs aggregate; sharpening isn't a
+    // pipeline run). This is the intake-path proof that the meter populates.
+    let artifact = await withMetering(
+      { db, userId, spaceId, callSite: "prompt_sharpening", runId: null },
+      () =>
+        llmJSON<PromptSharpeningArtifact>({
+          system: SHARPENING_AGENT_SYSTEM,
+          user: SHARPENING_AGENT_USER(raw),
+          provider: "anthropic",
+          model: PROMPT_SHARPENING_MODEL,
+      // Token budget: the earlier "~600 tokens" estimate was wrong. The schema
+      // forces a full 10-zone ambiguity_heatmap (3 fields each) AND the model
+      // reliably over-produces ranked_ambiguities (~10, not the prompt's 3–5),
+      // so the REAL output is ~2.1k tokens. At 2048 it hit `max_tokens` EVERY
+      // time → the heatmap (generated last) was truncated off; when the cut
+      // landed mid-value the Anthropic SDK couldn't parse the partial tool-call
+      // and threw → generation soft-failed to null → the board card showed
+      // "Couldn't sharpen the prompt". 4096 clears the real output (~2.1k) with
+      // comfortable headroom (verified: stop_reason=tool_use, all 10 zones).
+      maxTokens: 4096,
       responseSchema: SHARPENING_RESPONSE_SCHEMA,
       validator: (d) => normalizeSharpening(d, raw),
-    });
+        }),
+    );
 
     // Critic pass intentionally SKIPPED in the minimal/intake flow so the
     // sharpening card fills as fast as possible (the optimistic placeholder

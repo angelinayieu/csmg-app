@@ -12,6 +12,7 @@ import type {
   PipelineRunStatus,
   StructuralEvent,
 } from "@/types/pipeline-events";
+import { flushMeteredRun } from "@/lib/llm/usage-meter";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyDb = SupabaseClient<any>;
@@ -250,6 +251,9 @@ export async function completePipelineRun(
   errorMessage?: string,
 ): Promise<void> {
   if (!runId) return;
+  // Flush the accumulated token/$ aggregate for this run to pipeline_runs
+  // BEFORE we mark it complete. Soft-fails internally; never blocks completion.
+  await flushMeteredRun();
   try {
     // Look up the run's space_id BEFORE marking complete so we can
     // refresh the space's dominant_entity_category in the same tick.

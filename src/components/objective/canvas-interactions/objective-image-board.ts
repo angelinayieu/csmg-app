@@ -14,6 +14,7 @@ import {
 import type { ObjectiveImageCardShape } from "../shapes/objective-image-card-shape";
 import type { RoomCardShape } from "../shapes/room-card-shape";
 import type { ImageCardDetail } from "../board-bus";
+import { reserveSpace } from "./placement";
 
 const CARD_W = 240;
 const CARD_H = 172;
@@ -88,12 +89,20 @@ export function deployImageCardOnBoard(
   const srcBounds = objId ? editor.getShapePageBounds(objId) : null;
   const vp = editor.getViewportPageBounds();
 
-  // Fan out to the right of the sharpening card, wrapping every 4.
+  // Fan out to the right of the sharpening card, wrapping every 4 — then settle
+  // the slot into clear space (yield only, never shove existing work).
   const n = imageCards.length;
   const baseX = srcBounds ? srcBounds.maxX + 72 : vp.center.x;
   const baseY = srcBounds ? srcBounds.maxY + 56 : vp.center.y + 40;
-  const x = baseX + (n % 4) * (CARD_W + 18);
-  const y = baseY + Math.floor(n / 4) * (CARD_H + 40);
+  const slotX = baseX + (n % 4) * (CARD_W + 18);
+  const slotY = baseY + Math.floor(n / 4) * (CARD_H + 40);
+  const spot = reserveSpace(
+    editor,
+    { w: CARD_W, h: CARD_H },
+    { anchorMidX: slotX + CARD_W / 2, preferredTop: slotY, gap: 24, allowPush: false },
+  );
+  const x = spot.x;
+  const y = spot.y;
 
   const cardId = createShapeId();
   editor.createShape<ObjectiveImageCardShape>({

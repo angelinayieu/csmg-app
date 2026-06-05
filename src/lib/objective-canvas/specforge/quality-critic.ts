@@ -21,6 +21,10 @@ import type {
   MvpVariationsResult,
   EvaluationResult,
   RecommendationResult,
+  ComplexityAllocationResult,
+  ComplexityModuleScore,
+  ComplexityWarning,
+  ComplexityReallocation,
   FeatureCardsResult,
   FeatureCard,
   FeatureMechanismsResult,
@@ -414,6 +418,116 @@ export function evaluateSpecForgeQuality(
         "name at least two critical constraints the recommended build attacks or satisfies",
       );
       return finalize(engine, issues, repaired, arr(r.assumptions_to_test).map(clean).filter(Boolean).slice(0, 3));
+    }
+
+    case "complexity_allocation": {
+      const r = result as ComplexityAllocationResult;
+      const b = r.budget;
+      const scores = arr<ComplexityModuleScore>(r.module_scores);
+      const over = arr<ComplexityWarning>(r.overbuilt_warnings);
+      const under = arr<ComplexityWarning>(r.underbuilt_warnings);
+      const realloc = arr<ComplexityReallocation>(r.reallocation_recommendations);
+      const firstBuild = arr<string>(r.first_build_scope);
+      const delayed = arr<string>(r.delayed_scope);
+      const removed = arr<string>(r.removed_scope);
+
+      // Critical — without these the engine fails its core spec.
+      add(issues, !b, "critical", "downstream usefulness", "missing complexity_budget", "produce the six-bucket budget summing to ~100");
+      add(issues, !scores.length, "critical", "downstream usefulness", "no module_scores produced", "score 6–10 candidate modules so feature_cards can route its decomposition");
+      add(issues, !firstBuild.length, "critical", "downstream usefulness", "empty first_build_scope", "name the modules feature_cards MUST decompose into v1");
+      add(issues, !clean(r.build_discipline_rule), "critical", "downstream usefulness", "missing build_discipline_rule", "give feature_cards / spec_export a 1–3 sentence verbatim rule to obey");
+
+      // Budget arithmetic gate (spec §6 — must sum to ~100, total=100).
+      if (b) {
+        const sum =
+          (Number(b.reasoning) || 0) +
+          (Number(b.ui) || 0) +
+          (Number(b.technical) || 0) +
+          (Number(b.interaction) || 0) +
+          (Number(b.data) || 0) +
+          (Number(b.evaluation) || 0);
+        add(issues, sum < 95 || sum > 105, "high", "evidence honesty", `bucket sum is ${Math.round(sum)} (target 100)`, "rebalance bucket budgets so they sum to 95–105");
+        add(issues, Number(b.total) !== 100, "medium", "evidence honesty", "total ≠ 100", "set total to 100");
+        add(issues, !clean(b.philosophy), "medium", "evidence honesty", "missing budget philosophy", "explain in one line why this allocation creates leverage for THIS product");
+      }
+
+      // Disjoint-scope rule (spec §13 — first_build_scope and delayed_scope can't overlap).
+      const fbSet = new Set(firstBuild.map((s) => clean(s).toLowerCase()).filter(Boolean));
+      const overlap = delayed.filter((d) => fbSet.has(clean(d).toLowerCase()));
+      add(issues, overlap.length > 0, "high", "constraint satisfaction", `${overlap.length} module(s) in both first_build_scope and delayed_scope`, "scopes must be disjoint — pick one bucket per module");
+      const removedInFb = removed.filter((d) => fbSet.has(clean(d).toLowerCase()));
+      add(issues, removedInFb.length > 0, "high", "constraint satisfaction", "removed module appears in first_build_scope", "removed modules must not be in the first build");
+
+      // Reasoning-heavy product gate (spec §6 — reasoning + evaluation ≥ 55 for narrowing-shaped MVPs).
+      if (b) {
+        const reasoningPlusEval = (Number(b.reasoning) || 0) + (Number(b.evaluation) || 0);
+        const looksReasoningHeavy =
+          /caus|reason|narrow|decision|model|spec|analy|plan|map|graph/i.test(
+            clean(r.selected_mvp) + " " + clean(b.philosophy),
+          );
+        add(
+          issues,
+          looksReasoningHeavy && reasoningPlusEval < 55,
+          "high",
+          "constraint satisfaction",
+          `reasoning+evaluation is ${Math.round(reasoningPlusEval)} for a reasoning-shaped MVP`,
+          "raise reasoning + evaluation to ≥55 for narrowing/decision-support products (spec §6)",
+        );
+        add(
+          issues,
+          looksReasoningHeavy && (Number(b.ui) || 0) > 25,
+          "medium",
+          "constraint satisfaction",
+          `ui budget is ${Math.round(Number(b.ui) || 0)} for a reasoning-shaped MVP`,
+          "keep ui ≤25 until value proves out (spec §6)",
+        );
+      }
+
+      // Warning-side discipline (spec §11–12 — both lists must be populated thoughtfully).
+      add(issues, !over.length, "high", "evidence honesty", "no overbuilt warnings", "early MVPs always overbuild SOMETHING — name the downstream surface module being overbuilt");
+      add(issues, !under.length, "high", "evidence honesty", "no underbuilt warnings", "name at least one upstream reasoning module that needs more depth");
+
+      // Provenance: every name in any list MUST appear in module_scores.
+      const scored = new Set(scores.map((s) => clean(s?.module_name).toLowerCase()).filter(Boolean));
+      const nameOrphans: string[] = [];
+      for (const n of [
+        ...over.map((w) => clean(w?.module)),
+        ...under.map((w) => clean(w?.module)),
+        ...realloc.flatMap((rr) => [clean(rr?.reduce), clean(rr?.increase)]),
+        ...firstBuild.map(clean),
+        ...delayed.map(clean),
+        ...removed.map(clean),
+      ]) {
+        if (n && !scored.has(n.toLowerCase())) nameOrphans.push(n);
+      }
+      add(
+        issues,
+        nameOrphans.length > 0,
+        "high",
+        "evidence honesty",
+        `${nameOrphans.length} module(s) named in lists but missing from module_scores: ${nameOrphans.slice(0, 3).join(", ")}`,
+        "every named module must appear in module_scores with explicit complexity-to-value ratio",
+      );
+
+      // Spec §13 examples — at least ONE upstream reasoning module underbuilt-warned.
+      const reasoningKeywords = /caus|reason|converg|evaluation|differentiat|constraint|target.user|problem|desired.result/i;
+      const reasoningUnder = under.some((w) => reasoningKeywords.test(clean(w?.module)));
+      add(issues, under.length > 0 && !reasoningUnder, "medium", "constraint satisfaction", "no upstream reasoning module flagged as underbuilt", "spec §12: shallow upstream reasoning is the most common SpecForge failure — name one");
+
+      // Spec §11 examples — at least ONE downstream surface module overbuilt-warned.
+      const surfaceKeywords = /graph.view|spec.export|collabor|research.automation|onboarding|advanced.ui|visualiz|side.panel|whiteboard.unfurl/i;
+      const surfaceOver = over.some((w) => surfaceKeywords.test(clean(w?.module)));
+      add(issues, over.length > 0 && !surfaceOver, "medium", "constraint satisfaction", "no downstream surface module flagged as overbuilt", "spec §11: visualization / spec export / collaboration are common early overbuilds — name one");
+
+      add(issues, !Number.isFinite(Number(r.confidence)), "medium", "evidence honesty", "missing confidence", "state allocation confidence 0–100 honestly");
+
+      // Context strip — the discipline rule + first_build line is what downstream
+      // engines (feature_cards + spec_export) actually need to see.
+      const ctx = [
+        firstBuild.map(clean).filter(Boolean).slice(0, 3).join(", "),
+        clean(r.build_discipline_rule),
+      ].filter(Boolean);
+      return finalize(engine, issues, repaired, ctx);
     }
 
     case "feature_cards": {

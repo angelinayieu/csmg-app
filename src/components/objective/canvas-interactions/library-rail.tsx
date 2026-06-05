@@ -35,13 +35,20 @@ import {
   ChevronRight,
   Loader2,
   RefreshCw,
+  Sparkles,
+  NotebookPen,
+  Image as ImageIcon,
+  Megaphone,
+  Wand2,
   Library as LibraryIcon,
+  type LucideIcon,
 } from "lucide-react";
 import type { GlossaryTerm } from "@/lib/objective-canvas/generate-glossary";
 import { OPEN_CARD_DETAIL_EVENT } from "@/components/objective/canvas-interactions/object-detail-drawer";
+import { openNotebook } from "@/components/objective/board-bus";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 
-type View = "glossary" | "objects";
+type View = "glossary" | "objects" | "artifacts";
 
 /** A library_objects row (GET …/library/objects → { objects }). */
 interface LibObject {
@@ -362,6 +369,178 @@ function ObjectsView({
   );
 }
 
+// ── Artifacts (the "final products" — prototype, notebook, …) ──────────
+interface ArtifactLite {
+  id: string;
+  type: string;
+  engineKey: string;
+  title: string;
+  status: string;
+  staleReason: string | null;
+  updatedAt: string;
+  boardShapeId: string | null;
+}
+
+const ARTIFACT_META: Record<string, { label: string; Icon: LucideIcon; color: string }> = {
+  prototype: { label: "Prototypes", Icon: Boxes, color: "#6366F1" },
+  notebook: { label: "Notebooks", Icon: NotebookPen, color: "#0F766E" },
+  document: { label: "Documents", Icon: BookOpen, color: "#475569" },
+  image: { label: "Images", Icon: ImageIcon, color: "#F59E0B" },
+  social_post: { label: "Social posts", Icon: Megaphone, color: "#0EA5E9" },
+  custom: { label: "Custom", Icon: Wand2, color: "#64748B" },
+};
+
+function relTime(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
+function ArtifactsView({
+  spaceId,
+  editor,
+}: {
+  spaceId: string;
+  editor: Editor;
+}) {
+  const [rows, setRows] = useState<ArtifactLite[] | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/objective/${spaceId}/artifacts`);
+      const j = res.ok ? await res.json() : { artifacts: [] };
+      const list = (Array.isArray(j.artifacts) ? j.artifacts : []).map(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (a: any): ArtifactLite => ({
+          id: String(a.id),
+          type: a.artifact_type ?? "custom",
+          engineKey: a.engine_key ?? "",
+          title: typeof a.title === "string" && a.title.trim() ? a.title : "Untitled",
+          status: a.status ?? "ready",
+          staleReason: a.stale_reason ?? null,
+          updatedAt: a.updated_at ?? a.created_at ?? "",
+          boardShapeId: a.board_shape_id ?? null,
+        }),
+      );
+      setRows(list);
+    } catch {
+      setRows([]);
+    }
+  }, [spaceId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const shelves = useMemo(() => {
+    if (!rows) return [];
+    const groups = new Map<string, ArtifactLite[]>();
+    for (const a of rows) {
+      const key = a.type?.trim() || "custom";
+      const arr = groups.get(key);
+      if (arr) arr.push(a);
+      else groups.set(key, [a]);
+    }
+    return Array.from(groups.entries()).map(([key, items]) => ({ key, items }));
+  }, [rows]);
+
+  function openArtifact(a: ArtifactLite) {
+    if (a.type === "notebook") {
+      openNotebook({ spaceId, artifactId: a.id });
+      return;
+    }
+    // Everything else → reveal its board card if we have one.
+    if (a.boardShapeId) {
+      try {
+        const id = a.boardShapeId as TLShapeId;
+        const b = editor.getShapePageBounds(id);
+        if (b) {
+          editor.select(id);
+          editor.centerOnPoint({ x: b.midX, y: b.midY }, { animation: { duration: 300 } });
+          return;
+        }
+      } catch {
+        /* fall through */
+      }
+    }
+    setFlash(`"${a.title}" isn't on this board.`);
+    window.setTimeout(() => setFlash(null), 1600);
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
+      <div style={{ padding: "10px 12px 4px", fontSize: 11, fontWeight: 600, color: appleVibe.text.tertiary }}>
+        {rows ? `${rows.length} artifact${rows.length === 1 ? "" : "s"}` : "—"}
+        <span style={{ marginLeft: 8, color: appleVibe.text.faint, fontWeight: 500 }}>· your final products</span>
+      </div>
+      {flash && <div style={flashStyle}>{flash}</div>}
+      <div style={scrollArea}>
+        {!rows ? (
+          <div style={emptyRow}><Loader2 className="animate-spin" style={{ width: 14, height: 14 }} /> Loading artifacts…</div>
+        ) : rows.length === 0 ? (
+          <div style={{ padding: "16px 4px", fontSize: 12.5, lineHeight: 1.4, color: appleVibe.text.tertiary }}>
+            No artifacts yet — use the Artifact Dock (left edge) to build a prototype or weave a notebook.
+          </div>
+        ) : (
+          shelves.map((shelf) => {
+            const meta = ARTIFACT_META[shelf.key] ?? ARTIFACT_META.custom;
+            return (
+              <div key={shelf.key} style={{ marginBottom: 8 }}>
+                <div style={{ ...shelfLabel, padding: "6px 2px", display: "flex", alignItems: "center", gap: 6 }}>
+                  <meta.Icon style={{ width: 12, height: 12, color: meta.color }} strokeWidth={2.4} />
+                  {meta.label} <span style={shelfCount}>{shelf.items.length}</span>
+                </div>
+                {shelf.items.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => openArtifact(a)}
+                    title={`Open "${a.title}"`}
+                    style={termRow}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = appleVibe.surface.chipHover)}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = appleVibe.surface.chip)}
+                  >
+                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={termName}>{a.title}</span>
+                      {a.staleReason && (
+                        <span
+                          style={{
+                            fontSize: 9.5,
+                            fontWeight: 700,
+                            color: "#B45309",
+                            background: "rgba(245,158,11,0.14)",
+                            padding: "1px 6px",
+                            borderRadius: 999,
+                          }}
+                          title={`Needs refresh: ${a.staleReason}`}
+                        >
+                          stale
+                        </span>
+                      )}
+                      <ChevronRight style={{ width: 12, height: 12, color: appleVibe.text.faint, marginLeft: "auto" }} strokeWidth={2.4} />
+                    </span>
+                    <span style={termDef}>
+                      {a.status === "generating" ? "Generating… · " : ""}
+                      {relTime(a.updatedAt)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 function toggle(set: Dispatch<SetStateAction<Set<string>>>, key: string) {
   set((prev) => {
     const next = new Set(prev);
@@ -432,6 +611,7 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
 
   const tabs: { id: View; label: string; Icon: typeof BookOpen }[] = [
     { id: "objects", label: "Objects", Icon: Boxes },
+    { id: "artifacts", label: "Artifacts", Icon: Sparkles },
     { id: "glossary", label: "Glossary", Icon: BookOpen },
   ];
 
@@ -464,6 +644,8 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
 
         {view === "objects" ? (
           <ObjectsView objects={objects} loading={loading} onOpen={openObject} />
+        ) : view === "artifacts" ? (
+          <ArtifactsView spaceId={spaceId} editor={editor} />
         ) : (
           <GlossaryView spaceId={spaceId} editor={editor} objects={objects ?? []} onOpen={openObject} />
         )}
@@ -474,9 +656,11 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
 
 // ── styles ──
 const launcherPill: CSSProperties = {
+  // Unified right toolbar baseline (top:16) — fourth stop in the row:
+  // palette · Share · Powerups · Library · Saved · collaborators.
   position: "absolute",
-  top: 56,
-  right: 16,
+  top: 16,
+  right: 282,
   zIndex: 66,
   display: "inline-flex",
   alignItems: "center",

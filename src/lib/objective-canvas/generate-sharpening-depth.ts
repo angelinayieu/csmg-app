@@ -68,9 +68,12 @@ export async function generateSharpeningDepthForSpace(
       provider: "anthropic",
       model: DEPTH_MODEL,
       // Depth pass returns more than the fast pass (interpretation + up to ~8
-      // annotations w/ candidate readings) — give it headroom so it can't
-      // truncate into invalid JSON.
-      maxTokens: 3000,
+      // annotations w/ candidate readings) — worst case ~2.8–3.4k tokens, so a
+      // 3000 cap truncated the LAST schema field (salience_annotations) on rich
+      // runs → normalizeSalience returned [] → the function returned null and
+      // the card's one-shot driver never re-tried, so the "Optimize for"
+      // section silently never appeared. 4096 gives real headroom.
+      maxTokens: 4096,
       responseSchema: SHARPENING_DEPTH_RESPONSE_SCHEMA,
     });
 

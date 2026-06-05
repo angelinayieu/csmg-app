@@ -62,12 +62,12 @@ export const ARTIFACT_ENGINES: ArtifactEngineDef[] = [
   {
     key: "image",
     label: "Image",
-    blurb: "Generate an image from the selected ideas (coming soon).",
+    blurb: "Generate an image (gpt-image-1) from your prompt + the selected ideas.",
     artifactType: "image",
     gradient: ["#F59E0B", "#F43F5E"], // amber → rose
     needsUiPlan: false,
     needsSelection: true,
-    status: "soon",
+    status: "ready",
     defaultPinned: false,
   },
   {
@@ -84,12 +84,12 @@ export const ARTIFACT_ENGINES: ArtifactEngineDef[] = [
   {
     key: "custom",
     label: "Custom",
-    blurb: "Describe a custom operation — the engine plans + builds it (coming soon).",
+    blurb: "Describe your own operation — runs it over the selection and saves the result.",
     artifactType: "custom",
     gradient: ["#64748B", "#6366F1"], // slate → indigo
     needsUiPlan: false,
-    needsSelection: false,
-    status: "soon",
+    needsSelection: true,
+    status: "ready",
     defaultPinned: false,
   },
 ];

@@ -41,9 +41,11 @@ export function ShareBoardLauncher({ spaceId }: { spaceId: string }) {
         title="Share this board"
         aria-label="Share this board"
         style={{
+          // Right toolbar baseline — sits just inside the style palette as
+          // the ONE filled/accent action in the otherwise-glass top row.
           position: "absolute",
           top: 16,
-          right: 150,
+          right: 56,
           zIndex: 70,
           display: "inline-flex",
           alignItems: "center",

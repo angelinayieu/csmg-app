@@ -81,10 +81,15 @@ const bar: CSSProperties = {
   gap: 2,
   padding: 4,
   borderRadius: 999,
-  background: appleVibe.surface.card, // solid white pill
-  border: `1px solid ${appleVibe.stroke.soft}`,
+  // Frosted glass — matches every other floating pill (page tabs, AI,
+  // Library, Powerups) so the chrome reads as one material, not a solid
+  // white outlier in a sea of glass.
+  background: "var(--glass-float-bg)",
+  backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+  WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+  border: "1px solid var(--glass-border)",
   boxShadow:
-    "inset 0 1px 0 rgba(255,255,255,0.9), 0 10px 28px -14px rgba(11,18,40,0.30)",
+    "inset 0 1px 0 var(--glass-highlight), 0 12px 30px -16px rgba(11,18,40,0.32)",
   fontFamily: appleVibe.font.stack,
 };
 const iconBtn: CSSProperties = {

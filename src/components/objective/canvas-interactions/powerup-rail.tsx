@@ -2,15 +2,11 @@
 
 // ── PowerupRail ──
 //
-// The persistent right-edge home for the canvas AI "powerups" + a view of the
-// finished artifacts. Splits the old scanner popup: the popup keeps only the
-// converge/diverge verbs (beside the selection); EVERY other operation lives
-// here, always one click away, showing WHAT it will run on (the live selection)
-// and the artifacts produced. Modeled on LibraryLauncher (launcher pill →
-// closable right-aligned rail). Mounted once in WhiteboardBase.
-//
-// Sections: Applies-to (live selection) · Powerups (ops + Forge) · AI settings ·
-// Artifacts (board tech-spec/prototype cards + library objects included-in-spec).
+// The persistent right-edge home for the canvas AI actions + a view of finished
+// artifacts. One filterable list: "Flows" (composite multi-step actions, hero
+// Forge included) pinned above "Operations" (single-shot transforms on the
+// selection). Modeled on LibraryLauncher (launcher pill → closable right-aligned
+// rail). Mounted once in WhiteboardBase.
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { useValue, type Editor, type TLShapeId } from "tldraw";
@@ -29,8 +25,7 @@ import {
   AppWindow,
   Pencil,
   Send,
-  Minus,
-  Plus,
+  Search,
   X,
 } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
@@ -82,11 +77,33 @@ const OP_ICON: Record<string, typeof Split> = {
   data_flow: Workflow,
 };
 
-// The powerups = every wired, visible text op (converge/diverge are hidden —
-// they're the popup verbs; sub_objective/entity ops aren't executor-wired).
+// Local label/intent overrides — terser, verb-first names that read better in a
+// dense list. The registry (canvas-operations.ts) keeps the longer copy because
+// it's also used in the scanner panel + card menus where verbosity is fine.
+const OP_OVERRIDES: Record<string, { label?: string; intent?: string }> = {
+  decompose: { intent: "Break into principles & parts" },
+  variations: { intent: "Alternative angles" },
+  questions: { label: "Clarify", intent: "Questions to answer first" },
+  make_plan: { label: "Action plan", intent: "Turn this into a plan" },
+  make_technical: { label: "Technical spec", intent: "Mechanism + components" },
+  layers: { label: "Layer stack", intent: "Substrate → outcome" },
+  data_flow: { label: "Data flow", intent: "Upstream → downstream" },
+};
+
+// The operations list = every wired, visible text op (converge/diverge are
+// hidden — they're the popup verbs; sub_objective/entity ops aren't wired).
 const POWERUPS = CANVAS_OPERATIONS.filter(
   (o) => o.contract === "text" && o.wired && !o.hidden,
 );
+
+// Accent for the hero (Forge) — the one tinted color in the rail. A muted
+// indigo so it reads as "primary action" without screaming. Reserved for the
+// hero; every other surface stays neutral so the hero is the only colored row.
+const ACCENT = "rgb(79, 70, 229)"; // indigo-600
+const ACCENT_SOFT = "rgba(79, 70, 229, 0.08)";
+const ACCENT_BORDER = "rgba(79, 70, 229, 0.32)";
+const ACCENT_GLOW =
+  "0 0 0 1px rgba(79,70,229,0.18) inset, 0 14px 32px -14px rgba(79,70,229,0.45)";
 
 interface ArtifactRow {
   id: TLShapeId;
@@ -112,7 +129,7 @@ export function PowerupRail({
     return () => el.style.setProperty("--oc-style-panel-right", "12px");
   }, [open]);
 
-  // Live selection — WHAT the powerups will run on (single or multi/lasso).
+  // Live selection — WHAT the actions will run on (single or multi/lasso).
   const sel = useValue(
     "powerup-selection",
     () => {
@@ -254,8 +271,6 @@ export function PowerupRail({
     const text = newObjText.trim();
     if (!text || refining) return;
     setRefining(true);
-    // Drop the objective card immediately (like intake) + collapse the
-    // composer; the sharpening card fills in below it as the agent runs.
     placeObjectiveCard(text);
     setShowNewObj(false);
     setNewObjText("");
@@ -279,8 +294,6 @@ export function PowerupRail({
           heatmapJson: JSON.stringify(a.ambiguity_heatmap ?? {}),
           rankedJson: JSON.stringify(ranked),
         });
-        setShowNewObj(false);
-        setNewObjText("");
       }
     } catch {
       /* soft-fail — the user can retry */
@@ -315,12 +328,7 @@ export function PowerupRail({
     setShowCustom(false);
   }
 
-  // Build prototype — the fork step. From any selected card, draft N UI-plan
-  // variants on the board (connected by real tldraw arrows). Each variant
-  // card's own "Build prototype" button then commits ONE plan to a real
-  // prototype card. If the selection IS already a tech-spec card, short-circuit
-  // to the direct prototype path (skip the planning fork — the spec carries
-  // its UI plan already).
+  // Build prototype — see in-context comment in the JSX block.
   function buildPrototype() {
     if (sel.count === 0 || running) return;
     const shapes = editor.getSelectedShapes();
@@ -351,14 +359,11 @@ export function PowerupRail({
     window.dispatchEvent(
       new CustomEvent<BuildUiPlansDetail>(BUILD_UI_PLANS_EVENT, { detail }),
     );
-    // The bridge fans out N cards immediately + fills async; clear busy after
-    // a short tick so the rail re-enables (the cards have their own state).
     window.setTimeout(() => setRunning((c) => (c === "ui-plans" ? null : c)), 600);
   }
 
   function openArtifact(id: TLShapeId) {
     const shape = editor.getShape(id);
-    // A tech-spec card → open its full spec panel; otherwise just reveal it.
     if (shape?.type === "tech-spec-card") {
       const p = shape.props as { specJson?: string; markdown?: string; title?: string };
       window.dispatchEvent(
@@ -380,17 +385,26 @@ export function PowerupRail({
     );
   }
 
+  // Search/filter across Flows + Operations. Lowercased substring match against
+  // label + intent — covers "decompose", "spec", "data", etc.
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  function matches(label: string, intent: string) {
+    if (!q) return true;
+    return label.toLowerCase().includes(q) || intent.toLowerCase().includes(q);
+  }
+
   if (!open) {
     return (
       <button
         type="button"
-        title="Powerups — run AI on your selection + see artifacts"
+        title="Actions — run AI on your selection + see artifacts"
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => setOpen(true)}
         style={launcherPill}
       >
         <Sparkle style={{ width: 14, height: 14 }} strokeWidth={2.2} />
-        Powerups
+        Actions
       </button>
     );
   }
@@ -401,6 +415,48 @@ export function PowerupRail({
     .some((s) => s.type === "tech-spec-card");
   const buildingPlans = running === "ui-plans";
 
+  // Build the rendered op list with overrides applied.
+  const opRows = POWERUPS.map((op) => {
+    const ov = OP_OVERRIDES[op.id] ?? {};
+    return {
+      id: op.id,
+      label: ov.label ?? op.label,
+      intent: ov.intent ?? op.intent,
+    };
+  }).concat([
+    { id: "custom", label: "Custom", intent: "Run your own prompt" },
+  ]);
+  const visibleOps = opRows.filter((o) => matches(o.label, o.intent));
+
+  // Flows — composite, multi-step actions. Forge is the hero; the rest are
+  // "do something the operations list can't do in a single shot."
+  type Flow = {
+    id: "forge" | "prototype" | "decompose_objective" | "new_objective";
+    label: string;
+    intent: string;
+  };
+  const flows: Flow[] = [
+    { id: "forge", label: "Forge full spec", intent: "Idea → root cause → MVPs → first build" },
+    {
+      id: "prototype",
+      label: "Build prototype",
+      intent: selHasTechSpec
+        ? "Clickable UI from this tech spec"
+        : `Fork ${settings.uiPlanCount} UI plans, pick one`,
+    },
+    {
+      id: "decompose_objective",
+      label: "Decompose objective",
+      intent: "Whole objective → Feature & Variable cards",
+    },
+    {
+      id: "new_objective",
+      label: "New objective",
+      intent: "Type a new objective, refine it",
+    },
+  ];
+  const visibleFlows = flows.filter((f) => matches(f.label, f.intent));
+
   return (
     <div onPointerDown={(e) => e.stopPropagation()} style={rail}>
       <div style={header}>
@@ -408,7 +464,7 @@ export function PowerupRail({
           style={{ width: 15, height: 15, color: appleVibe.text.secondary }}
           strokeWidth={2.2}
         />
-        <span style={titleText}>Powerups</span>
+        <span style={titleText}>Actions</span>
         <button
           type="button"
           title="Close"
@@ -419,11 +475,38 @@ export function PowerupRail({
         </button>
       </div>
 
+      {/* Search — thin filter for both Flows + Operations. */}
+      <div style={searchWrap}>
+        <Search style={searchIcon} strokeWidth={2} />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onPointerDown={(e) => e.stopPropagation()}
+          placeholder="Filter actions"
+          style={searchInput}
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery("")}
+            style={searchClear}
+            aria-label="Clear filter"
+          >
+            <X style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+          </button>
+        )}
+      </div>
+
       <div style={scroll}>
-        {/* Applies to — the live selection. */}
-        <div style={sectionLabel}>Applies to</div>
-        {hasSel ? (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 6 }}>
+        {/* Single muted helper — replaces the old "APPLIES TO" caps eyebrow +
+            its second helper sentence. One line of meta, not two. */}
+        <div style={helperLine}>
+          {hasSel
+            ? `${sel.count} item${sel.count === 1 ? "" : "s"} selected`
+            : "Select cards, then run an action."}
+        </div>
+        {hasSel && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 7 }}>
             {sel.labels.slice(0, 8).map((l, i) => (
               <span key={i} style={chip}>
                 {l}
@@ -433,324 +516,323 @@ export function PowerupRail({
               <span style={chip}>+{sel.labels.length - 8}</span>
             )}
           </div>
-        ) : (
-          <div style={{ ...muted, marginTop: 6 }}>
-            Select one or more cards to act on.
-          </div>
         )}
 
-        {/* Forge — the hero. Disabled + spinner while a run is in flight so
-            an impatient second click can't queue a duplicate forge. */}
-        <button
-          type="button"
-          disabled={!hasSel || forging}
-          aria-busy={forging}
-          title={forging ? "Forging spec…" : undefined}
-          onClick={() => {
-            if (forging || !hasSel) return;
-            setForging(true);
-            window.dispatchEvent(new CustomEvent(FORGE_REQUEST_EVENT));
-          }}
-          style={{
-            ...forgeBtn,
-            opacity: !hasSel ? 0.5 : forging ? 0.85 : 1,
-            cursor: forging ? "progress" : !hasSel ? "not-allowed" : "pointer",
-            marginTop: 12,
-          }}
-        >
-          <span style={forgeIcon}>
-            {forging ? (
-              <Loader2
-                className="animate-spin"
-                style={{ width: 15, height: 15 }}
-                strokeWidth={2.2}
-              />
-            ) : (
-              <Wand2 style={{ width: 15, height: 15 }} strokeWidth={2.2} />
-            )}
-          </span>
-          <span style={{ minWidth: 0, flex: 1, textAlign: "left" }}>
-            <span style={forgeTitle}>
-              {forging ? "Forging spec…" : "Forge full spec"}
-            </span>
-            <span style={forgeSub}>
-              {forging
-                ? "This can take ~30s — please wait"
-                : "Idea → root cause → MVPs → first build"}
-            </span>
-          </span>
-        </button>
-
-        {/* Build prototype — works on ANY selected card. Forks N UI-plan
-            variants on the board first (real arrows from source → each card);
-            the user picks one and its card commits the prototype. If the
-            selection IS a tech-spec card, skips the fork (the spec already
-            carries its UI plan). The compact stepper to the right tunes N. */}
-        <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "stretch" }}>
-          <button
-            type="button"
-            disabled={!hasSel || buildingPlans}
-            title={
-              !hasSel
-                ? "Select a card to build a prototype from"
-                : selHasTechSpec
-                  ? "Build a clickable prototype straight from this Tech Spec"
-                  : `Fork ${settings.uiPlanCount} UI-plan variants, then pick one to prototype`
-            }
-            onClick={buildPrototype}
-            style={{
-              ...secondaryBtn,
-              flex: 1,
-              minWidth: 0,
-              opacity: hasSel ? 1 : 0.5,
-            }}
-          >
-            {buildingPlans ? (
-              <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />
-            ) : (
-              <AppWindow style={{ width: 14, height: 14 }} strokeWidth={2.2} />
-            )}
-            {selHasTechSpec
-              ? "Build prototype"
-              : `Build prototype — ${settings.uiPlanCount} UI plan${settings.uiPlanCount === 1 ? "" : "s"}`}
-          </button>
-          {!selHasTechSpec && (
-            <div
-              style={stepperWrap}
-              title="How many UI-plan variants to fork"
-              onPointerDown={(e) => e.stopPropagation()}
-            >
-              <button
-                type="button"
-                aria-label="Fewer UI plans"
-                disabled={settings.uiPlanCount <= UI_PLAN_COUNT_MIN}
-                onClick={() =>
-                  setAiSetting(
-                    "uiPlanCount",
-                    Math.max(UI_PLAN_COUNT_MIN, settings.uiPlanCount - 1),
-                  )
-                }
-                style={{
-                  ...stepperBtn,
-                  opacity: settings.uiPlanCount <= UI_PLAN_COUNT_MIN ? 0.35 : 1,
-                }}
-              >
-                <Minus style={{ width: 11, height: 11 }} strokeWidth={2.4} />
-              </button>
-              <span style={stepperValue}>{settings.uiPlanCount}</span>
-              <button
-                type="button"
-                aria-label="More UI plans"
-                disabled={settings.uiPlanCount >= UI_PLAN_COUNT_MAX}
-                onClick={() =>
-                  setAiSetting(
-                    "uiPlanCount",
-                    Math.min(UI_PLAN_COUNT_MAX, settings.uiPlanCount + 1),
-                  )
-                }
-                style={{
-                  ...stepperBtn,
-                  opacity: settings.uiPlanCount >= UI_PLAN_COUNT_MAX ? 0.35 : 1,
-                }}
-              >
-                <Plus style={{ width: 11, height: 11 }} strokeWidth={2.4} />
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Objective-level decompose — break the whole objective into Feature
-            & Variable cards (no selection needed). Was the bottom-left float. */}
-        <button
-          type="button"
-          disabled={decomposing}
-          onClick={() => {
-            if (decomposing) return;
-            setDecomposing(true);
-            requestDecomposeIntoCards();
-          }}
-          style={{ ...secondaryBtn, marginTop: 8 }}
-        >
-          {decomposing ? (
-            <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />
-          ) : (
-            <Split style={{ width: 14, height: 14 }} strokeWidth={2.2} />
-          )}
-          {decomposing ? "Decomposing…" : "Decompose objective → cards"}
-        </button>
-
-        {/* New objective → spawn a fresh objective card + run prompt refinement.
-            Types straight into a textarea, POSTs to the sharpening agent (which
-            persists input_text + regenerates), then drops the sharpening card on
-            the board via the same bus the intake mount uses. */}
-        <button
-          type="button"
-          onClick={() => setShowNewObj((v) => !v)}
-          style={{ ...secondaryBtn, marginTop: 8 }}
-        >
-          <Sparkle style={{ width: 14, height: 14 }} strokeWidth={2.2} />
-          New objective + refine
-        </button>
-        {showNewObj && (
-          <div style={{ marginTop: 8 }}>
-            <textarea
-              autoFocus
-              value={newObjText}
-              onChange={(e) => setNewObjText(e.target.value)}
-              onPointerDown={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  void refineNewObjective();
-                }
-              }}
-              placeholder="Type a new objective to refine…"
-              rows={3}
-              style={{
-                width: "100%",
-                boxSizing: "border-box",
-                resize: "vertical",
-                padding: "8px 10px",
-                borderRadius: appleVibe.radius.sm,
-                border: "1px solid var(--glass-border)",
-                background: appleVibe.surface.chip,
-                fontSize: 12.5,
-                lineHeight: 1.45,
-                color: appleVibe.text.primary,
-                fontFamily: appleVibe.font.stack,
-                outline: "none",
-              }}
-            />
-            <button
-              type="button"
-              disabled={!newObjText.trim() || refining}
-              onClick={() => void refineNewObjective()}
-              style={{
-                ...secondaryBtn,
-                marginTop: 6,
-                opacity: newObjText.trim() && !refining ? 1 : 0.5,
-              }}
-            >
-              {refining ? (
-                <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} />
-              ) : (
-                <Wand2 style={{ width: 14, height: 14 }} strokeWidth={2.2} />
-              )}
-              {refining ? "Refining…" : "Refine objective → card"}
-            </button>
-          </div>
-        )}
-
-        {/* Powerups — the remaining operations. */}
-        <div style={{ ...sectionLabel, marginTop: 16 }}>Operations</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
-          {POWERUPS.map((op) => {
-            const Icon = OP_ICON[op.id] ?? Sparkle;
-            const isRunning = running === op.id;
-            return (
-              <button
-                key={op.id}
-                type="button"
-                disabled={!hasSel || !!running}
-                onClick={() => runOp(op.id)}
-                style={{ ...opRow, opacity: hasSel ? 1 : 0.5 }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = appleVibe.surface.chipHover)
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = "transparent")
-                }
-              >
-                <span style={opIconWrap}>
-                  {isRunning ? (
-                    <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
-                  ) : (
-                    <Icon style={{ width: 13, height: 13 }} strokeWidth={2} />
+        {/* Flows — composite actions; Forge is the hero (the one accent-tinted
+            row in the panel). Reserved gray would have read as "disabled". */}
+        {visibleFlows.length > 0 && (
+          <div style={{ marginTop: hasSel ? 14 : 12 }}>
+            {visibleFlows.map((f) => {
+              if (f.id === "forge") {
+                return (
+                  <button
+                    key="forge"
+                    type="button"
+                    disabled={!hasSel || forging}
+                    aria-busy={forging}
+                    title={forging ? "Forging spec…" : undefined}
+                    onClick={() => {
+                      if (forging || !hasSel) return;
+                      setForging(true);
+                      window.dispatchEvent(new CustomEvent(FORGE_REQUEST_EVENT));
+                    }}
+                    style={{
+                      ...forgeBtn,
+                      opacity: !hasSel ? 0.55 : forging ? 0.85 : 1,
+                      cursor: forging ? "progress" : !hasSel ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    <span style={forgeIcon}>
+                      {forging ? (
+                        <Loader2
+                          className="animate-spin"
+                          style={{ width: 15, height: 15 }}
+                          strokeWidth={2.2}
+                        />
+                      ) : (
+                        <Wand2 style={{ width: 15, height: 15 }} strokeWidth={2.2} />
+                      )}
+                    </span>
+                    <span style={{ minWidth: 0, flex: 1, textAlign: "left" }}>
+                      <span style={forgeTitle}>
+                        {forging ? "Forging spec…" : f.label}
+                      </span>
+                      <span style={forgeSub}>
+                        {forging ? "~30s — please wait" : f.intent}
+                      </span>
+                    </span>
+                  </button>
+                );
+              }
+              if (f.id === "prototype") {
+                return (
+                  <div key="prototype" style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <button
+                      type="button"
+                      disabled={!hasSel || buildingPlans}
+                      title={
+                        !hasSel
+                          ? "Select a card to build a prototype from"
+                          : selHasTechSpec
+                            ? "Build a clickable prototype straight from this Tech Spec"
+                            : `Fork ${settings.uiPlanCount} UI-plan variants, then pick one to prototype`
+                      }
+                      onClick={buildPrototype}
+                      style={{ ...flowRow, flex: 1, minWidth: 0, opacity: hasSel ? 1 : 0.55 }}
+                      onMouseEnter={(e) =>
+                        (e.currentTarget.style.background = appleVibe.surface.chipHover)
+                      }
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.background = appleVibe.surface.chip)
+                      }
+                    >
+                      <span style={flowIconWrap}>
+                        {buildingPlans ? (
+                          <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
+                        ) : (
+                          <AppWindow style={{ width: 13, height: 13 }} strokeWidth={2} />
+                        )}
+                      </span>
+                      <span style={{ minWidth: 0, flex: 1 }}>
+                        <span style={opLabel}>{f.label}</span>
+                        <span style={opIntent}>{f.intent}</span>
+                      </span>
+                    </button>
+                    {!selHasTechSpec && (
+                      <PlanCountChip
+                        value={settings.uiPlanCount}
+                        onChange={(n) =>
+                          setAiSetting(
+                            "uiPlanCount",
+                            Math.max(UI_PLAN_COUNT_MIN, Math.min(UI_PLAN_COUNT_MAX, n)),
+                          )
+                        }
+                      />
+                    )}
+                  </div>
+                );
+              }
+              if (f.id === "decompose_objective") {
+                const busy = decomposing;
+                return (
+                  <button
+                    key="decompose_objective"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      if (busy) return;
+                      setDecomposing(true);
+                      requestDecomposeIntoCards();
+                    }}
+                    style={{ ...flowRow, marginTop: 6 }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background = appleVibe.surface.chipHover)
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = appleVibe.surface.chip)
+                    }
+                  >
+                    <span style={flowIconWrap}>
+                      {busy ? (
+                        <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
+                      ) : (
+                        <Split style={{ width: 13, height: 13 }} strokeWidth={2} />
+                      )}
+                    </span>
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span style={opLabel}>{busy ? "Decomposing…" : f.label}</span>
+                      <span style={opIntent}>{f.intent}</span>
+                    </span>
+                  </button>
+                );
+              }
+              // new_objective — toggle opens a small composer inline.
+              return (
+                <div key="new_objective">
+                  <button
+                    type="button"
+                    onClick={() => setShowNewObj((v) => !v)}
+                    style={{ ...flowRow, marginTop: 6 }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background = appleVibe.surface.chipHover)
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = appleVibe.surface.chip)
+                    }
+                  >
+                    <span style={flowIconWrap}>
+                      <Sparkle style={{ width: 13, height: 13 }} strokeWidth={2} />
+                    </span>
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span style={opLabel}>{f.label}</span>
+                      <span style={opIntent}>{f.intent}</span>
+                    </span>
+                  </button>
+                  {showNewObj && (
+                    <div style={{ marginTop: 6 }}>
+                      <textarea
+                        autoFocus
+                        value={newObjText}
+                        onChange={(e) => setNewObjText(e.target.value)}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                            e.preventDefault();
+                            void refineNewObjective();
+                          }
+                        }}
+                        placeholder="Type a new objective to refine…"
+                        rows={3}
+                        style={composerArea}
+                      />
+                      <button
+                        type="button"
+                        disabled={!newObjText.trim() || refining}
+                        onClick={() => void refineNewObjective()}
+                        style={{
+                          ...flowRow,
+                          marginTop: 6,
+                          justifyContent: "center",
+                          opacity: newObjText.trim() && !refining ? 1 : 0.55,
+                        }}
+                      >
+                        {refining ? (
+                          <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
+                        ) : (
+                          <Wand2 style={{ width: 13, height: 13 }} strokeWidth={2.2} />
+                        )}
+                        <span style={opLabel}>
+                          {refining ? "Refining…" : "Refine → card"}
+                        </span>
+                      </button>
+                    </div>
                   )}
-                </span>
-                <span style={{ minWidth: 0, flex: 1 }}>
-                  <span style={opLabel}>{op.label}</span>
-                  <span style={opIntent}>{op.intent}</span>
-                </span>
-              </button>
-            );
-          })}
-          {/* Custom instruction — the user's own prompt on the selection. */}
-          <button
-            type="button"
-            disabled={!hasSel || !!running}
-            onClick={() => setShowCustom((v) => !v)}
-            style={{ ...opRow, opacity: hasSel ? 1 : 0.5 }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = appleVibe.surface.chipHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-          >
-            <span style={opIconWrap}>
-              {running === "custom" ? (
-                <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
-              ) : (
-                <Pencil style={{ width: 13, height: 13 }} strokeWidth={2} />
-              )}
-            </span>
-            <span style={{ minWidth: 0, flex: 1 }}>
-              <span style={opLabel}>Custom instruction</span>
-              <span style={opIntent}>Run your own prompt on this</span>
-            </span>
-          </button>
-        </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
-        {showCustom && (
-          <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
-            <input
-              autoFocus
-              value={customText}
-              onChange={(e) => setCustomText(e.target.value)}
-              onPointerDown={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") runCustom();
-              }}
-              placeholder="Tell the AI what to do with the selection…"
-              style={{
-                flex: 1,
-                minWidth: 0,
-                padding: "8px 10px",
-                borderRadius: appleVibe.radius.sm,
-                border: "1px solid var(--glass-border)",
-                background: appleVibe.surface.chip,
-                fontSize: 12.5,
-                color: appleVibe.text.primary,
-                fontFamily: appleVibe.font.stack,
-                outline: "none",
-              }}
-            />
-            <button
-              type="button"
-              disabled={!customText.trim() || !hasSel || !!running}
-              onClick={runCustom}
-              title="Run"
-              style={{
-                display: "inline-grid",
-                placeItems: "center",
-                width: 36,
-                flexShrink: 0,
-                borderRadius: appleVibe.radius.sm,
-                border: "none",
-                cursor: customText.trim() ? "pointer" : "default",
-                background: customText.trim() ? appleVibe.accent.primary : appleVibe.surface.chip,
-                color: customText.trim() ? appleVibe.text.onAccent : appleVibe.text.tertiary,
-              }}
-            >
-              <Send style={{ width: 14, height: 14 }} strokeWidth={2.4} />
-            </button>
+        {/* Hairline + Operations — single-shot transforms on the selection. */}
+        {visibleOps.length > 0 && (
+          <>
+            <div style={hairline} />
+            <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              {visibleOps.map((op) => {
+                const Icon = op.id === "custom" ? Pencil : (OP_ICON[op.id] ?? Sparkle);
+                const isRunning = running === op.id;
+                if (op.id === "custom") {
+                  return (
+                    <div key="custom">
+                      <button
+                        type="button"
+                        disabled={!hasSel || !!running}
+                        onClick={() => setShowCustom((v) => !v)}
+                        style={{ ...opRow, opacity: hasSel ? 1 : 0.55 }}
+                        onMouseEnter={(e) =>
+                          (e.currentTarget.style.background = appleVibe.surface.chipHover)
+                        }
+                        onMouseLeave={(e) =>
+                          (e.currentTarget.style.background = "transparent")
+                        }
+                      >
+                        <span style={opIconWrap}>
+                          {running === "custom" ? (
+                            <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
+                          ) : (
+                            <Icon style={{ width: 13, height: 13 }} strokeWidth={2} />
+                          )}
+                        </span>
+                        <span style={{ minWidth: 0, flex: 1 }}>
+                          <span style={opLabel}>{op.label}</span>
+                          <span style={opIntent}>{op.intent}</span>
+                        </span>
+                      </button>
+                      {showCustom && (
+                        <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
+                          <input
+                            autoFocus
+                            value={customText}
+                            onChange={(e) => setCustomText(e.target.value)}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") runCustom();
+                            }}
+                            placeholder="Tell the AI what to do…"
+                            style={customInput}
+                          />
+                          <button
+                            type="button"
+                            disabled={!customText.trim() || !hasSel || !!running}
+                            onClick={runCustom}
+                            title="Run"
+                            style={{
+                              display: "inline-grid",
+                              placeItems: "center",
+                              width: 32,
+                              flexShrink: 0,
+                              borderRadius: appleVibe.radius.sm,
+                              border: "none",
+                              cursor: customText.trim() ? "pointer" : "default",
+                              background: customText.trim() ? ACCENT : appleVibe.surface.chip,
+                              color: customText.trim() ? appleVibe.text.onAccent : appleVibe.text.tertiary,
+                            }}
+                          >
+                            <Send style={{ width: 13, height: 13 }} strokeWidth={2.4} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+                return (
+                  <button
+                    key={op.id}
+                    type="button"
+                    disabled={!hasSel || !!running}
+                    onClick={() => runOp(op.id)}
+                    style={{ ...opRow, opacity: hasSel ? 1 : 0.55 }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background = appleVibe.surface.chipHover)
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = "transparent")
+                    }
+                  >
+                    <span style={opIconWrap}>
+                      {isRunning ? (
+                        <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
+                      ) : (
+                        <Icon style={{ width: 13, height: 13 }} strokeWidth={2} />
+                      )}
+                    </span>
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span style={opLabel}>{op.label}</span>
+                      <span style={opIntent}>{op.intent}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {/* Empty-filter state — only if BOTH groups are filtered to nothing. */}
+        {q && visibleFlows.length === 0 && visibleOps.length === 0 && (
+          <div style={{ ...helperLine, marginTop: 14 }}>
+            No actions match “{query}”.
           </div>
         )}
 
         {/* Artifacts — finished / polished outputs. */}
-        <div style={{ ...sectionLabel, marginTop: 16, display: "flex", alignItems: "center", gap: 6 }}>
-          <FileCode2 style={{ width: 12, height: 12 }} strokeWidth={2} /> Artifacts
+        <div style={hairline} />
+        <div style={artifactsHead}>
+          <FileCode2 style={{ width: 12, height: 12 }} strokeWidth={2} />
+          <span>Artifacts</span>
         </div>
         {boardArtifacts.length === 0 && (included?.length ?? 0) === 0 ? (
-          <div style={{ ...muted, marginTop: 6 }}>
-            Polished tech specs &amp; included objects land here.
+          <div style={{ ...helperLine, marginTop: 6 }}>
+            Polished specs &amp; included objects land here.
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 6 }}>
@@ -791,11 +873,44 @@ export function PowerupRail({
   );
 }
 
+// Small inline N-chip — replaces the +/− stepper-in-a-pill. Click to cycle,
+// shift-click to step backwards. Far less control mixed with typography than
+// the old inline stepper sat next to the Build-prototype label.
+function PlanCountChip({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={`${value} UI plan${value === 1 ? "" : "s"} — click to change`}
+      onClick={(e) => {
+        const next = e.shiftKey ? value - 1 : value + 1;
+        const wrapped =
+          next > UI_PLAN_COUNT_MAX
+            ? UI_PLAN_COUNT_MIN
+            : next < UI_PLAN_COUNT_MIN
+              ? UI_PLAN_COUNT_MAX
+              : next;
+        onChange(wrapped);
+      }}
+      style={planChip}
+    >
+      ×{value}
+    </button>
+  );
+}
+
 // ── styles ──
 const launcherPill: CSSProperties = {
+  // Unified right toolbar baseline (top:16) — third stop in the row:
+  // palette · Share · Actions · Library · Saved · collaborators.
   position: "absolute",
-  top: 96,
-  right: 16,
+  top: 16,
+  right: 158,
   zIndex: 66,
   display: "inline-flex",
   alignItems: "center",
@@ -856,15 +971,60 @@ const iconBtn: CSSProperties = {
   cursor: "pointer",
   color: appleVibe.text.tertiary,
 };
-const scroll: CSSProperties = { flex: 1, overflowY: "auto", padding: "12px 14px 16px", minHeight: 0 };
-const sectionLabel: CSSProperties = {
-  fontSize: 10.5,
-  fontWeight: 700,
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
+const searchWrap: CSSProperties = {
+  position: "relative",
+  display: "flex",
+  alignItems: "center",
+  margin: "10px 12px 0",
+  height: 30,
+  borderRadius: appleVibe.radius.sm,
+  background: appleVibe.surface.chip,
+  border: "1px solid var(--glass-border)",
+  paddingLeft: 28,
+  paddingRight: 6,
+};
+const searchIcon: CSSProperties = {
+  position: "absolute",
+  left: 8,
+  width: 12,
+  height: 12,
   color: appleVibe.text.tertiary,
 };
-const muted: CSSProperties = { fontSize: 12, color: appleVibe.text.tertiary };
+const searchInput: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  height: "100%",
+  border: "none",
+  background: "transparent",
+  fontSize: 12.5,
+  color: appleVibe.text.primary,
+  fontFamily: appleVibe.font.stack,
+  outline: "none",
+  padding: 0,
+};
+const searchClear: CSSProperties = {
+  display: "inline-grid",
+  placeItems: "center",
+  width: 18,
+  height: 18,
+  border: "none",
+  background: "transparent",
+  cursor: "pointer",
+  color: appleVibe.text.tertiary,
+  flexShrink: 0,
+};
+const scroll: CSSProperties = { flex: 1, overflowY: "auto", padding: "10px 14px 16px", minHeight: 0 };
+const helperLine: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.4,
+  color: appleVibe.text.tertiary,
+  letterSpacing: "-0.005em",
+};
+const hairline: CSSProperties = {
+  height: 1,
+  background: "var(--glass-border)",
+  margin: "14px 0 10px",
+};
 const chip: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
@@ -880,18 +1040,20 @@ const chip: CSSProperties = {
   whiteSpace: "nowrap",
   textOverflow: "ellipsis",
 };
+// Forge — the hero. The ONLY tinted row in the panel: 6% accent fill, 1px
+// tinted border, soft accent glow. Reserves gray for inactive states.
 const forgeBtn: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 10,
   width: "100%",
-  padding: "10px 11px",
+  padding: "11px 12px",
   borderRadius: appleVibe.radius.md,
-  border: "1px solid rgba(255,255,255,0.14)",
+  border: `1px solid ${ACCENT_BORDER}`,
   cursor: "pointer",
-  background:
-    "linear-gradient(135deg, rgba(28,33,48,0.98) 0%, rgba(15,20,33,0.99) 100%)",
-  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.14), 0 12px 28px -14px rgba(11,18,40,0.55)",
+  background: ACCENT_SOFT,
+  boxShadow: ACCENT_GLOW,
+  fontFamily: appleVibe.font.stack,
 };
 const forgeIcon: CSSProperties = {
   display: "inline-flex",
@@ -901,63 +1063,102 @@ const forgeIcon: CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   borderRadius: 9,
-  background: "rgba(255,255,255,0.14)",
+  background: ACCENT,
   color: "white",
+  boxShadow: "0 4px 12px -4px rgba(79,70,229,0.55)",
 };
 const forgeTitle: CSSProperties = {
   display: "block",
   fontSize: 13,
   fontWeight: 650,
   letterSpacing: "-0.01em",
-  color: "white",
+  color: appleVibe.text.primary,
+  textAlign: "left",
 };
 const forgeSub: CSSProperties = {
   display: "block",
   marginTop: 1,
   fontSize: 11,
   lineHeight: 1.3,
-  color: "rgba(255,255,255,0.62)",
+  color: appleVibe.text.tertiary,
+  textAlign: "left",
 };
-const secondaryBtn: CSSProperties = {
+// Flow row — every flow other than Forge. Reads as the same "list item" shape
+// as the Operations list below, just with a soft chip background so the group
+// reads as a single unit.
+const flowRow: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
-  width: "100%",
-  justifyContent: "center",
-  padding: "9px 11px",
-  borderRadius: appleVibe.radius.md,
-  border: "1px solid var(--glass-border)",
-  background: appleVibe.surface.chip,
-  cursor: "pointer",
-  fontSize: 12.5,
-  fontWeight: 600,
-  color: appleVibe.text.primary,
-  fontFamily: appleVibe.font.stack,
-};
-const opRow: CSSProperties = {
-  display: "flex",
-  alignItems: "flex-start",
   gap: 9,
   width: "100%",
   textAlign: "left",
-  padding: "8px 9px",
+  padding: "8px 10px",
+  borderRadius: appleVibe.radius.sm,
+  border: "1px solid transparent",
+  background: appleVibe.surface.chip,
+  cursor: "pointer",
+  fontFamily: appleVibe.font.stack,
+};
+const flowIconWrap: CSSProperties = {
+  display: "inline-flex",
+  width: 22,
+  height: 22,
+  flexShrink: 0,
+  alignItems: "center",
+  justifyContent: "center",
+  borderRadius: 7,
+  background: "rgba(255,255,255,0.7)",
+  color: appleVibe.text.secondary,
+};
+const composerArea: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  resize: "vertical",
+  padding: "8px 10px",
+  borderRadius: appleVibe.radius.sm,
+  border: "1px solid var(--glass-border)",
+  background: "rgba(255,255,255,0.6)",
+  fontSize: 12.5,
+  lineHeight: 1.45,
+  color: appleVibe.text.primary,
+  fontFamily: appleVibe.font.stack,
+  outline: "none",
+};
+const customInput: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  padding: "7px 10px",
+  borderRadius: appleVibe.radius.sm,
+  border: "1px solid var(--glass-border)",
+  background: "rgba(255,255,255,0.6)",
+  fontSize: 12.5,
+  color: appleVibe.text.primary,
+  fontFamily: appleVibe.font.stack,
+  outline: "none",
+};
+const opRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 9,
+  width: "100%",
+  textAlign: "left",
+  padding: "7px 10px",
   borderRadius: appleVibe.radius.sm,
   border: "1px solid transparent",
   cursor: "pointer",
   background: "transparent",
+  fontFamily: appleVibe.font.stack,
 };
 const opIconWrap: CSSProperties = {
   display: "inline-flex",
-  marginTop: 0.5,
-  width: 23,
-  height: 23,
+  width: 22,
+  height: 22,
   flexShrink: 0,
   alignItems: "center",
   justifyContent: "center",
-  borderRadius: 8,
+  borderRadius: 7,
   background: appleVibe.surface.chip,
   color: appleVibe.text.secondary,
-  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.6)",
 };
 const opLabel: CSSProperties = {
   display: "block",
@@ -968,43 +1169,36 @@ const opLabel: CSSProperties = {
 };
 const opIntent: CSSProperties = {
   display: "block",
-  marginTop: 1.5,
+  marginTop: 1,
   fontSize: 11,
-  lineHeight: 1.32,
+  lineHeight: 1.3,
   color: appleVibe.text.tertiary,
 };
-const stepperWrap: CSSProperties = {
+const planChip: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  flexShrink: 0,
-  borderRadius: appleVibe.radius.md,
+  justifyContent: "center",
+  minWidth: 32,
+  padding: "0 8px",
+  borderRadius: appleVibe.radius.sm,
   border: "1px solid var(--glass-border)",
   background: appleVibe.surface.chip,
-  overflow: "hidden",
-};
-const stepperBtn: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 24,
-  height: "100%",
-  minHeight: 32,
-  border: "none",
-  background: "transparent",
-  cursor: "pointer",
-  color: appleVibe.text.secondary,
-  padding: 0,
-};
-const stepperValue: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  minWidth: 18,
-  fontSize: 12.5,
+  fontSize: 11.5,
   fontWeight: 700,
   fontVariantNumeric: "tabular-nums",
-  color: appleVibe.text.primary,
+  color: appleVibe.text.secondary,
   fontFamily: appleVibe.font.stack,
+  cursor: "pointer",
+  flexShrink: 0,
+};
+const artifactsHead: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: appleVibe.text.secondary,
+  letterSpacing: "-0.005em",
 };
 const artifactRow: CSSProperties = {
   display: "flex",

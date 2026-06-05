@@ -1,6 +1,16 @@
 # Artifacts & the Artifact Dock — Spec
 
-**Status:** Phase 1 ✅ + Phase 2 ✅ + Phase 3A ✅ (migration applied live) · Phase 3B (full page) + 4–5 pending · **Date:** 2026-06-04 · **Lane:** objective-canvas / artifacts
+**Status:** Phases 1–5 ✅ (Prototype·Notebook·Custom·Image engines live; migration applied live) · Social = only dock "soon" left · **Date:** 2026-06-04 · **Lane:** objective-canvas / artifacts
+
+> **Image engine DONE.** New route `app/api/canvas/artifact/image/route.ts` — OpenAI `gpt-image-1` (needs `OPENAI_API_KEY`) from the user's prompt + selection context → uploads PNG to the `ingested-images` bucket → persists an `image` artifact (+version) → returns the public URL. Dock Image circle opens the shared composer (now serves Custom + Image), generates, and drops the existing `objective-image-card` on the board via `deployImageCard`. Social-post engine is the only remaining "soon".
+
+> **Phase 3B (full-page Notebook) DONE.** Editing extracted into shared `notebook-editor.tsx` (`NotebookEditor`, variant panel|page, autosave-on-debounce + flush-on-unmount). Panel (`notebook-panel.tsx`) is now thin modal chrome around it + a "full page" link. New route `app/app/objective/[spaceId]/notebook/page.tsx` (server auth) → `notebook-page.tsx` client wrapper with a back-to-board link.
+
+> **Phase 4 (Artifacts Library) DONE.** New **Artifacts** tab in `library-rail.tsx` (`ArtifactsView`) — fetches `/artifacts`, groups by type with per-type icon/colour, shows freshness (`stale` chip + relative time), click opens: notebook → `openNotebook`, others → reveal board card via `board_shape_id`. Empty-state points at the dock.
+>
+> **Prototype→artifact persistence DONE** (the deferred Phase 2 gap). `PrototypeEventBridge` in `whiteboard-base.tsx` now upserts a `prototype` artifacts row (+version) when a prototype becomes ready (build + refine), keyed by `board_shape_id`. Prototypes now appear in the Artifacts Library.
+>
+> **Custom engine DONE.** The dock's Custom circle opens an inline composer (the user's own instruction) → runs the existing `custom-op` over the selection via `executeCardOperation` (cards land on board) → records a `custom` artifact row so the run shows in the Artifacts Library. ⌘/Ctrl+Enter to run. **Still pending: Phase 3B (full-page notebook); Image engine (no image-gen model wired — only HTML `generate-screen` exists) + Social engine remain dock "soon".**
 
 > **BUILD LOG.** Phase 1 (voice fixes) DONE. Phase 2 (artifacts table + dock) DONE, `20260921_artifacts.sql` applied to live Supabase. New files: `lib/objective-canvas/artifacts.ts`, `lib/objective-canvas/artifact-engines.ts`, `components/objective/canvas-interactions/artifact-dock.tsx`, `app/api/objective/[spaceId]/artifacts/route.ts`. Dock mounted in `whiteboard-base.tsx` (left edge). Prototype engine reuses the existing build-prototype events (not yet persisted as an artifacts row — deferred to avoid orphan rows). Pinned set in localStorage (not synthesis_data yet).
 >

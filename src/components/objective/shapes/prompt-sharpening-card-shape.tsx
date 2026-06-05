@@ -1103,8 +1103,8 @@ function GenerationFailed({
           color: appleVibe.text.secondary,
         }}
       >
-        Couldn&apos;t generate the sharpened prompt — the model may be busy or
-        out of credits.
+        Couldn&apos;t generate the sharpened prompt — the AI service may be
+        briefly overloaded. This isn&apos;t a credits issue. Tap Retry.
       </div>
       <button
         type="button"

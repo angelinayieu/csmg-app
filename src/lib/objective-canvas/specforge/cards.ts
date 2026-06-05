@@ -22,12 +22,18 @@ import type {
   EvaluationResult,
   EvaluationCandidate,
   RecommendationResult,
+  ComplexityAllocationResult,
+  ComplexityModuleScore,
+  ComplexityWarning,
   FeatureCardsResult,
   FeatureCard,
   FeatureMechanismsResult,
   FeatureMechanism,
   DataPointsResult,
   DataPoint,
+  LayerOptimizationResult,
+  LayerAlignmentCheck,
+  ConsequentialEvaluation,
   ValidationResult,
   ValidationExperiment,
   DeepeningResult,
@@ -453,6 +459,71 @@ export function resultToCards(
       ];
     }
 
+    case "complexity_allocation": {
+      const r = result as ComplexityAllocationResult;
+      const b = r.budget;
+      if (!b) return [];
+      const budgetLine = [
+        Number.isFinite(Number(b.reasoning)) ? `R${Math.round(Number(b.reasoning))}` : "",
+        Number.isFinite(Number(b.evaluation)) ? `E${Math.round(Number(b.evaluation))}` : "",
+        Number.isFinite(Number(b.ui)) ? `U${Math.round(Number(b.ui))}` : "",
+        Number.isFinite(Number(b.technical)) ? `T${Math.round(Number(b.technical))}` : "",
+        Number.isFinite(Number(b.interaction)) ? `I${Math.round(Number(b.interaction))}` : "",
+        Number.isFinite(Number(b.data)) ? `D${Math.round(Number(b.data))}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const overbuilt = (Array.isArray(r.overbuilt_warnings)
+        ? r.overbuilt_warnings
+        : [])
+        .map((w) => clean(w?.module))
+        .filter(Boolean)
+        .slice(0, 2)
+        .join(", ");
+      const underbuilt = (Array.isArray(r.underbuilt_warnings)
+        ? r.underbuilt_warnings
+        : [])
+        .map((w) => clean(w?.module))
+        .filter(Boolean)
+        .slice(0, 2)
+        .join(", ");
+      const firstBuild = (Array.isArray(r.first_build_scope)
+        ? r.first_build_scope
+        : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 4)
+        .join(", ");
+      const delayed = (Array.isArray(r.delayed_scope)
+        ? r.delayed_scope
+        : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(", ");
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      return [
+        {
+          stage: "budget" as const,
+          eyebrow: "Complexity budget",
+          title: clean(b.philosophy) || "v1 complexity allocation",
+          subtitle: budgetLine ? `Allocation: ${budgetLine}` : undefined,
+          body: bullets([
+            firstBuild && `Build first: ${firstBuild}`,
+            delayed && `Delay: ${delayed}`,
+            underbuilt && `Underbuilt: ${underbuilt}`,
+            overbuilt && `Overbuilt: ${overbuilt}`,
+            clean(r.build_discipline_rule) &&
+              `Rule: ${clean(r.build_discipline_rule)}`,
+            conf !== null ? `Confidence: ${conf}` : "",
+          ]),
+          layout: "spine",
+        },
+      ];
+    }
+
     case "feature_cards": {
       const r = result as FeatureCardsResult;
       const all: FeatureCard[] = Array.isArray(r.features)
@@ -605,6 +676,55 @@ export function resultToCards(
           layout: "diverge",
         };
       });
+    }
+
+    case "layer_optimization": {
+      const r = result as LayerOptimizationResult;
+      const checks: LayerAlignmentCheck[] = Array.isArray(r.alignment_checks)
+        ? r.alignment_checks
+        : [];
+      const drifted = checks.filter((c) => clean(c?.verdict) === "drifted").length;
+      const broken = checks.filter((c) => clean(c?.verdict) === "broken").length;
+      const aligned = checks.filter((c) => clean(c?.verdict) === "aligned").length;
+      const repairs = Array.isArray(r.layers_to_repair) ? r.layers_to_repair : [];
+      const topRepair = repairs.find((x) => clean(x?.name) && clean(x?.reason));
+      const conseq: ConsequentialEvaluation[] = Array.isArray(r.consequential_evaluations)
+        ? r.consequential_evaluations
+        : [];
+      const repairCount = conseq.filter((c) => clean(c?.recommendation) === "repair").length;
+      const rejectCount = conseq.filter((c) => clean(c?.recommendation) === "reject").length;
+      const conf = Number.isFinite(Number(r.confidence))
+        ? Math.round(Number(r.confidence))
+        : null;
+      const summary = clean(r.alignment_summary);
+      if (!checks.length && !conseq.length && !summary) return [];
+      const verdictLabel =
+        broken > 0
+          ? `${broken} broken · ${drifted} drifted`
+          : drifted > 0
+            ? `${drifted} drifted · ${aligned} aligned`
+            : `${aligned}/${checks.length} aligned`;
+      return [
+        {
+          stage: "layers" as const,
+          title: `Layer alignment: ${verdictLabel}`,
+          subtitle: summary || undefined,
+          body: bullets([
+            (Array.isArray(r.micros) ? r.micros.length : 0) > 0
+              ? `${Array.isArray(r.micros) ? r.micros.length : 0} micro · ${Array.isArray(r.mechanisms) ? r.mechanisms.length : 0} mechanism layer nodes`
+              : undefined,
+            topRepair && `Repair: ${clean(topRepair.name)} — ${clean(topRepair.reason)}`,
+            repairCount > 0 || rejectCount > 0
+              ? `Downstream verdicts: ${repairCount} repair · ${rejectCount} reject`
+              : undefined,
+            conseq[0] &&
+              clean(conseq[0].downstream_improvement) &&
+              `${clean(conseq[0].current_layer)} → ${clean(conseq[0].next_layer)}: ${clean(conseq[0].downstream_improvement)}`,
+            conf !== null ? `Alignment confidence: ${conf}` : undefined,
+          ]),
+          layout: "spine",
+        },
+      ];
     }
 
     case "validation": {
@@ -1027,6 +1147,54 @@ export function summarizeForContext(
         flips && `Decision reverses if: ${flips}`,
         constraints && `Constraints to pass downstream: ${constraints}`,
         clean(r.confidence_level) && `Rubric confidence: ${clean(r.confidence_level)}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "complexity_allocation": {
+      const r = result as ComplexityAllocationResult;
+      const b = r.budget;
+      if (!b) return "";
+      const buckets = [
+        Number.isFinite(Number(b.reasoning)) ? `reasoning=${Math.round(Number(b.reasoning))}` : "",
+        Number.isFinite(Number(b.evaluation)) ? `evaluation=${Math.round(Number(b.evaluation))}` : "",
+        Number.isFinite(Number(b.ui)) ? `ui=${Math.round(Number(b.ui))}` : "",
+        Number.isFinite(Number(b.technical)) ? `technical=${Math.round(Number(b.technical))}` : "",
+        Number.isFinite(Number(b.interaction)) ? `interaction=${Math.round(Number(b.interaction))}` : "",
+        Number.isFinite(Number(b.data)) ? `data=${Math.round(Number(b.data))}` : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+      const firstBuild = (Array.isArray(r.first_build_scope) ? r.first_build_scope : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 6)
+        .join(", ");
+      const delayed = (Array.isArray(r.delayed_scope) ? r.delayed_scope : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 4)
+        .join(", ");
+      const removed = (Array.isArray(r.removed_scope) ? r.removed_scope : [])
+        .map(clean)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(", ");
+      const realloc = (Array.isArray(r.reallocation_recommendations)
+        ? r.reallocation_recommendations
+        : [])
+        .map((x) => `${clean(x?.reduce)} → ${clean(x?.increase)}`)
+        .filter((s) => !s.startsWith(" → ") && !s.endsWith(" → "))
+        .slice(0, 3)
+        .join("; ");
+      return [
+        `Complexity budget: ${buckets}`,
+        clean(b.philosophy) && `Philosophy: ${clean(b.philosophy)}`,
+        firstBuild && `First build scope: ${firstBuild}`,
+        delayed && `Delayed scope: ${delayed}`,
+        removed && `Removed from v1: ${removed}`,
+        realloc && `Reallocations: ${realloc}`,
+        clean(r.build_discipline_rule) && `Build discipline: ${clean(r.build_discipline_rule)}`,
       ]
         .filter(Boolean)
         .join("\n");
