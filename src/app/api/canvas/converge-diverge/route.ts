@@ -328,21 +328,38 @@ export async function POST(request: Request) {
     if (observed) user += `\n\nVisual context from attached image(s):\n${observed}`;
     if (grounded) user += `\n\nWeb-sourced context (verify before relying):\n${grounded}`;
 
-    const result = await llmJSON({
-      system: buildSystem(kind, depth, questionCount),
-      user: user.slice(0, 4000),
-      maxTokens: 1600,
-      temperature,
-      provider: "anthropic",
-      // Was BEST_TUNABLE_CLAUDE_MODEL (opus-4-1) — that model returns degenerate
-      // output for this schema (0 nodes + runaway questions field), so verbs
-      // rendered "Empty". Sonnet-4-6 honors temperature and produces clean nodes.
-      model: BEST_FAST_CLAUDE_MODEL,
-      responseSchema: RESPONSE_SCHEMA as unknown as {
-        name: string;
-        schema: Record<string, unknown>;
-      },
-    });
+    const schema = RESPONSE_SCHEMA as unknown as {
+      name: string;
+      schema: Record<string, unknown>;
+    };
+    const genWith = (provider: "anthropic" | "openai") =>
+      llmJSON({
+        system: buildSystem(kind, depth, questionCount),
+        user: user.slice(0, 4000),
+        maxTokens: 1600,
+        temperature,
+        provider,
+        // Anthropic: Sonnet-4-6 (was opus-4-1, which returned degenerate output
+        // for this schema → "Empty"). OpenAI fallback uses its json_schema
+        // default (gpt-4o), which honors the same RESPONSE_SCHEMA.
+        model: provider === "anthropic" ? BEST_FAST_CLAUDE_MODEL : undefined,
+        responseSchema: schema,
+      });
+    // Provider failover: if Anthropic's KEY is out of *provider* credits (a
+    // billing state independent of the user's app credits), fall back to OpenAI
+    // so the verb still works instead of dead-ending on "Out of credits". Only a
+    // credit/quota error triggers the swap; any other error propagates. If BOTH
+    // providers are dry, the OpenAI credit error propagates → the route's 402.
+    let result: unknown;
+    try {
+      result = await genWith("anthropic");
+    } catch (primaryErr) {
+      if (!detectCreditError(primaryErr).isCredit) throw primaryErr;
+      console.warn(
+        "[/api/canvas/converge-diverge] anthropic credit/quota error — falling back to OpenAI",
+      );
+      result = await genWith("openai");
+    }
 
     const r = result as {
       questions?: Array<{ q?: string; a?: string }>;

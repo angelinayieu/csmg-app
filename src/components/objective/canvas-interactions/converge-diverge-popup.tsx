@@ -28,9 +28,12 @@ const EXPANDED = 132; // width once hovered (icon + label)
 const STACK_H = COLLAPSED * 2 + 8;
 
 /** Why a verb produced no cards — drives the honest retry pill. "empty" = the
- *  model genuinely returned nothing; the rest = the request failed and a retry
- *  is worthwhile (these used to ALL read as a misleading "Empty"). */
-type VerbStatus = "empty" | "error" | "credits";
+ *  model genuinely returned nothing; "credits" = the USER's app balance is out;
+ *  "provider" = the LLM provider key is dry (NOT the user's fault — must not say
+ *  "Out of credits" when they have a full balance); "error" = a transient
+ *  request failure worth retrying. These used to ALL read as a misleading
+ *  "Empty" / "Out of credits". */
+type VerbStatus = "empty" | "error" | "credits" | "provider";
 
 /** anchor = the selection's bounding box in SCREEN coords. */
 export function ConvergeDivergePopup({
@@ -84,9 +87,11 @@ export function ConvergeDivergePopup({
           dir,
           res.error === "credits"
             ? "credits"
-            : res.error
-              ? "error"
-              : "empty",
+            : res.error === "provider"
+              ? "provider"
+              : res.error
+                ? "error"
+                : "empty",
         );
       }
     } catch {
@@ -140,6 +145,9 @@ const STATUS_COPY: Record<VerbStatus, { text: string; color: string; width: numb
   empty: { text: "Empty — retry", color: "#B45309", width: 150 },
   error: { text: "Couldn't run — retry", color: "#B91C1C", width: 188 },
   credits: { text: "Out of credits", color: "#B91C1C", width: 150 },
+  // The LLM PROVIDER is unavailable (both provider keys dry) — explicitly NOT
+  // the user's app credits, so it never says "Out of credits".
+  provider: { text: "AI unavailable — retry", color: "#B91C1C", width: 196 },
 };
 
 function Verb({

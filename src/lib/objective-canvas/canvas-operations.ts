@@ -238,7 +238,12 @@ export const CANVAS_OPERATIONS: CanvasOperation[] = [
  *  call look identical to an empty one — the core "diverge doesn't work, just
  *  goes empty" report. We now throw this so the UI can tell the truth + the
  *  user knows a retry is worthwhile. */
-export type OperationErrorReason = "network" | "server" | "credits" | "auth";
+export type OperationErrorReason =
+  | "network"
+  | "server"
+  | "credits" // the USER's app-credit balance is too low
+  | "provider" // the LLM provider key is out of credits (NOT the user's fault)
+  | "auth";
 
 export class OperationTransportError extends Error {
   constructor(
@@ -288,9 +293,23 @@ async function postOp(endpoint: string, body: string): Promise<Response> {
   );
 }
 
-/** Map a non-OK response to a typed transport error (credits / auth / server). */
-function transportErrorFor(res: Response): OperationTransportError {
-  if (res.status === 402) return new OperationTransportError("credits");
+/** Map a non-OK response to a typed transport error (credits / provider / auth
+ *  / server). For a 402 we read the body `code` to tell the USER's app-credit
+ *  exhaustion (`insufficient_credits` → "credits") from the LLM PROVIDER key
+ *  running dry (`credits_exhausted` → "provider") — the two must not share the
+ *  misleading "Out of credits" message when the user has a full balance. */
+async function transportErrorFor(res: Response): Promise<OperationTransportError> {
+  if (res.status === 402) {
+    let code: string | undefined;
+    try {
+      code = ((await res.json()) as { code?: string })?.code;
+    } catch {
+      /* no/empty body — default to the user-credit reading below */
+    }
+    return new OperationTransportError(
+      code === "credits_exhausted" ? "provider" : "credits",
+    );
+  }
   if (res.status === 401 || res.status === 403)
     return new OperationTransportError("auth");
   return new OperationTransportError("server", `HTTP ${res.status}`);
@@ -336,7 +355,7 @@ export async function runAugmentOperation(
       temperature: opts.temperature,
     }),
   );
-  if (!res.ok) throw transportErrorFor(res);
+  if (!res.ok) throw await transportErrorFor(res);
   let json: { mode?: string; result?: unknown };
   try {
     json = (await res.json()) as { mode?: string; result?: unknown };
@@ -429,7 +448,7 @@ async function runIdeaOp(
       prompt: opts.prompt,
     }),
   );
-  if (!res.ok) throw transportErrorFor(res);
+  if (!res.ok) throw await transportErrorFor(res);
   let json: {
     items?: Array<{ title?: string; subtitle?: string; type?: string }>;
   };
