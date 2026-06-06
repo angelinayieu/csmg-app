@@ -145,6 +145,7 @@ export function CatalogTile({
     <button
       type="button"
       onClick={onOpen}
+      data-library-tile={obj.id}
       title={`Open "${obj.title}"`}
       style={{ ...tileBase, background: pal.bg }}
       onMouseEnter={(e) => {

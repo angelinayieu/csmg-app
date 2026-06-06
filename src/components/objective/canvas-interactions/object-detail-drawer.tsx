@@ -318,18 +318,26 @@ function tasteHitsFor(
   return out;
 }
 
-function ObjectDetailDrawer({
+export function ObjectDetailDrawer({
   spaceId,
   objectId,
   editor,
   onClose,
   onNavigate,
+  embedded = false,
+  onTitleChange,
 }: {
   spaceId: string;
   objectId: string;
   editor: Editor;
   onClose: () => void;
   onNavigate: (id: string) => void;
+  /** When true, render only the scroll body — the parent (Library rail) wraps
+   *  it in its own chrome (header + side-fork rail container). */
+  embedded?: boolean;
+  /** Notify the parent of the resolved title so it can render its own header.
+   *  Only fires while `embedded`. */
+  onTitleChange?: (title: string) => void;
 }) {
   // data starts null (lazy); the component is keyed by objectId so navigating to
   // a linked object remounts it fresh — no setState in the effect body.
@@ -482,18 +490,13 @@ function ObjectDetailDrawer({
   }
   const linkedIds = new Set(links.map((l) => l.id));
 
-  return (
-    <div onPointerDown={(e) => e.stopPropagation()} style={rail}>
-        {/* header */}
-        <div style={header}>
-          <Boxes style={{ width: 15, height: 15, color: appleVibe.text.secondary }} strokeWidth={2.2} />
-          <span style={titleStyle}>{name}</span>
-          <button type="button" title="Close" onClick={onClose} style={closeBtn}>
-            <X style={{ width: 16, height: 16 }} strokeWidth={2.2} />
-          </button>
-        </div>
+  // Notify embedded host of the resolved title so it can render its own header.
+  useEffect(() => {
+    if (embedded && onTitleChange && obj) onTitleChange(name);
+  }, [embedded, onTitleChange, name, obj]);
 
-        <div style={scroll}>
+  const scrollBody = (
+        <div style={embedded ? scrollEmbedded : scroll}>
           {loading ? (
             <div style={emptyRow}>
               <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} /> Loading object…
@@ -859,6 +862,21 @@ function ObjectDetailDrawer({
             </>
           )}
         </div>
+  );
+
+  if (embedded) return scrollBody;
+
+  return (
+    <div onPointerDown={(e) => e.stopPropagation()} style={rail}>
+        {/* header */}
+        <div style={header}>
+          <Boxes style={{ width: 15, height: 15, color: appleVibe.text.secondary }} strokeWidth={2.2} />
+          <span style={titleStyle}>{name}</span>
+          <button type="button" title="Close" onClick={onClose} style={closeBtn}>
+            <X style={{ width: 16, height: 16 }} strokeWidth={2.2} />
+          </button>
+        </div>
+        {scrollBody}
     </div>
   );
 }
@@ -1159,7 +1177,10 @@ export function ObjectDetailMount({ spaceId, editor }: { spaceId: string; editor
 // above board chrome (z 90) but below true modals (Resolution Studio z 200).
 const rail: CSSProperties = {
   position: "fixed",
-  top: 16,
+  // Clear the unified top-right pill bar (BoardTopRightBar lives at top:16,
+  // ~32-38px tall) so this drawer never paints over the menu pills. Matches
+  // the Library rail's `top: 64` so all floating rails align.
+  top: 64,
   right: 16,
   bottom: 16,
   zIndex: 90,
@@ -1264,6 +1285,9 @@ const closeBtn: CSSProperties = {
   flexShrink: 0,
 };
 const scroll: CSSProperties = { flex: 1, overflowY: "auto", padding: "12px 16px 18px", minHeight: 0 };
+// Embedded variant — the Library rail's catalog body already pads at
+// "0 12px 14px", so match that to keep the gutter consistent when forking.
+const scrollEmbedded: CSSProperties = { flex: 1, overflowY: "auto", padding: "10px 12px 14px", minHeight: 0 };
 const emptyRow: CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "16px 2px", color: appleVibe.text.tertiary, fontSize: 12.5 };
 const typePill: CSSProperties = {
   display: "inline-flex",

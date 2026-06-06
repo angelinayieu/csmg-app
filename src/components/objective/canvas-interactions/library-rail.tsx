@@ -79,7 +79,7 @@ const GLOSSARY_KIND_LABEL: Record<GlossaryKind, string> = {
   outcome: "Outcomes",
 };
 import { slugifyConcept } from "@/lib/objective-canvas/normalize-annotations";
-import { OPEN_CARD_DETAIL_EVENT } from "@/components/objective/canvas-interactions/object-detail-drawer";
+import { ObjectDetailDrawer } from "@/components/objective/canvas-interactions/object-detail-drawer";
 import { openNotebook } from "@/components/objective/board-bus";
 import { GlossaryTimelineView } from "@/components/objective/glossary-timeline-view";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -1886,6 +1886,81 @@ function toggle(set: Dispatch<SetStateAction<Set<string>>>, key: string) {
   });
 }
 
+/**
+ * Curved "official" bezier connector between the catalog tile that was clicked
+ * and the forked detail rail — same hairline + white-filled circular endpoints
+ * the canvas uses for spec/sharpening forks. Lives in screen space (the rails
+ * are position:fixed/absolute), re-measures via rAF so it tracks scroll +
+ * resize + the detail-rail expand-to-full animation. pointer-events:none so
+ * it never blocks the underlying rails.
+ */
+function LibraryForkConnector({ objectId, full }: { objectId: string; full: boolean }) {
+  const [geom, setGeom] = useState<{
+    from: { x: number; y: number };
+    to: { x: number; y: number };
+    d: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let raf = 0;
+    let alive = true;
+    const tick = () => {
+      if (!alive) return;
+      const tile = document.querySelector<HTMLElement>(
+        `[data-library-tile="${CSS.escape(objectId)}"]`,
+      );
+      const rail = document.querySelector<HTMLElement>("[data-library-fork-rail]");
+      if (!tile || !rail) {
+        setGeom((g) => (g === null ? g : null));
+        raf = window.requestAnimationFrame(tick);
+        return;
+      }
+      const tr = tile.getBoundingClientRect();
+      const rr = rail.getBoundingClientRect();
+      // Anchor on inward-facing edges → curve reads as "out of / into".
+      const from = { x: rr.right, y: rr.top + rr.height / 2 };
+      const to = { x: tr.left, y: tr.top + tr.height / 2 };
+      const dx = Math.max(36, Math.abs(to.x - from.x) * 0.45);
+      const d = `M ${from.x} ${from.y} C ${from.x + dx} ${from.y}, ${to.x - dx} ${to.y}, ${to.x} ${to.y}`;
+      setGeom((prev) =>
+        prev &&
+        prev.from.x === from.x &&
+        prev.from.y === from.y &&
+        prev.to.x === to.x &&
+        prev.to.y === to.y
+          ? prev
+          : { from, to, d },
+      );
+      raf = window.requestAnimationFrame(tick);
+    };
+    raf = window.requestAnimationFrame(tick);
+    return () => {
+      alive = false;
+      window.cancelAnimationFrame(raf);
+    };
+  }, [objectId, full]);
+
+  if (!geom) return null;
+  return (
+    <svg
+      aria-hidden
+      style={{
+        position: "fixed",
+        inset: 0,
+        width: "100vw",
+        height: "100vh",
+        pointerEvents: "none",
+        zIndex: 91,
+        overflow: "visible",
+      }}
+    >
+      <path d={geom.d} fill="none" stroke="#C3CAD7" strokeWidth={1.75} strokeLinecap="round" />
+      <circle cx={geom.from.x} cy={geom.from.y} r={4} fill="#ffffff" stroke="#C3CAD7" strokeWidth={1.5} />
+      <circle cx={geom.to.x} cy={geom.to.y} r={4} fill="#ffffff" stroke="#C3CAD7" strokeWidth={1.5} />
+    </svg>
+  );
+}
+
 export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: Editor }) {
   // Open state is shared via the board-panel signal — the trigger lives in
   // BoardTopRightBar; this component is headless until opened.
@@ -1897,20 +1972,31 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
   const [layers, setLayers] = useState<LayerInfo[]>([]);
   const [rooms, setRooms] = useState<{ id: string; title: string }[]>([]);
   const [crossRoom, setCrossRoom] = useState(false);
+  // Detail FORK — opens automatically as a second rail to the LEFT of the
+  // catalog the moment a card is clicked, linked by a curved bezier connector
+  // with circular endpoints (LibraryForkConnector). Catalog stays put; nothing
+  // ever sits on top of the catalog or under the top pill bar.
+  const [inlineId, setInlineId] = useState<string | null>(null);
+  const [inlineTitle, setInlineTitle] = useState<string>("");
+  const detailOpen = inlineId !== null;
+  const closeDetail = useCallback(() => {
+    setInlineId(null);
+    setInlineTitle("");
+  }, []);
 
-  // Escape always closes the panel — a guaranteed exit independent of the
-  // header's close ✕ (which could be obscured/clipped on some viewports).
+  // Escape: full→restore, then detail→close, then rail→close.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (full) setFull(false);
+        else if (detailOpen) closeDetail();
         else setOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, full]);
+  }, [open, full, detailOpen, closeDetail]);
 
   // Fetch the space's library_objects (shared by both views) + the layer-stack
   // names. Pulled out as a callable so the Objects view can refetch after an
@@ -2036,14 +2122,13 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
     return () => window.clearTimeout(t);
   }, [editor, spaceId]);
 
-  // Open an object → fire OPEN_CARD_DETAIL_EVENT; the board-level
-  // ObjectDetailMount listens and opens the object detail drawer.
+  // Open an object → AUTO-FORK into a side rail beside the catalog (not the
+  // floating ObjectDetailMount drawer, which would land on top of the catalog
+  // / the top pill bar). The curved LibraryForkConnector links the source tile
+  // and the fork rail visually.
   function openObject(o: LibObject) {
-    try {
-      window.dispatchEvent(new CustomEvent(OPEN_CARD_DETAIL_EVENT, { detail: { objectId: o.id } }));
-    } catch {
-      /* event is best-effort */
-    }
+    setInlineTitle(o.title);
+    setInlineId(o.id);
   }
 
   // Headless when closed — the trigger lives in BoardTopRightBar. The cross-room
@@ -2060,6 +2145,53 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
   return (
     <>
       {crossRoom && <CrossRoomBrowser spaceId={spaceId} onClose={() => setCrossRoom(false)} />}
+
+      {/* Detail fork — auto-spawns to the LEFT of the catalog the moment a
+          tile is clicked. Same height + chrome as the catalog rail; bezier
+          connector links the two so the fork reads as "from this card". */}
+      {open && detailOpen && (
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          data-library-fork-rail
+          style={detailSideRailStyle(full)}
+        >
+          <div style={railHeader}>
+            <Boxes style={{ width: 15, height: 15, color: appleVibe.text.secondary, flexShrink: 0 }} strokeWidth={2.2} />
+            <span style={inlineTitleStyle} title={inlineTitle || "Object"}>{inlineTitle || "Object"}</span>
+            <button
+              type="button"
+              title="Close detail"
+              aria-label="Close detail"
+              onClick={closeDetail}
+              style={closeBtn}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = appleVibe.accent.primary;
+                e.currentTarget.style.color = appleVibe.text.onAccent;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = appleVibe.surface.chip;
+                e.currentTarget.style.color = appleVibe.text.secondary;
+              }}
+            >
+              <X style={{ width: 16, height: 16 }} strokeWidth={2.4} />
+            </button>
+          </div>
+          <ObjectDetailDrawer
+            key={inlineId!}
+            spaceId={spaceId}
+            objectId={inlineId!}
+            editor={editor}
+            embedded
+            onTitleChange={setInlineTitle}
+            onNavigate={(id) => setInlineId(id)}
+            onClose={closeDetail}
+          />
+        </div>
+      )}
+      {open && detailOpen && inlineId && (
+        <LibraryForkConnector objectId={inlineId} full={full} />
+      )}
+
       {open && (
       <div onPointerDown={(e) => e.stopPropagation()} style={railStyle(full)}>
         <div style={railHeader}>
@@ -2146,13 +2278,54 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
 }
 
 // ── styles ──
+// Shared top clearance — all docked rails (catalog + fork) sit BELOW the
+// unified top-right pill bar (BoardTopRightBar at top:16, ~36px tall + chrome).
+// 72px = 16 (bar top) + ~36 (bar) + 20 (visible gap so the pill bar reads as
+// its own object). Bumped from 64 so the pill bar is unambiguously above.
+const RAIL_TOP = 72;
+// Side-by-side detail fork rail — sits to the LEFT of the catalog rail. Same
+// height + chrome as railStyle, offset so neither obscures the other and
+// neither covers the top pill bar.
+const detailSideRailStyle = (full: boolean): CSSProperties => ({
+  position: "absolute",
+  top: full ? 12 : RAIL_TOP,
+  bottom: 12,
+  // Catalog rail = right:16 + width:384 → its left edge sits at right:400.
+  // 12px gutter between the two so they read as distinct cards.
+  right: full ? "calc(50% + 12px)" : 16 + 384 + 12,
+  width: full ? "calc(50% - 24px)" : 384,
+  zIndex: 92,
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  borderRadius: appleVibe.radius.lg,
+  background: "var(--glass-float-bg)",
+  backdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+  WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.7)",
+  border: "1px solid var(--glass-border)",
+  boxShadow: "inset 0 1px 0 var(--glass-highlight), 0 28px 60px -24px rgba(11,18,40,0.38)",
+  fontFamily: appleVibe.font.stack,
+  transition: "width var(--dur-normal) var(--ease-spring-soft)",
+});
+const inlineTitleStyle: CSSProperties = {
+  marginLeft: 6,
+  flex: 1,
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  fontSize: 13,
+  fontWeight: 700,
+  letterSpacing: "-0.01em",
+  color: appleVibe.text.primary,
+};
 const railStyle = (full: boolean): CSSProperties => ({
-  // Non-full: opens BELOW the unified top-right bar (top:16, ~38px tall) and
-  // right-aligned to it, so the bar + this rail's own close ✕ stay visible
-  // together — the close is well inside the card, never out in the corner.
+  // Non-full: opens BELOW the unified top-right pill bar (top:16, ~36px tall)
+  // so the bar + this rail's own close ✕ stay visible together. The clearance
+  // is the shared RAIL_TOP constant so all rails align below the same bar.
   // Full screen: cover everything (its own restore/close chrome takes over).
   position: "absolute",
-  top: full ? 12 : 64,
+  top: full ? 12 : RAIL_TOP,
   bottom: 12,
   right: full ? 12 : 16,
   width: full ? "calc(100% - 24px)" : 384,
