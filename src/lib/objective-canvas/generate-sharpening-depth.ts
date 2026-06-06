@@ -21,8 +21,44 @@ import {
   normalizeSalience,
   type PromptSharpeningArtifact,
   type SalienceMetadata,
+  type SalienceAnnotation,
 } from "./prompt-sharpening-prompt";
 import { patchObjectiveCanvasState } from "./clarifying-state";
+
+const slugifyConcept = (s: string) =>
+  s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 48);
+
+/** Fallback salience when the LLM depth pass yields none (truncation / model
+ *  error). Derives a usable priority map from the fast pass's
+ *  `ranked_ambiguities` (which always exist) so the downstream — priority map,
+ *  resolve panel, goal rail — NEVER goes blank. Coarser than the real pass (no
+ *  micro-decomposition, no candidate readings) but never nothing. */
+function deriveSalienceFromRanked(
+  artifact: PromptSharpeningArtifact,
+): SalienceAnnotation[] {
+  const ranked = Array.isArray(artifact.ranked_ambiguities)
+    ? artifact.ranked_ambiguities
+    : [];
+  return ranked.slice(0, 8).map((r) => {
+    const uncertainty =
+      r.severity === "high" ? 0.85 : r.severity === "medium" ? 0.6 : 0.4;
+    const phrase =
+      (r.ambiguity_type || "").replace(/ambiguity/i, "").trim() ||
+      (r.ambiguity || "").slice(0, 48) ||
+      "Ambiguity";
+    const leverage = 0.7;
+    return {
+      phrase,
+      kind: "concept",
+      leverage,
+      uncertainty,
+      why: (r.ambiguity || r.question_to_resolve || "").trim(),
+      candidate_readings: [],
+      concept_slug: slugifyConcept(phrase),
+      priority: Math.round(leverage * (0.5 + 0.5 * uncertainty) * 1000) / 1000,
+    };
+  });
+}
 
 // The depth pass is lazy/background, so quality matters more than raw speed.
 // Sonnet-4-6 is the reliable, current default; bump to BEST_CLAUDE_MODEL for
@@ -62,29 +98,39 @@ export async function generateSharpeningDepthForSpace(
     const sharpened = (artifact.sharpened_prompt || raw).trim();
     if (sharpened.length < 4) return null;
 
-    const result = await llmJSON<Record<string, unknown>>({
-      system: SHARPENING_DEPTH_SYSTEM,
-      user: SHARPENING_DEPTH_USER(raw, sharpened),
-      provider: "anthropic",
-      model: DEPTH_MODEL,
-      // Depth pass returns more than the fast pass: interpretation fields + up
-      // to ~10 salience annotations, and EACH annotation now also carries 2–4
-      // micro_questions (added later). That ~tripled the output, so the prior
-      // 4096 cap truncated the LAST schema field (salience_annotations) →
-      // normalizeSalience returned [] → the function returned null and nothing
-      // persisted (no salience → no priority map, no "Optimize for", no resolve
-      // panel — the pipeline silently stalled after the heatmap). 8192 restores
-      // real headroom for the micro-decomposed output. If it ever truncates
-      // again, lower the annotation/micro cap rather than starving the cap.
-      maxTokens: 8192,
-      responseSchema: SHARPENING_DEPTH_RESPONSE_SCHEMA,
-    });
+    // Resilient: catch the LLM error locally (don't let it bubble to the outer
+    // catch) so we can fall back to ranked_ambiguities below either way.
+    let result: Record<string, unknown> | null = null;
+    try {
+      result = await llmJSON<Record<string, unknown>>({
+        system: SHARPENING_DEPTH_SYSTEM,
+        user: SHARPENING_DEPTH_USER(raw, sharpened),
+        provider: "anthropic",
+        model: DEPTH_MODEL,
+        // Interpretation fields + up to ~10 salience annotations, each with 2–4
+        // micro_questions — a large output. 8192 is sonnet's default cap; if it
+        // still truncates, the ranked-ambiguities fallback below keeps the
+        // downstream alive.
+        maxTokens: 8192,
+        responseSchema: SHARPENING_DEPTH_RESPONSE_SCHEMA,
+      });
+    } catch (e) {
+      console.warn(
+        "[sharpening-depth] LLM call failed; falling back to ranked_ambiguities:",
+        e instanceof Error ? e.message : String(e),
+      );
+    }
 
-    const { hidden, salience } = normalizeSalience(result);
+    const { hidden, salience } = normalizeSalience(result ?? {});
     if (!salience.annotations.length) {
-      // Nothing usable — don't persist an empty block (lets a later retry
-      // try again rather than caching a dud).
-      return null;
+      // The LLM depth pass produced no usable salience (truncation OR error).
+      // Rather than stall the WHOLE downstream (priority map + resolve panel +
+      // goal rail all need salience), derive a fallback priority map from the
+      // fast pass's ranked_ambiguities so the user ALWAYS gets a priority map +
+      // can resolve. Coarser (no micro-decomposition) but never blank.
+      const fallback = deriveSalienceFromRanked(artifact);
+      if (!fallback.length) return null;
+      salience.annotations = fallback;
     }
     salience.generated_at = new Date().toISOString();
 
