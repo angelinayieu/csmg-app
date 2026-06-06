@@ -514,9 +514,19 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
     };
     let unlisten: (() => void) | undefined;
     try {
-      // Only react to USER store changes (typing, dragging) — programmatic
-      // shape additions (e.g. the ranker focusing a node) shouldn't re-trigger.
-      unlisten = editor.store.listen(schedule, { source: "user", scope: "all" });
+      // Only react to USER edits of BOARD CONTENT (typing, dragging a card).
+      // scope:"document" is critical — scope:"all" ALSO fires on camera /
+      // selection / viewport (instance-scope) churn, and the fork-out camera
+      // animation (centerOnPoint, + its decay timeout) emits a burst of those
+      // every frame. Under scope:"all" each frame re-armed this debounce and, on
+      // settle, POSTed /micro-address — which (stacked on the load-time intake
+      // polls) saturated the browser's connection queue → ERR_TIMED_OUT across
+      // every request. source:"user" additionally gates out programmatic deploys
+      // (e.g. the ranker focusing a node).
+      unlisten = editor.store.listen(schedule, {
+        source: "user",
+        scope: "document",
+      });
     } catch {
       /* tldraw store unavailable — fall back to event-only triggers. */
     }

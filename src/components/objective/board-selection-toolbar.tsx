@@ -74,9 +74,13 @@ export function BoardSelectionToolbar({
   customBusy?: boolean;
 }) {
   const isConnect = count === 2;
-  const label = isConnect ? "Connect" : "Synthesize";
+  // Labels lead with the OUTPUT SHAPE the user gets on the board, not the verb.
+  // (Connect at 2 stays as "Connect" — it's a different output: a named link.)
+  const label = isConnect ? "Connect" : "Insight card";
   const Icon = isConnect ? GitMerge : Sparkle;
-  const hint = isConnect ? "name the relationship" : `weave ${count} together`;
+  const hint = isConnect
+    ? "name the relationship · 1 link"
+    : `1 insight card from ${count} · ~5s`;
   // Any AI action running locks the buttons; each shows its own spinner.
   const anyBusy = busy || deepBusy || specBusy || prototypeBusy || customBusy;
 
@@ -105,7 +109,12 @@ export function BoardSelectionToolbar({
         gap: 8,
       }}
     >
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    {/* Three output kinds — physically separated so the user can SEE the
+        difference at a glance:
+          SUMMARIZE (one new card / map) · BUILD (heavy artifact) · COMMIT (no AI). */}
+    <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+      {/* ── SUMMARIZE: instant insight from the selection. ────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       {/* Primary verb — the existing "one verb at a time" AI action. */}
       {onRun && (
         <button
@@ -154,16 +163,16 @@ export function BoardSelectionToolbar({
         </button>
       )}
 
-      {/* Pro-Claude deep synthesis — reads the WHOLE selection (post-its +
-          text + cards), searches the web, and forks a map of cross-linked
-          insights. Quiet glass styling so the heavier, opt-in action reads as
-          secondary to the instant Connect/Synthesize verb. */}
+      {/* Insight map — Pro-Claude reads the WHOLE selection (post-its +
+          text + cards), searches the web, and forks a hub+branch map of
+          cross-linked insights with citations. Quiet glass so the heavier
+          option reads as a sibling of (not louder than) Insight card. */}
       {onDeepRun && (
         <button
           type="button"
           onClick={onDeepRun}
           disabled={anyBusy}
-          title="Deep Synthesize — pro Claude reads your selection + searches the web, then forks a map of cross-linked insights"
+          title="Insight map — Pro Claude reads your selection + searches the web, then forks a hub+branches map of cross-linked insights with citations · ~45s"
           className="flex items-center gap-2 rounded-full transition-all duration-150 ease-out hover:scale-[1.03] active:scale-95"
           style={{
             background: "rgba(255,255,255,0.94)",
@@ -186,7 +195,10 @@ export function BoardSelectionToolbar({
           ) : (
             <Globe className="h-4 w-4" strokeWidth={2.4} />
           )}
-          {deepBusy ? "Researching…" : "Deep Synthesize"}
+          {deepBusy ? "Researching…" : "Insight map"}
+          {!deepBusy && (
+            <span style={costChip(appleVibe.accent.primary)}>~45s · web</span>
+          )}
           {!deepBusy && deepCount > 0 && (
             <span
               style={{
@@ -207,14 +219,17 @@ export function BoardSelectionToolbar({
           )}
         </button>
       )}
+      </div>
 
+      {/* ── BUILD: heavy synthesis into ONE structured artifact. ──────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       {/* Forge a full spec from the WHOLE selection (synthesize → SpecForge). */}
       {onSpec && (
         <button
           type="button"
           onClick={onSpec}
           disabled={anyBusy}
-          title="Forge a full spec from this selection"
+          title="Tech spec — runs the SpecForge chain (root-cause → MVPs → architecture + data model + UI plan) and drops one structured spec card · ~30s"
           className="flex items-center gap-2 rounded-full transition-all duration-150 ease-out hover:scale-[1.03] active:scale-95"
           style={quietGlass}
         >
@@ -223,7 +238,8 @@ export function BoardSelectionToolbar({
           ) : (
             <Wand2 className="h-3.5 w-3.5" strokeWidth={2.4} />
           )}
-          {specBusy ? "Forging…" : "Spec"}
+          {specBusy ? "Forging…" : "Tech spec"}
+          {!specBusy && <span style={costChipQuiet}>~30s</span>}
         </button>
       )}
 
@@ -233,7 +249,7 @@ export function BoardSelectionToolbar({
           type="button"
           onClick={onPrototype}
           disabled={anyBusy}
-          title="Build a prototype from this selection (forge -> spec -> prototype)"
+          title="Prototype — forges a tech spec, then builds a clickable UI prototype card · ~45s"
           className="flex items-center gap-2 rounded-full transition-all duration-150 ease-out hover:scale-[1.03] active:scale-95"
           style={quietGlass}
         >
@@ -243,6 +259,7 @@ export function BoardSelectionToolbar({
             <AppWindow className="h-3.5 w-3.5" strokeWidth={2.4} />
           )}
           {prototypeBusy ? "Building..." : "Prototype"}
+          {!prototypeBusy && <span style={costChipQuiet}>~45s</span>}
         </button>
       )}
 
@@ -252,7 +269,7 @@ export function BoardSelectionToolbar({
           type="button"
           onClick={() => setCustomOpen((o) => !o)}
           disabled={anyBusy}
-          title="Run your own instruction over this selection"
+          title="Custom — run your own instruction over this selection"
           className="flex items-center gap-2 rounded-full transition-all duration-150 ease-out hover:scale-[1.03] active:scale-95"
           style={{
             ...quietGlass,
@@ -269,7 +286,10 @@ export function BoardSelectionToolbar({
           {customBusy ? "Running…" : "Custom"}
         </button>
       )}
+      </div>
 
+      {/* ── COMMIT: no AI — just persist the selection to the Library. ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       {/* Secondary, quiet action — save the selection to the Library. */}
       {onSaveToLibrary && (
         <button
@@ -299,6 +319,7 @@ export function BoardSelectionToolbar({
           {saved ? "Saved" : "Save to Library"}
         </button>
       )}
+      </div>
     </div>
 
       {/* Inline custom-instruction input (toggled by the Custom button). */}
@@ -367,6 +388,34 @@ export function BoardSelectionToolbar({
     </div>
   );
 }
+
+// Tiny "~30s" / "~45s · web" cost chips that ride inside the heavier
+// buttons. The point: the user can SEE which action is the multi-second
+// AI hit before they click, without us spelling it out in words.
+function costChip(accent: string): CSSProperties {
+  return {
+    marginLeft: 2,
+    padding: "1px 6px",
+    borderRadius: 999,
+    background: withAlpha(accent, "14"),
+    color: accent,
+    fontSize: 9.5,
+    fontWeight: 700,
+    letterSpacing: "0.02em",
+    whiteSpace: "nowrap",
+  };
+}
+const costChipQuiet: CSSProperties = {
+  marginLeft: 2,
+  padding: "1px 6px",
+  borderRadius: 999,
+  background: "rgba(11,18,40,0.06)",
+  color: "rgba(11,18,40,0.55)",
+  fontSize: 9.5,
+  fontWeight: 700,
+  letterSpacing: "0.02em",
+  whiteSpace: "nowrap",
+};
 
 const quietGlass: CSSProperties = {
   background: "rgba(255,255,255,0.94)",
