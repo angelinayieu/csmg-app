@@ -599,7 +599,10 @@ function PromptSharpeningRenderer({
   }, [spaceId, shape.id, editor]);
 
   // Load already-resolved concepts once the card is live (so reopening a board
-  // with prior resolutions shows the check-offs without re-resolving).
+  // with prior resolutions shows the check-offs without re-resolving). The
+  // resolvedLoaded flag gates the autopilot below — it must NOT fire before we
+  // know whether the objective was already touched (else it could overwrite).
+  const [resolvedLoaded, setResolvedLoaded] = useState(false);
   useEffect(() => {
     if (loading || !spaceId) return;
     let cancelled = false;
@@ -615,9 +618,12 @@ function PromptSharpeningRenderer({
         const set = new Set<string>();
         for (const rr of j.artifact?.resolutions ?? [])
           if (rr?.concept_slug) set.add(rr.concept_slug);
-        if (!cancelled) setResolvedSlugs(set);
+        if (!cancelled) {
+          setResolvedSlugs(set);
+          setResolvedLoaded(true);
+        }
       } catch {
-        /* soft-fail */
+        /* soft-fail — leave resolvedLoaded false so autopilot won't fire blind */
       }
     })();
     return () => {
@@ -683,10 +689,9 @@ function PromptSharpeningRenderer({
   // Feature/Variable cards. Falls back to each concept's top candidate reading
   // if the auto-resolve call fails so something is always committed.
   const [autoResolving, setAutoResolving] = useState(false);
-  const [hovered, setHovered] = useState(false);
-  async function aiDecideInline(e: React.MouseEvent) {
-    e.stopPropagation();
+  async function runAutoResolve(opts?: { decompose?: boolean }) {
     if (!salience || salience.length === 0 || autoResolving) return;
+    const decompose = opts?.decompose ?? true;
     setAutoResolving(true);
     const now = new Date().toISOString();
     const slugify = (s: string) =>
@@ -773,16 +778,59 @@ function PromptSharpeningRenderer({
           /* soft-fail — resolutions still saved */
         }
         refreshSharpening(spaceId);
-        window.dispatchEvent(
-          new CustomEvent("objective-board:decompose-into-cards", {
-            detail: sp ? { objective: sp } : undefined,
-          }),
-        );
+        if (decompose) {
+          window.dispatchEvent(
+            new CustomEvent("objective-board:decompose-into-cards", {
+              detail: sp ? { objective: sp } : undefined,
+            }),
+          );
+        }
       }
     } finally {
       setAutoResolving(false);
     }
   }
+  // Manual "Let AI decide" click → full path (resolve + decompose into cards).
+  function aiDecideInline(e: React.MouseEvent) {
+    e.stopPropagation();
+    void runAutoResolve({ decompose: true });
+  }
+
+  // ── Full autopilot (user opted in) ──
+  // On a FRESH objective (nothing resolved yet) the AI auto-commits its best
+  // reading for every open concept with NO click — filling the glossary +
+  // reframing the prompt so the user focuses on the concepts, not the chore of
+  // resolving. Resolve-only (no auto-decompose); the manual "Let AI resolve
+  // these" button remains for re-runs / recovery.
+  //
+  // Storm-safe guards (this fires LLM calls, so it must never loop):
+  //   • localStorage `autopilot-resolve:${spaceId}` — fires AT MOST ONCE per
+  //     space, set optimistically BEFORE the call so remounts/reloads can't
+  //     re-fire (the same pattern that ended the request-storm).
+  //   • a per-mount ref as a secondary guard.
+  //   • only after the resolved-state load settles (resolvedLoaded) AND with
+  //     NOTHING already resolved (resolvedSlugs empty) — never overwrites prior
+  //     manual/AI resolutions on a returning board.
+  const autopilotFired = useRef(false);
+  useEffect(() => {
+    if (loading || !spaceId || autopilotFired.current) return;
+    if (!resolvedLoaded || autoResolving) return;
+    if (!salience || salience.length === 0) return;
+    if (resolvedSlugs.size > 0) return; // already engaged → leave it alone
+    const key = `autopilot-resolve:${spaceId}`;
+    try {
+      if (window.localStorage.getItem(key)) {
+        autopilotFired.current = true;
+        return;
+      }
+      window.localStorage.setItem(key, "1");
+    } catch {
+      /* private mode — the ref still guards this mount */
+    }
+    autopilotFired.current = true;
+    void runAutoResolve({ decompose: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, spaceId, resolvedLoaded, autoResolving, salience, resolvedSlugs]);
 
   // Fork EVERY ambiguity at once → one insight-card each to address. Uses the
   // ranked (high-impact) set, falling back to high/medium heatmap zones.
@@ -868,8 +916,6 @@ function PromptSharpeningRenderer({
   return (
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all", position: "relative" }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       <div
         ref={contentRef}
@@ -1515,43 +1561,10 @@ function PromptSharpeningRenderer({
         )}
       </div>
 
-      {/* Hovering floating resolve pill. The objective card is pure title+desc;
-          the resolve action floats in on hover (gently), firing the AI to
-          resolve every ambiguity. The 3-mode choice lives on the forked cards. */}
-      {!loading && salience && salience.length > 0 && (
-        <button
-          type="button"
-          onPointerDown={stopEventPropagation}
-          onClick={aiDecideInline}
-          disabled={autoResolving}
-          title="Let AI resolve every ambiguity"
-          style={{
-            position: "absolute",
-            left: "50%",
-            bottom: 12,
-            transform: `translateX(-50%) translateY(${hovered || autoResolving ? 0 : 8}px)`,
-            opacity: hovered || autoResolving ? 1 : 0,
-            transition: "opacity 0.22s ease, transform 0.22s ease",
-            pointerEvents: hovered || autoResolving ? "all" : "none",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "8px 16px",
-            borderRadius: 999,
-            border: "none",
-            cursor: autoResolving ? "default" : "pointer",
-            background: color,
-            color: "white",
-            fontSize: 12.5,
-            fontWeight: 650,
-            boxShadow: `0 10px 24px -6px ${color}AA`,
-            whiteSpace: "nowrap",
-          }}
-        >
-          <Sparkle style={{ width: 14, height: 14 }} strokeWidth={2.5} />
-          {autoResolving ? "Resolving…" : "AI resolve"}
-        </button>
-      )}
+      {/* The floating "AI resolve" pill was lifted OFF this card into its own
+          persistent on-board pill that sits below the heatmap + priority fork
+          (the merge point of the two-way fork) — see resolve-pill-shape.tsx.
+          The objective card stays pure title + desc. */}
     </HTMLContainer>
   );
 }

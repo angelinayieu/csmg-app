@@ -43,7 +43,15 @@ export async function runDeepResolve(
   spaceId: string,
   seed: ResolveConcept[],
   boardCards: { id: string; text: string }[],
-  opts?: { maxRounds?: number; leverageGate?: number },
+  opts?: {
+    maxRounds?: number;
+    leverageGate?: number;
+    /** Fired after each resolve round commits — lets a caller refresh the UI
+     *  progressively (e.g. the goal rail) instead of only at the very end of a
+     *  multi-round run. `fresh` is how many NEW emergent questions that round
+     *  surfaced to chase next. Soft — a throwing callback never breaks the loop. */
+    onRound?: (info: { round: number; fresh: number }) => void;
+  },
 ): Promise<DeepResolveResult | null> {
   if (!spaceId || seed.length === 0) return null;
   const maxRounds = Math.max(1, Math.min(4, opts?.maxRounds ?? 3));
@@ -101,6 +109,14 @@ export async function runDeepResolve(
         concept_slug: a.concept_slug,
       }))
       .filter((c) => c.phrase.length > 0);
+
+    // Progressive UI hook: this round committed + we know how many fresh
+    // questions it opened. Let the caller repaint (soft — never breaks the loop).
+    try {
+      opts?.onRound?.({ round: rounds, fresh: toResolve.length });
+    } catch {
+      /* a bad callback never stops resolution */
+    }
   }
 
   return { sharpenedPrompt, shouldDecompose, rounds };

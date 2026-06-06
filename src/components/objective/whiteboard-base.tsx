@@ -209,6 +209,7 @@ import {
   deployPriorityMapCardOnBoard,
   clearLegacySharpeningArrows,
   ensureObjectiveSharpeningArrow,
+  ensureResolvePill,
 } from "./canvas-interactions/prompt-sharpening-board";
 import { reflowIntakeStack } from "./canvas-interactions/board-reflow";
 import {
@@ -925,6 +926,10 @@ export function WhiteboardBase({
     // Returning board: ensure the REAL objective→sharpening bound arrow exists
     // (deploy doesn't re-run on a returning visit).
     ensureObjectiveSharpeningArrow(ed);
+    // Returning board: re-drop the merged resolve pill below the heatmap +
+    // priority fork if both are out (idempotent; the flow-connector reactor
+    // re-wires its two converging connectors).
+    ensureResolvePill(ed);
     // Self-heal a board that wrongly carries a chatbox card ON TOP of a
     // promoted objective (stale draft id seeded intake onto a finished board).
     clearStaleChatboxCards(ed);

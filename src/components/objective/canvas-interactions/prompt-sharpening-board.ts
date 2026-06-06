@@ -16,6 +16,7 @@ import {
 } from "../shapes/prompt-sharpening-card-shape";
 import type { AmbiguityHeatmapCardShape } from "../shapes/ambiguity-heatmap-card-shape";
 import type { PriorityMapCardShape } from "../shapes/priority-map-card-shape";
+import type { ResolvePillShape } from "../shapes/resolve-pill-shape";
 import type { InsightCardShape } from "../shapes/insight-card-shape";
 import type { RoomCardShape } from "../shapes/room-card-shape";
 import type {
@@ -303,6 +304,8 @@ export function deployHeatmapCardOnBoard(
     { x: sb ? sb.midX : spot.x + HEATMAP_SIZE / 2, y: spot.y + HEATMAP_SIZE / 2 },
     { animation: { duration: 320 } },
   );
+  // If the priority branch is already out, both branches now exist → merge pill.
+  ensureResolvePill(editor);
 }
 
 /** Spawn a Priority Map card BELOW the heatmap card (or right of sharpening
@@ -363,4 +366,58 @@ export function deployPriorityMapCardOnBoard(
     { x: sb ? sb.midX : spot.x + PRIORITY_W / 2, y: spot.y + PRIORITY_H / 2 },
     { animation: { duration: 320 } },
   );
+  // The two-way fork now has both branches — drop the merged resolve pill that
+  // converges them.
+  ensureResolvePill(editor);
+}
+
+const RESOLVE_PILL_W = 220;
+const RESOLVE_PILL_H = 64;
+
+/** Drop the MERGED "AI resolve" pill below the heatmap + priority fork — the
+ *  convergence point of the two-way fork. Idempotent: only when BOTH forked
+ *  cards exist and no pill is out yet. The flow-connector reactor then wires a
+ *  real wire from each card down into the pill (see ensureSharpeningFlowConnectors).
+ *  Exported so the board can re-ensure it on restore (deploy doesn't re-run on a
+ *  returning visit). */
+export function ensureResolvePill(editor: Editor): void {
+  const shapes = editor.getCurrentPageShapes();
+  const heatmap = shapes.find((s) => s.type === "ambiguity-heatmap-card") as
+    | AmbiguityHeatmapCardShape
+    | undefined;
+  const priority = shapes.find((s) => s.type === "priority-map-card") as
+    | PriorityMapCardShape
+    | undefined;
+  // Need BOTH branches of the fork before the merge point makes sense.
+  if (!heatmap || !priority) return;
+  if (shapes.some((s) => s.type === "resolve-pill")) return;
+
+  const hb = editor.getShapePageBounds(heatmap.id);
+  const pb = editor.getShapePageBounds(priority.id);
+  if (!hb || !pb) return;
+
+  const spaceId = priority.props.spaceId || heatmap.props.spaceId;
+  const color = priority.props.color || heatmap.props.color || SHARPEN_COLOR;
+  const midX = (hb.midX + pb.midX) / 2;
+  const top = Math.max(hb.maxY, pb.maxY) + 72;
+  const spot = reserveSpace(
+    editor,
+    { w: RESOLVE_PILL_W, h: RESOLVE_PILL_H },
+    { anchorMidX: midX, preferredTop: top, gap: 24, allowPush: false },
+  );
+
+  const id = createShapeId();
+  editor.createShape<ResolvePillShape>({
+    id,
+    type: "resolve-pill",
+    x: spot.x,
+    y: spot.y,
+    props: {
+      w: RESOLVE_PILL_W,
+      h: RESOLVE_PILL_H,
+      spaceId,
+      sourceIds: `${heatmap.id},${priority.id}`,
+      color,
+    },
+  });
 }

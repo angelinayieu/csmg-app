@@ -946,7 +946,15 @@ declare module "@tldraw/tlschema" {
     "artifact-card": {
       w: number;
       h: number;
-      kind: "pain" | "feature" | "outcome" | "lab" | "mechanism";
+      kind:
+        | "pain"
+        | "feature"
+        | "outcome"
+        | "lab"
+        | "mechanism"
+        | "factor"
+        | "decision"
+        | "question";
       title: string;
       subtitle: string;
       color: string;
@@ -1209,6 +1217,14 @@ declare module "@tldraw/tlschema" {
       h: number;
       fromId: string;
       toId: string;
+      color: string;
+    };
+    // Merged "AI resolve" action pill below the heatmap + priority fork.
+    "resolve-pill": {
+      w: number;
+      h: number;
+      spaceId: string;
+      sourceIds: string;
       color: string;
     };
   }

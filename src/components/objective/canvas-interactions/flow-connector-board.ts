@@ -130,12 +130,19 @@ export function ensureSharpeningFlowConnectors(editor: Editor): void {
   const sharp = shapes.find((s) => s.type === "prompt-sharpening");
   if (objId && sharp) ensure(objId, sharp.id);
 
-  // sharpening → heatmap / priority (sourceId prop) · fork → insight (meta).
+  // sharpening → heatmap / priority (sourceId prop) · fork → insight (meta) ·
+  // heatmap + priority → resolve-pill (the merge point of the two-way fork).
   for (const s of shapes) {
     if (s.type === "ambiguity-heatmap-card" || s.type === "priority-map-card") {
       ensure((s.props as { sourceId?: string }).sourceId, s.id);
     } else if (s.type === "insight-card") {
       ensure((s.meta as { forkSourceId?: string })?.forkSourceId, s.id);
+    } else if (s.type === "resolve-pill") {
+      // Both forked cards converge DOWN into the pill — a downward "root" merge.
+      const srcIds = String((s.props as { sourceIds?: string }).sourceIds || "")
+        .split(",")
+        .filter(Boolean);
+      for (const from of srcIds) ensure(from, s.id);
     }
   }
 }

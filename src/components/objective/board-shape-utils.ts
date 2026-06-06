@@ -30,6 +30,7 @@ import {
 import { CommentCardShapeUtil } from "./shapes/comment-card-shape";
 import { SysFrameShapeUtil } from "./shapes/sys-frame-shape";
 import { FlowConnectorShapeUtil } from "./shapes/flow-connector-shape";
+import { ResolvePillShapeUtil } from "./shapes/resolve-pill-shape";
 
 /** Every custom shape util the objective whiteboard registers, in registration
  *  order. Reused by the main <Tldraw> mount AND by static <TldrawImage>
@@ -61,4 +62,7 @@ export const CUSTOM_SHAPE_UTILS = [
   // REAL bound flow connector (dark flow-builder look) — green-out/pink-in ports
   // + gradient bezier; a board reactor keeps it synced so it moves with cards.
   FlowConnectorShapeUtil,
+  // Merged "AI resolve" action pill — sits below the heatmap + priority fork,
+  // both wire into it; runs the deep resolver for the whole ambiguity set.
+  ResolvePillShapeUtil,
 ];
