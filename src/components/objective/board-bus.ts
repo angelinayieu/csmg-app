@@ -258,6 +258,10 @@ export interface ImageCardDetail {
   /** extracted entities, JSON-encoded ([{name,type}]). */
   entitiesJson: string;
   color?: string;
+  /** Backing library_objects row id (image_source). Empty if the row
+   *  hasn't been materialized yet — the card lands without an objectId
+   *  and the drag-connector / detail rail stay dormant until backfill. */
+  objectId?: string;
 }
 
 export const DEPLOY_IMAGE_CARD_EVENT = "objective-board:deploy-image-card";
@@ -496,6 +500,12 @@ export interface CommentBodyPatchDetail extends CommentEventDetail {
 
 /** Toolbox sphere → "open a new comment on the current selection". */
 export const OPEN_BOARD_COMMENT_EVENT = "board:open-comment";
+
+/** Nav bar → toggle the live Knowledge Graph panel. Lives here (not in
+ *  knowledge-graph-panel.tsx) so the nav bar can trigger it WITHOUT importing
+ *  cytoscape — the heavy graph lib stays out of the nav-bar bundle and only
+ *  loads when the panel is opened (dynamic import in whiteboard-base). */
+export const OPEN_BOARD_KG_EVENT = "board:open-kg";
 
 export const COMMENT_BODY_PATCH_EVENT = "objective-board:comment-body-patch";
 export const COMMENT_RESOLVE_TOGGLE_EVENT =

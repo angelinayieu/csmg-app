@@ -125,6 +125,17 @@ import { CuteCollaboratorCursor } from "./canvas-interactions/cute-cursor";
 import { ObjectDetailMount } from "./canvas-interactions/object-detail-drawer";
 import { ConnectorDragLayer } from "./canvas-interactions/connector-drag-layer";
 import { GoalLauncher } from "./canvas-interactions/goal-ranking-sidebar";
+// cytoscape (the KG renderer) is heavy + DOM-only — load it client-side, lazily,
+// only when the panel is opened. ssr:false keeps it out of the board's server
+// render entirely (no SSR window access, no cytoscape in the initial bundle).
+import dynamic from "next/dynamic";
+const KnowledgeGraphLauncher = dynamic(
+  () =>
+    import("./canvas-interactions/knowledge-graph-panel").then(
+      (m) => m.KnowledgeGraphLauncher,
+    ),
+  { ssr: false },
+);
 import { BoardHistoryLauncher } from "./canvas-interactions/board-history";
 import { BoardSettingsLauncher } from "./canvas-interactions/board-settings";
 import { BoardNavBar } from "./canvas-interactions/board-nav-bar";
@@ -2450,8 +2461,8 @@ function PrototypeEventBridge({
   spaceId: string;
 }) {
   useEffect(() => {
-    const PROTO_W = 420;
-    const PROTO_H = 540;
+    const PROTO_W = 720;
+    const PROTO_H = 520;
 
     // Persist a finished prototype as an `artifacts` row (so it shows in the
     // Artifacts Library + survives as a continuously-updated final product).
@@ -2705,6 +2716,7 @@ function UiPlanEventBridge({
             sourceText: d.sourceText,
             uiPlanJson: "",
             status: "generating",
+            objectId: "",
           },
           meta: { sourceShapeId: d.sourceShapeId, variantIndex: i },
         });
@@ -3380,6 +3392,10 @@ function BoardOverlay({
       {/* Left-edge Goal & alignment rail: ultimate goal + live ranking of
           convergent/divergent board nodes (rank-nodes endpoint). */}
       <GoalLauncher spaceId={spaceId} editor={editor} />
+      {/* Right-edge live Knowledge Graph: the space's library_objects (nodes) +
+          object_links (edges), force-directed (fcose), color/icon dots with
+          hover-to-expand names. Opened from the nav bar's Network icon. */}
+      <KnowledgeGraphLauncher spaceId={spaceId} />
       {/* Version history — left-edge pill → timestamped snapshots + restore;
           auto-captures every few minutes while the board changes. */}
       <BoardHistoryLauncher spaceId={spaceId} editor={editor} />
@@ -3462,6 +3478,7 @@ function BoardOverlay({
         <SpecForgeSourceLaneConnector
           sourceShapeId={forgeSourceShapeId}
           laneRef={laneRef}
+          editor={editor}
         />
       )}
 

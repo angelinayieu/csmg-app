@@ -9,10 +9,11 @@
 // Icons + tooltips only, per the minimal chrome direction.
 
 import { type CSSProperties, useSyncExternalStore } from "react";
-import { Home, Plus, Compass, History, Settings } from "lucide-react";
+import { Home, Plus, Compass, Network, History, Settings } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { openSandbox } from "@/lib/objective-canvas/sandbox-signal";
 import { OPEN_BOARD_GOAL_EVENT } from "./goal-ranking-sidebar";
+import { OPEN_BOARD_KG_EVENT } from "@/components/objective/board-bus";
 import { OPEN_BOARD_HISTORY_EVENT } from "./board-history";
 import { OPEN_BOARD_SETTINGS_EVENT } from "./board-settings";
 
@@ -56,6 +57,7 @@ const ITEMS: {
   { key: "home", label: "Home", Icon: Home, onClick: () => window.location.assign("/app") },
   { key: "sandbox", label: "New sandbox space", Icon: Plus, onClick: createSandbox },
   { key: "goal", label: "Goal & alignment", Icon: Compass, onClick: () => fire(OPEN_BOARD_GOAL_EVENT) },
+  { key: "kg", label: "Knowledge graph", Icon: Network, onClick: () => fire(OPEN_BOARD_KG_EVENT) },
   { key: "history", label: "Version history", Icon: History, onClick: () => fire(OPEN_BOARD_HISTORY_EVENT) },
   { key: "settings", label: "Settings", Icon: Settings, onClick: () => fire(OPEN_BOARD_SETTINGS_EVENT) },
 ];
