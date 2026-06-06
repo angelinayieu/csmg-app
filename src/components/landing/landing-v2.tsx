@@ -87,14 +87,14 @@ type Anchor = {
 // toward the centre) so it reads less like two saturated side columns and the
 // space BELOW the hero gets used. Sizes vary; Product Development is biggest.
 const FLOATING_ANCHORS: Anchor[] = [
-  { top: "9%", left: "-2%", rot: -4, z: 2, drift: 1, scale: 0.98 }, // 0 · L top — Self-Discovery
-  { top: "8%", right: "-2%", rot: 4, z: 2, drift: 2, scale: 1.0 }, // 1 · R top — Startup Strategy
+  { top: "10%", left: "12%", rot: -4, z: 2, drift: 1, scale: 0.88 }, // 0 · L top — Self-Discovery (pulled IN + smaller, like the lower row)
+  { top: "9%", right: "12%", rot: 4, z: 2, drift: 2, scale: 0.88 }, // 1 · R top — Startup Strategy (pulled IN + smaller)
   { top: "36%", left: "7%", rot: -6, z: 1, drift: 6, scale: 0.82, depth: true }, // 2 · L mid BEHIND — Relationship Dynamics
   { top: "43%", left: "-3%", rot: 3, z: 3, drift: 3, scale: 1.0 }, // 3 · L mid FRONT — Research Project
   { top: "30%", right: "-3%", rot: 5, z: 3, drift: 7, scale: 1.2 }, // 4 · R mid FRONT — Product Development (BIG · emphasised)
   { top: "41%", right: "9%", rot: -4, z: 1, drift: 4, scale: 0.82, depth: true }, // 5 · R mid BEHIND — Reading Notes (depth)
-  { top: "74%", left: "21%", rot: 4, z: 2, drift: 5, scale: 0.9 }, // 6 · lower-centre-left — Team Retrospective
-  { top: "76%", right: "18%", rot: -5, z: 2, drift: 1, scale: 0.88 }, // 7 · lower-centre-right — Career Pivot
+  { top: "65%", left: "19%", rot: 4, z: 2, drift: 5, scale: 0.88 }, // 6 · lower-left — Team Retrospective (raised so it isn't cropped)
+  { top: "66%", right: "16%", rot: -5, z: 2, drift: 1, scale: 0.86 }, // 7 · lower-right — Career Pivot (raised so it isn't cropped)
 ];
 
 /** Open the hash-driven AuthModal (mounted below) on signup. */
@@ -295,11 +295,12 @@ function SwarmCard({
                 <div className="mt-1 line-clamp-2 text-[11px] leading-snug" style={{ color: appleVibe.text.tertiary }}>
                   {card.tagline}
                 </div>
-                {/* Slim footer — just the category in coloured caps (reference). */}
+                {/* Slim footer — category as a tinted PILL in the regular sans
+                    (not the display face). */}
                 <div className="mt-auto pt-2.5">
                   <span
-                    className="text-[9.5px] font-bold uppercase tracking-[0.1em]"
-                    style={{ color: banner, fontFamily: appleVibe.font.display }}
+                    className="inline-flex w-fit items-center rounded-full px-2.5 py-[3px] text-[9px] font-semibold uppercase tracking-[0.08em]"
+                    style={{ color: banner, background: `${banner}1a` }}
                   >
                     {card.category}
                   </span>
@@ -340,8 +341,8 @@ function SwarmCard({
                   style={{ borderColor: appleVibe.stroke.hairline }}
                 >
                   <span
-                    className="text-[9.5px] font-bold uppercase tracking-[0.1em]"
-                    style={{ color: banner, fontFamily: appleVibe.font.display }}
+                    className="inline-flex w-fit items-center rounded-full px-2.5 py-[3px] text-[9px] font-semibold uppercase tracking-[0.08em]"
+                    style={{ color: banner, background: `${banner}1a` }}
                   >
                     {card.category}
                   </span>
