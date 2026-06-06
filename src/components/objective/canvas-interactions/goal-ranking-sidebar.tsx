@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { shapeToScanTarget } from "./shape-node-adapter";
 import { DECOMPOSE_DONE_EVENT } from "./deploy-oc-cards";
+import { ZONE_LABEL } from "../shapes/prompt-sharpening-card-shape";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import {
   openResolutionStudio,
@@ -117,6 +118,35 @@ const annPriority = (a: SalienceAnn) =>
     ? a.priority
     : a.leverage * (0.5 + 0.5 * a.uncertainty);
 
+interface HeatZone {
+  severity?: string;
+  ambiguity?: string;
+  question_to_resolve?: string;
+}
+// Coarse clarity from the ambiguity heatmap — used when the deep (salience)
+// pass hasn't landed yet, so the rail surfaces uncertainty the MOMENT the
+// heatmap is ready (it lands with the fast pass) instead of staying blank for
+// minutes. One annotation per zone: severity drives uncertainty, the zone's
+// ambiguity text is the "why". Replaced in place once the real salience lands.
+function annsFromHeatmap(heatmap: Record<string, HeatZone>): SalienceAnn[] {
+  const sevU: Record<string, number> = { high: 0.85, medium: 0.6, low: 0.4 };
+  const leverage = 0.7;
+  return Object.entries(heatmap)
+    .filter(([, z]) => z && (z.ambiguity || z.question_to_resolve))
+    .map(([key, z]) => {
+      const uncertainty = sevU[(z.severity as string) ?? "low"] ?? 0.5;
+      return {
+        phrase: ZONE_LABEL[key] ?? key,
+        kind: "concept",
+        leverage,
+        uncertainty,
+        why: z.ambiguity || z.question_to_resolve || "",
+        priority: leverage * (0.5 + 0.5 * uncertainty),
+      } as SalienceAnn;
+    })
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+}
+
 async function fetchClarity(spaceId: string): Promise<ClarityData | null> {
   try {
     const res = await fetch(`/api/objective/${spaceId}/prompt-sharpening`, {
@@ -129,6 +159,7 @@ async function fetchClarity(spaceId: string): Promise<ClarityData | null> {
         distilled_title?: string;
         sharpened_prompt?: string;
         salience?: { annotations?: SalienceAnn[] };
+        ambiguity_heatmap?: Record<string, HeatZone>;
         resolutions?: Array<{
           concept_slug?: string;
           phrase?: string;
@@ -153,7 +184,17 @@ async function fetchClarity(spaceId: string): Promise<ClarityData | null> {
     const a = j.artifact;
     if (!a) return null;
     const annsRaw = a.salience?.annotations;
-    const anns = Array.isArray(annsRaw) ? (annsRaw as SalienceAnn[]) : [];
+    let anns = Array.isArray(annsRaw) ? (annsRaw as SalienceAnn[]) : [];
+    // Deep salience hasn't landed yet → surface coarse clarity from the heatmap
+    // (ready with the fast pass) so the rail shows uncertainty immediately
+    // instead of sitting blank while the priority map is still generating.
+    if (
+      anns.length === 0 &&
+      a.ambiguity_heatmap &&
+      typeof a.ambiguity_heatmap === "object"
+    ) {
+      anns = annsFromHeatmap(a.ambiguity_heatmap as Record<string, HeatZone>);
+    }
     const resolvedSlugs = new Set<string>();
     const resolvedConfidence = new Map<string, number>();
     for (const r of a.resolutions ?? []) {

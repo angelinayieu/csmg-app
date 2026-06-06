@@ -40,7 +40,7 @@ import {
   emitAiAutoResolveEnded,
 } from "@/components/objective/board-bus";
 import { DECOMPOSE_INTO_CARDS_EVENT } from "@/components/objective/canvas-interactions/deploy-oc-cards";
-import { SHARPEN_COLOR } from "./prompt-sharpening-card-shape";
+import { SHARPEN_COLOR, ZONE_LABEL } from "./prompt-sharpening-card-shape";
 
 const PILL_W = 220;
 const PILL_H = 64;
@@ -104,10 +104,38 @@ export class ResolvePillShapeUtil extends BaseBoxShapeUtil<ResolvePillShape> {
   }
 }
 
-/** Read the live salience to resolve from the priority-map card this pill is
- *  fed by (it carries the same annotations the rail + resolver use). */
+/** Coarse concepts from the ambiguity heatmap — so the pill can resolve the
+ *  moment the heatmap is out, BEFORE the priority map's richer salience lands. */
+function heatmapToItems(json: string): SalienceItem[] {
+  let h: Record<
+    string,
+    { severity?: string; ambiguity?: string; question_to_resolve?: string }
+  > = {};
+  try {
+    const v = JSON.parse(json || "{}");
+    if (v && typeof v === "object") h = v;
+  } catch {
+    return [];
+  }
+  const sevU: Record<string, number> = { high: 0.85, medium: 0.6, low: 0.4 };
+  return Object.entries(h)
+    .filter(([, z]) => z && (z.ambiguity || z.question_to_resolve))
+    .map(([key, z]) => ({
+      phrase: (z.ambiguity || ZONE_LABEL[key] || key).trim(),
+      kind: "concept",
+      leverage: 0.7,
+      uncertainty: sevU[(z.severity as string) ?? "low"] ?? 0.5,
+      why: z.question_to_resolve || "",
+      candidate_readings: [],
+    }));
+}
+
+/** The live ambiguities to resolve. Prefer the priority-map card's salience
+ *  (richer — candidate readings + micro-questions); fall back to the heatmap
+ *  zones so the pill works while the priority map is still generating. */
 function readSalience(editor: Editor, sourceIds: string): SalienceItem[] {
-  for (const id of sourceIds.split(",").filter(Boolean)) {
+  const ids = sourceIds.split(",").filter(Boolean);
+  for (const id of ids) {
     const s = editor.getShape(id as TLShapeId);
     if (s?.type === "priority-map-card") {
       try {
@@ -116,8 +144,17 @@ function readSalience(editor: Editor, sourceIds: string): SalienceItem[] {
         );
         if (Array.isArray(v) && v.length) return v as SalienceItem[];
       } catch {
-        /* fall through */
+        /* fall through to heatmap */
       }
+    }
+  }
+  for (const id of ids) {
+    const s = editor.getShape(id as TLShapeId);
+    if (s?.type === "ambiguity-heatmap-card") {
+      const items = heatmapToItems(
+        (s.props as { heatmapJson?: string }).heatmapJson || "{}",
+      );
+      if (items.length) return items;
     }
   }
   return [];

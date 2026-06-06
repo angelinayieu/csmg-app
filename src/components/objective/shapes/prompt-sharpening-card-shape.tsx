@@ -405,30 +405,53 @@ function PromptSharpeningRenderer({
   // data, not a core shape prop (no migration needed).
   const [salience, setSalience] = useState<SalienceItem[] | null>(null);
   const [saliencePending, setSaliencePending] = useState(false);
+  // Flips true once the DEEP (LLM) salience pass has upgraded the coarse map (or
+  // we've given up on it) — so the background poller drives exactly once and the
+  // fast coarse map shown meanwhile is never re-fetched away.
+  const salienceUpgraded = useRef(false);
   // "Scan for ambiguities" re-run state + the set of concept_slugs the user has
   // already resolved (Resolution Studio or inline "Let AI decide"). resolvedSlugs
   // drives the check-off on the priority map; rescanPending drives the button +
   // dot spinner during a forced re-scan.
   const [rescanPending, setRescanPending] = useState(false);
   const [resolvedSlugs, setResolvedSlugs] = useState<Set<string>>(new Set());
+  // 1. Coarse priority map IMMEDIATELY from the ranked ambiguities the card
+  // already holds — so the priority map, resolve pill, and clarity rail surface
+  // at the SAME time as the heatmap instead of waiting on the slow deep pass
+  // (which could otherwise hang "Generating" for minutes). The deep pass
+  // upgrades this in place below.
   useEffect(() => {
     if (loading || !spaceId || salience !== null) return;
+    const coarse = deriveSalienceFallback(parseRanked(shape.props.rankedJson));
+    if (coarse.length > 0) {
+      setSalience(coarse);
+      setSaliencePending(true); // still trying to upgrade to the richer pass
+    }
+  }, [loading, spaceId, salience, shape.props.rankedJson]);
+
+  // 2. Background UPGRADE to the deep (LLM) salience pass — richer candidate
+  // readings + micro-questions. Drives the pass ONCE then polls, and replaces
+  // the coarse map in place when it lands. Fully non-blocking: if the pass
+  // 504s / hangs / never returns, the coarse map already shown simply stays —
+  // no spinner stuck for minutes.
+  useEffect(() => {
+    if (loading || !spaceId || salienceUpgraded.current) return;
     let cancelled = false;
     let tries = 0;
     let drove = false;
     let timer: ReturnType<typeof setTimeout>;
-    setSaliencePending(true);
 
-    function done(items: SalienceItem[]) {
-      if (cancelled) return;
+    function upgrade(items: SalienceItem[]) {
+      if (cancelled || items.length === 0) return;
+      salienceUpgraded.current = true;
       setSalience(items);
       setSaliencePending(false);
     }
-    // Coarse priority map from the ranked ambiguities the card already holds —
-    // used whenever the server depth pass can't deliver (504 / error / polled
-    // out) so the fork + resolve panel never stay blank.
-    function fallback(): SalienceItem[] {
-      return deriveSalienceFallback(parseRanked(shape.props.rankedJson));
+    // Stop trying — keep whatever coarse map is already showing.
+    function giveUp() {
+      if (cancelled) return;
+      salienceUpgraded.current = true;
+      setSaliencePending(false);
     }
 
     async function tick() {
@@ -444,7 +467,7 @@ function PromptSharpeningRenderer({
             salience?: { annotations?: SalienceItem[] };
           };
           if (j.status === "ready" && j.salience?.annotations?.length) {
-            done(j.salience.annotations);
+            upgrade(j.salience.annotations);
             return;
           }
         }
@@ -467,36 +490,28 @@ function PromptSharpeningRenderer({
               salience?: { annotations?: SalienceItem[] };
             };
             if (j.status === "ready" && j.salience?.annotations?.length) {
-              done(j.salience.annotations);
+              upgrade(j.salience.annotations);
               return;
             }
           } else if (r.status >= 500) {
-            // Depth pass timed out (504) or errored server-side — it won't
-            // recover by polling, so surface the coarse fallback immediately.
-            done(fallback());
+            giveUp(); // deep pass 504'd — the coarse map stays
             return;
           }
         } catch {
-          // Network error / abort (the 504 often surfaces as a throw) — same.
-          done(fallback());
+          giveUp();
           return;
         }
       }
       if (cancelled) return;
-      if (tries < 8) {
-        timer = setTimeout(tick, 2000);
-      } else {
-        // Polled out with nothing persisted → last-resort coarse fallback so the
-        // priority map + resolve panel still appear.
-        done(fallback());
-      }
+      if (tries < 8) timer = setTimeout(tick, 2000);
+      else giveUp();
     }
     timer = setTimeout(tick, 400);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [loading, spaceId, salience]);
+  }, [loading, spaceId]);
 
   // Auto-fork the heatmap + priority map out as their OWN cards (the two-way
   // downward fork below the objective) so this card itself stays title+desc.
@@ -504,7 +519,6 @@ function PromptSharpeningRenderer({
   // stop re-firing within a session. Heatmap lands with the fast artifact;
   // priority waits for the salience (depth) pass.
   const autoForkedHeat = useRef(false);
-  const autoForkedPriority = useRef(false);
   useEffect(() => {
     if (loading || !spaceId || autoForkedHeat.current) return;
     const hm = shape.props.heatmapJson;
@@ -513,27 +527,25 @@ function PromptSharpeningRenderer({
       deployHeatmapCard({ sourceId: shape.id, spaceId, heatmapJson: hm, color });
     }
   }, [loading, spaceId, shape.props.heatmapJson, shape.id, color]);
+  // Deploy the priority map whenever salience changes — coarse first (instant),
+  // then again when the deep pass upgrades it. deployPriorityMapCard is
+  // idempotent (updates the existing card's salience, never duplicates), so
+  // this is a create-then-update, not a re-fork. Re-asserts the heatmap at the
+  // same moment (deploying the priority map is exactly when the heatmap was
+  // observed to churn out under placement/restore).
   useEffect(() => {
-    if (!spaceId || autoForkedPriority.current) return;
-    if (salience && salience.length > 0) {
-      autoForkedPriority.current = true;
-      deployPriorityMapCard({
-        sourceId: shape.id,
-        spaceId,
-        salienceJson: JSON.stringify(salience),
-        color,
-      });
-      // Re-assert the heatmap fork at the SAME moment — deploying the priority
-      // map is exactly when the heatmap was observed to vanish (placement /
-      // restore churn). Both deploys are idempotent (focus the existing card,
-      // recreate a missing one), so this heals "heatmap disappears after the
-      // priority map appears" without ever duplicating it.
-      const hm = shape.props.heatmapJson;
-      if (hm && hm !== "{}") {
-        deployHeatmapCard({ sourceId: shape.id, spaceId, heatmapJson: hm, color });
-      }
+    if (!spaceId || !(salience && salience.length > 0)) return;
+    deployPriorityMapCard({
+      sourceId: shape.id,
+      spaceId,
+      salienceJson: JSON.stringify(salience),
+      color,
+    });
+    const hm = shape.props.heatmapJson;
+    if (hm && hm !== "{}") {
+      deployHeatmapCard({ sourceId: shape.id, spaceId, heatmapJson: hm, color });
     }
-  }, [spaceId, salience, shape.id, color]);
+  }, [spaceId, salience, shape.id, color, shape.props.heatmapJson]);
 
   // Phase 3: re-fetch + re-render when resolutions are applied (the re-framed
   // sharpened prompt). The card is past `loading`, so its self-heal poll is

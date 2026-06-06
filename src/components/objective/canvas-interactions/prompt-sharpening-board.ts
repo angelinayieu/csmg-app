@@ -388,18 +388,47 @@ export function ensureResolvePill(editor: Editor): void {
   const priority = shapes.find((s) => s.type === "priority-map-card") as
     | PriorityMapCardShape
     | undefined;
-  // Need BOTH branches of the fork before the merge point makes sense.
-  if (!heatmap || !priority) return;
-  if (shapes.some((s) => s.type === "resolve-pill")) return;
+  // The heatmap is the always-first fork branch + the merge anchor. Show the
+  // pill the MOMENT it exists — the priority map can still be generating; the
+  // pill resolves off the heatmap zones until the richer salience lands.
+  if (!heatmap) return;
 
-  const hb = editor.getShapePageBounds(heatmap.id);
-  const pb = editor.getShapePageBounds(priority.id);
-  if (!hb || !pb) return;
+  const cards = [heatmap, priority].filter(Boolean) as Array<
+    AmbiguityHeatmapCardShape | PriorityMapCardShape
+  >;
+  const bounds = cards
+    .map((c) => editor.getShapePageBounds(c.id))
+    .filter((b): b is NonNullable<typeof b> => !!b);
+  if (bounds.length === 0) return;
 
-  const spaceId = priority.props.spaceId || heatmap.props.spaceId;
-  const color = priority.props.color || heatmap.props.color || SHARPEN_COLOR;
-  const midX = (hb.midX + pb.midX) / 2;
-  const top = Math.max(hb.maxY, pb.maxY) + 72;
+  const spaceId = priority?.props.spaceId || heatmap.props.spaceId;
+  const color = priority?.props.color || heatmap.props.color || SHARPEN_COLOR;
+  // Heatmap first (the resolve source until the priority map is ready), then
+  // priority once it exists — each id wires a connector down into the pill.
+  const sourceIds = cards.map((c) => c.id).join(",");
+
+  const existing = shapes.find((s) => s.type === "resolve-pill") as
+    | ResolvePillShape
+    | undefined;
+  if (existing) {
+    // Already out (likely created off the heatmap alone) — when the priority
+    // branch lands, widen its sources so the second connector draws and it
+    // resolves off the richer salience. Position left as-is (respect any drag).
+    if (
+      existing.props.sourceIds !== sourceIds ||
+      existing.props.spaceId !== spaceId
+    ) {
+      editor.updateShape<ResolvePillShape>({
+        id: existing.id,
+        type: "resolve-pill",
+        props: { sourceIds, spaceId },
+      });
+    }
+    return;
+  }
+
+  const midX = bounds.reduce((s, b) => s + b.midX, 0) / bounds.length;
+  const top = Math.max(...bounds.map((b) => b.maxY)) + 72;
   const spot = reserveSpace(
     editor,
     { w: RESOLVE_PILL_W, h: RESOLVE_PILL_H },
@@ -412,12 +441,6 @@ export function ensureResolvePill(editor: Editor): void {
     type: "resolve-pill",
     x: spot.x,
     y: spot.y,
-    props: {
-      w: RESOLVE_PILL_W,
-      h: RESOLVE_PILL_H,
-      spaceId,
-      sourceIds: `${heatmap.id},${priority.id}`,
-      color,
-    },
+    props: { w: RESOLVE_PILL_W, h: RESOLVE_PILL_H, spaceId, sourceIds, color },
   });
 }
