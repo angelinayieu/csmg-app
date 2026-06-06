@@ -371,6 +371,11 @@ export function LandingV2({
   // resumes it on a real board.
   const [composing, setComposing] = useState(false);
   const [prompt, setPrompt] = useState("");
+  // Once they actually start typing, the hero morphs into a whiteboard the way
+  // MinimalHome's objective chatbox does: the marketing copy + card swarm
+  // recede and a dot-grid board surface rises, so it reads as "you're on the
+  // board now." Enter → signup → /app resumes and the operations unfurl.
+  const typing = composing && prompt.trim().length > 0;
 
   function pickTemplate(id: string) {
     if (id === "product_development") {
@@ -458,6 +463,22 @@ export function LandingV2({
             "radial-gradient(56% 48% at 50% 42%, rgba(255,255,255,0.96) 0%, rgba(255,255,255,0) 72%)",
         }}
       >
+      {/* Whiteboard surface — fades in the moment they start typing, turning
+          the hero into the board they're composing on (mirrors MinimalHome's
+          objective chatbox morph). Sits above the dimmed swarm, below the
+          chatbox (main z-40). */}
+      <div
+        aria-hidden
+        className={`pointer-events-none absolute inset-0 z-[12] transition-opacity duration-500 ${
+          typing ? "opacity-100" : "opacity-0"
+        }`}
+        style={{
+          backgroundColor: "#F7F8FA",
+          backgroundImage:
+            "radial-gradient(circle, rgba(15,23,42,0.10) 1.2px, transparent 1.5px)",
+          backgroundSize: "24px 24px",
+        }}
+      />
       <LandingHeader
         active="Home"
         subtitle="#1 AI whiteboard space to improve quality of thought"
@@ -470,34 +491,43 @@ export function LandingV2({
           composing ? "z-40" : "z-10"
         }`}
       >
-        <h1
-          className="text-center text-[clamp(34px,4.8vw,54px)] font-extrabold leading-[1.02]"
-          style={{ fontFamily: appleVibe.font.display, letterSpacing: "-0.025em" }}
+        {/* Marketing headline — recedes once they start typing so the board
+            (and their own words in the chatbox) become the whole focus. Kept
+            in layout (opacity, not display) so the chatbox doesn't jump. */}
+        <div
+          className={`flex flex-col items-center transition-all duration-500 ${
+            typing ? "pointer-events-none -translate-y-3 opacity-0" : "opacity-100"
+          }`}
         >
-          <span style={{ color: appleVibe.text.faint }}>From</span> <span style={{ color: INK }}>idea</span>
-        </h1>
+          <h1
+            className="text-center text-[clamp(34px,4.8vw,54px)] font-extrabold leading-[1.02]"
+            style={{ fontFamily: appleVibe.font.display, letterSpacing: "-0.025em" }}
+          >
+            <span style={{ color: appleVibe.text.faint }}>From</span> <span style={{ color: INK }}>idea</span>
+          </h1>
 
-        {/* Negative margin pulls the headings toward the mark (4:3 box slack). */}
-        <div className="mx-auto -my-5 w-full max-w-[372px]">
-          <Starburst3D />
-        </div>
+          {/* Negative margin pulls the headings toward the mark (4:3 box slack). */}
+          <div className="mx-auto -my-5 w-full max-w-[372px]">
+            <Starburst3D />
+          </div>
 
-        <h1
-          className="text-center text-[clamp(34px,4.8vw,54px)] font-extrabold leading-[1.02]"
-          style={{ color: INK, fontFamily: appleVibe.font.display, letterSpacing: "-0.025em" }}
-        >
-          <span style={{ color: appleVibe.text.faint }}>to</span>{" "}
-          <span style={{ color: INK }}>
-            value{" "}
-            <span
-              className="underline decoration-[3px] underline-offset-[7px]"
-              style={{ textDecorationColor: "#C2593B" }}
-            >
-              asap
+          <h1
+            className="text-center text-[clamp(34px,4.8vw,54px)] font-extrabold leading-[1.02]"
+            style={{ color: INK, fontFamily: appleVibe.font.display, letterSpacing: "-0.025em" }}
+          >
+            <span style={{ color: appleVibe.text.faint }}>to</span>{" "}
+            <span style={{ color: INK }}>
+              value{" "}
+              <span
+                className="underline decoration-[3px] underline-offset-[7px]"
+                style={{ textDecorationColor: "#C2593B" }}
+              >
+                asap
+              </span>
             </span>
-          </span>
-          <span style={{ color: "#C2593B" }}>.</span>
-        </h1>
+            <span style={{ color: "#C2593B" }}>.</span>
+          </h1>
+        </div>
 
         {!composing ? (
           <>
@@ -579,7 +609,7 @@ export function LandingV2({
           wide monitors instead of drifting to the edges. */}
       <div
         className={`pointer-events-none absolute inset-0 z-20 flex justify-center px-4 transition-opacity duration-500 ${
-          composing ? "opacity-20" : "opacity-100"
+          typing ? "opacity-0" : composing ? "opacity-20" : "opacity-100"
         }`}
       >
         <div className="relative h-full w-full max-w-[1200px]">
