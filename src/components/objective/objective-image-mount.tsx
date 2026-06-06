@@ -18,10 +18,15 @@ interface ApiImage {
   entities: Array<{ name: string; type?: string }>;
   entityCount: number;
   analyzed: boolean;
+  objectId?: string;
 }
 
 export function ObjectiveImageMount({ spaceId }: { spaceId: string }) {
-  const deployed = useRef<Set<string>>(new Set());
+  // Track imageFileId → last-seen objectId so we re-fire deployImageCard
+  // when a backfill resolves the objectId on a poll AFTER the card already
+  // landed. The deploy-side guard (deployImageCardOnBoard) idempotently
+  // patches the existing shape's props.objectId.
+  const deployedObjectId = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     if (!spaceId) return;
@@ -42,13 +47,19 @@ export function ObjectiveImageMount({ spaceId }: { spaceId: string }) {
           const json = (await res.json()) as { images?: ApiImage[] };
           const images = Array.isArray(json.images) ? json.images : [];
           let pending = false;
+          let backfillPending = false;
           for (const img of images) {
             if (!img.analyzed) {
               pending = true;
               continue;
             }
-            if (deployed.current.has(img.id)) continue;
-            deployed.current.add(img.id);
+            const newObjectId = img.objectId ?? "";
+            const prevObjectId = deployedObjectId.current.get(img.id);
+            if (prevObjectId !== undefined && (prevObjectId || !newObjectId)) {
+              if (!prevObjectId && !newObjectId) backfillPending = true;
+              continue;
+            }
+            deployedObjectId.current.set(img.id, newObjectId);
             deployImageCard({
               imageFileId: img.id,
               imageName: img.name,
@@ -56,11 +67,11 @@ export function ObjectiveImageMount({ spaceId }: { spaceId: string }) {
               description: img.description ?? "",
               entityCount: img.entityCount ?? 0,
               entitiesJson: JSON.stringify(img.entities ?? []),
+              objectId: newObjectId,
             });
+            if (!newObjectId) backfillPending = true;
           }
-          // Done once we've seen images and none are still analyzing. Keep
-          // polling while empty (the chatbox back-link may still propagate).
-          if (images.length > 0 && !pending) stop = true;
+          if (images.length > 0 && !pending && !backfillPending) stop = true;
         }
       } catch {
         /* transient — keep polling */

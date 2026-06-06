@@ -77,12 +77,21 @@ export function deployImageCardOnBoard(
   const imageCards = editor
     .getCurrentPageShapes()
     .filter((s) => s.type === "objective-image-card");
-  if (
-    imageCards.some(
-      (s) => (s as ObjectiveImageCardShape).props.imageFileId === d.imageFileId,
-    )
-  ) {
-    return; // already on the board
+  const existing = imageCards.find(
+    (s) => (s as ObjectiveImageCardShape).props.imageFileId === d.imageFileId,
+  ) as ObjectiveImageCardShape | undefined;
+  if (existing) {
+    // Already on the board — backfill objectId if the lazy /images
+    // backfill resolved it after the card landed. Idempotent no-op
+    // otherwise.
+    if (d.objectId && !existing.props.objectId) {
+      editor.updateShape<ObjectiveImageCardShape>({
+        id: existing.id,
+        type: "objective-image-card",
+        props: { objectId: d.objectId },
+      });
+    }
+    return;
   }
 
   const objId = findObjectiveCard(editor);
@@ -121,6 +130,7 @@ export function deployImageCardOnBoard(
       entityCount: d.entityCount,
       entitiesJson: d.entitiesJson,
       color: d.color || "#2563EB",
+      objectId: d.objectId ?? "",
     },
   });
 

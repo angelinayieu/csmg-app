@@ -32,7 +32,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   const { data: rows } = await db
     .from("ingested_files")
     .select(
-      "id, source_name, image_url, image_description, extracted_entities, vision_completed_at, vision_error",
+      "id, source_name, image_url, image_description, extracted_entities, vision_completed_at, vision_error, image_object_id",
     )
     .eq("space_id", spaceId)
     .eq("user_id", user.id)
@@ -42,17 +42,60 @@ export async function GET(_req: Request, ctx: Ctx) {
     .order("created_at", { ascending: true })
     .limit(30);
 
-  const images = (
-    (rows ?? []) as Array<{
-      id: string;
-      source_name: string | null;
-      image_url: string | null;
-      image_description: string | null;
-      extracted_entities: unknown;
-      vision_completed_at: string | null;
-      vision_error: string | null;
-    }>
-  ).map((r) => {
+  type ImageRow = {
+    id: string;
+    source_name: string | null;
+    image_url: string | null;
+    image_description: string | null;
+    extracted_entities: unknown;
+    vision_completed_at: string | null;
+    vision_error: string | null;
+    image_object_id: string | null;
+  };
+
+  const typedRows = (rows ?? []) as ImageRow[];
+
+  // Lazy backfill: for analyzed rows missing image_object_id, look up an
+  // existing image_source library_object by source_ref='img:<id>' (a
+  // sibling vision-extract may have written it after this row). When
+  // found, patch the FK so subsequent reads skip this branch.
+  const needsBackfill = typedRows.filter(
+    (r) => !r.image_object_id && r.vision_completed_at,
+  );
+  if (needsBackfill.length > 0) {
+    const sourceRefs = needsBackfill.map((r) => `img:${r.id}`);
+    try {
+      const { data: imgObjs } = await db
+        .from("library_objects")
+        .select("id, source_ref")
+        .eq("space_id", spaceId)
+        .eq("object_type", "image_source")
+        .in("source_ref", sourceRefs);
+      const bySourceRef = new Map<string, string>();
+      for (const o of (imgObjs as Array<{ id: string; source_ref: string }> | null) ??
+        []) {
+        bySourceRef.set(o.source_ref, o.id);
+      }
+      for (const r of needsBackfill) {
+        const objectId = bySourceRef.get(`img:${r.id}`);
+        if (objectId) {
+          r.image_object_id = objectId;
+          try {
+            await db
+              .from("ingested_files")
+              .update({ image_object_id: objectId })
+              .eq("id", r.id);
+          } catch {
+            /* soft-fail */
+          }
+        }
+      }
+    } catch {
+      /* soft-fail */
+    }
+  }
+
+  const images = typedRows.map((r) => {
     const entities = Array.isArray(r.extracted_entities)
       ? (r.extracted_entities as Array<{ name?: unknown; type?: unknown }>)
           .filter((e) => e && typeof e.name === "string")
@@ -70,6 +113,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       entityCount: entities.length,
       analyzed: !!r.vision_completed_at,
       visionError: r.vision_error ?? null,
+      objectId: r.image_object_id ?? "",
     };
   });
 

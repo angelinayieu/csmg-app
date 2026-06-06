@@ -158,6 +158,14 @@ For each NEW term:
 - term: the canonical phrase as it appears.
 - definition: 1-2 sentences. The meaning IN THIS PROJECT'S CONTEXT — not the generic dictionary sense.
 - aliases: other surface forms (plural, acronym, close synonym). Empty array if none.
+- kind: the grammatical category — one of: entity, operation, quality, pattern, role, constraint, outcome.
+    • entity     — a noun the project names (thing/system/artifact). e.g. "Library object", "Tech spec".
+    • operation  — a verb / action the system or user performs. e.g. "Decompose", "Promote".
+    • quality    — an aesthetic / taste / texture adjective. e.g. "Cute", "Dense", "Minimal", "Warm". USE THIS FOR ANY TASTE WORD.
+    • pattern    — a recurring shape / mechanism / motif. e.g. "Funnel", "Loop", "Bridge".
+    • role       — who/what plays a part. e.g. "Curator", "Reviewer", "Operator".
+    • constraint — a limit, rule, or tradeoff. e.g. "Cold-start", "Quota".
+    • outcome    — the end-state or metric. e.g. "Activation", "Retention".
 
 Rules:
 - Do NOT repeat or trivially re-word any ALREADY DEFINED term — those are owned by the objective lens / prior runs.
@@ -165,6 +173,7 @@ Rules:
 - DEDUPE: never emit two entries for the same concept.
 - Be specific to the objective. ≤5 words per term. Emit 0 if everything important is already covered.
 - CONSISTENCY WITH ITEM DEFINITIONS: some terms name a project ENTITY that already has a canonical item definition (shown under ENTITY DEFINITIONS, when provided). If you define such a term, your definition MUST be consistent with that item definition — add the cross-cutting / project-context angle, never contradict or override what the item says it is. Terms that are NOT entities (cross-cutting jargon, metrics, acronyms) you define freely as usual.
+- ALWAYS pick a kind from the seven values above. If genuinely uncertain, pick the closest fit; do not invent a new value.
 
 Return strict JSON. No prose outside the JSON.`;
 
@@ -183,8 +192,9 @@ const SCHEMA = {
             term: { type: "string" },
             definition: { type: "string" },
             aliases: { type: "array", items: { type: "string" } },
+            kind: { type: "string", enum: [...GLOSSARY_KINDS] },
           },
-          required: ["term", "definition", "aliases"],
+          required: ["term", "definition", "aliases", "kind"],
         },
       },
     },
@@ -281,6 +291,10 @@ export function mergeGlossary(
     // Always backfill slug on the existing row — non-destructive,
     // makes future slug lookups hit.
     if (!match.concept_slug && incSlug) match.concept_slug = incSlug;
+    // Backfill kind from incoming whenever the existing row doesn't have
+    // one — non-destructive (pinned/user kind already won above), and
+    // unblocks the rail's "Group by Kind" view for legacy rows.
+    if (!match.kind && inc.kind) match.kind = inc.kind;
   }
   // Cap — keep pinned first, then by authority, weight, recency.
   out.sort((a, b) => {
@@ -382,7 +396,12 @@ export async function generateGlossary(
   const entityTerms: GlossaryTerm[] = [];
   try {
     const raw = await llmJSON<{
-      terms?: Array<{ term?: unknown; definition?: unknown; aliases?: unknown }>;
+      terms?: Array<{
+        term?: unknown;
+        definition?: unknown;
+        aliases?: unknown;
+        kind?: unknown;
+      }>;
     }>({
       system: SYSTEM_PROMPT,
       user,
@@ -418,6 +437,7 @@ export async function generateGlossary(
         // phrase happens to coincide with an entity name will collide on
         // this slug at popover-lookup time, which is exactly what we want.
         concept_slug: slugifyConcept(term),
+        kind: asGlossaryKind(t?.kind),
         updated_at: now,
       });
     }

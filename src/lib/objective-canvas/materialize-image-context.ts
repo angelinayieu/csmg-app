@@ -33,11 +33,22 @@ import {
   recordContextConcept,
   type ContextConcept,
 } from "./context-frontier";
+import { upsertLibraryObject, linkObjects } from "./library-objects";
 import { slugifyConcept } from "./normalize-annotations";
 import type { StructuredImageExtraction } from "../ingest/extractors";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyDb = SupabaseClient<any>;
+
+interface TasteQualityRaw {
+  term?: unknown;
+  evidence_phrase?: unknown;
+}
+interface TasteQuality {
+  term: string;
+  slug: string;
+  evidence_phrase: string;
+}
 
 interface ExtractedEntityShape {
   name?: unknown;
@@ -63,6 +74,8 @@ export interface MaterializeImageContextResult {
   conceptIds: string[];
   conceptSlugs: string[];
   narrativeWritten: boolean;
+  imageObjectId: string | null;
+  tasteSlugs: string[];
 }
 
 /**
@@ -81,6 +94,8 @@ export async function materializeImageContext(
     conceptIds: [],
     conceptSlugs: [],
     narrativeWritten: false,
+    imageObjectId: null,
+    tasteSlugs: [],
   };
 
   // 1. Ensure the context anchor for this space. Idempotent.
@@ -145,58 +160,115 @@ export async function materializeImageContext(
     }
   }
 
-  // 4. Optional taste-prose pass — reads the structured extraction +
-  //    objective + space glossary, writes back a narrative paragraph
-  //    that bridges what the image shows and the user's taste.
-  let narrativeWritten = false;
+  // 4. Optional narrative + taste-tokens pass. Returns prose + 0-6
+  //    aesthetic quality tokens the image embodies ("cute","minimal",…)
+  //    which we persist as their OWN context_concept rows so the same
+  //    slug across multiple images accumulates evidence.
+  let narrative: string | null = null;
+  let taste: TasteQuality[] = [];
   if (args.runNarrativePass !== false) {
     try {
-      const narrative = await composeImageNarrative(db, {
+      const result = await composeImageNarrative(db, {
         spaceId: args.spaceId,
         objectiveText: args.objectiveText ?? null,
         extraction: args.extraction,
       });
-      if (narrative) {
-        await db
-          .from("ingested_files")
-          .update({
-            image_narrative: narrative,
-            image_concepts: conceptSlugs,
-          })
-          .eq("id", args.ingestedFileId);
-        narrativeWritten = true;
-      } else {
-        // Even without a narrative, persist the slug list so
-        // downstream consumers can join by concept_slug.
-        await db
-          .from("ingested_files")
-          .update({ image_concepts: conceptSlugs })
-          .eq("id", args.ingestedFileId);
-      }
+      narrative = result.narrative;
+      taste = result.taste;
     } catch (err) {
       console.warn(
         "[materialize-image-context] narrative pass failed (soft):",
         err,
       );
-      // Still persist concept slugs even if the prose pass fails.
+    }
+  }
+
+  // 4a. Persist each taste-quality as a context_concept whose source_ref
+  //     is unique per (slug, image). Two images both reading "cute" thus
+  //     produce TWO rows with the same slug — enrichGlossaryWithEvidence
+  //     groups by slug and surfaces both as evidence chips on the term.
+  const tasteSlugs: string[] = [];
+  for (const q of taste) {
+    try {
+      const objectId = await upsertLibraryObject(db, {
+        spaceId: args.spaceId,
+        userId: args.userId,
+        objectType: "context_concept",
+        title: q.term,
+        summary: q.evidence_phrase.slice(0, 280),
+        sourceRef: `ctx:taste:${q.slug}:img:${args.ingestedFileId}`,
+        contentSnapshot: {
+          concept_slug: q.slug,
+          kind: "fact",
+          role: "reference",
+          source_phrase: q.evidence_phrase.slice(0, 240),
+          source_ingested_file_id: args.ingestedFileId,
+          taste_quality: true,
+        },
+      });
+      if (objectId) {
+        await linkObjects(db, {
+          spaceId: args.spaceId,
+          fromObjectId: objectId,
+          toObjectId: anchorId,
+          relation: "derived_from",
+        });
+        tasteSlugs.push(q.slug);
+      }
+    } catch (err) {
+      console.warn(
+        "[materialize-image-context] taste-quality persist failed (soft):",
+        err,
+      );
+    }
+  }
+
+  // 4b. Persist narrative + the union of entity + taste slugs on the
+  //     ingested_files row so downstream consumers see one slug list.
+  const allSlugs = Array.from(new Set([...conceptSlugs, ...tasteSlugs]));
+  const narrativeWritten = Boolean(narrative);
+  try {
+    const patch: Record<string, unknown> = { image_concepts: allSlugs };
+    if (narrative) patch.image_narrative = narrative.slice(0, 1400);
+    await db.from("ingested_files").update(patch).eq("id", args.ingestedFileId);
+  } catch {
+    /* soft-fail */
+  }
+
+  // 5. Upsert the image_source library_object — the addressable handle
+  //    a board image card stamps onto its props.objectId so the drag
+  //    connector + object_links work. Patches ingested_files.image_object_id.
+  let imageObjectId: string | null = null;
+  try {
+    imageObjectId = await ensureImageSource(db, {
+      spaceId: args.spaceId,
+      userId: args.userId,
+      ingestedFileId: args.ingestedFileId,
+      narrative,
+      description: args.extraction.description ?? null,
+      conceptSlugs: allSlugs,
+    });
+    if (imageObjectId) {
+      await linkObjects(db, {
+        spaceId: args.spaceId,
+        fromObjectId: imageObjectId,
+        toObjectId: anchorId,
+        relation: "derived_from",
+      });
       try {
         await db
           .from("ingested_files")
-          .update({ image_concepts: conceptSlugs })
+          .update({ image_object_id: imageObjectId })
           .eq("id", args.ingestedFileId);
       } catch {
         /* soft-fail */
       }
     }
-  } else {
-    try {
-      await db
-        .from("ingested_files")
-        .update({ image_concepts: conceptSlugs })
-        .eq("id", args.ingestedFileId);
-    } catch {
-      /* soft-fail */
-    }
+  } catch (err) {
+    console.warn(
+      "[materialize-image-context] ensureImageSource failed (soft):",
+      err,
+    );
   }
 
   return {
@@ -204,7 +276,69 @@ export async function materializeImageContext(
     conceptIds,
     conceptSlugs,
     narrativeWritten,
+    imageObjectId,
+    tasteSlugs,
   };
+}
+
+// ── ensureImageSource ───────────────────────────────────────────────
+//
+// First writer for the `image_source` LibraryObjectType. One row per
+// ingested image (idempotent on source_ref='img:'||fileId).
+
+interface EnsureImageSourceArgs {
+  spaceId: string;
+  userId: string;
+  ingestedFileId: string;
+  narrative: string | null;
+  description: string | null;
+  conceptSlugs: string[];
+}
+
+async function ensureImageSource(
+  db: AnyDb,
+  args: EnsureImageSourceArgs,
+): Promise<string | null> {
+  let imageUrl: string | null = null;
+  let title = "Image";
+  try {
+    const { data } = await db
+      .from("ingested_files")
+      .select("image_url, source_name")
+      .eq("id", args.ingestedFileId)
+      .maybeSingle();
+    const row = data as {
+      image_url?: string | null;
+      source_name?: string | null;
+    } | null;
+    if (row?.image_url) imageUrl = row.image_url;
+    if (row?.source_name && row.source_name.trim()) {
+      title = row.source_name.trim().slice(0, 80);
+    }
+  } catch {
+    /* soft-fail */
+  }
+
+  const summary =
+    (args.narrative && args.narrative.trim()) ||
+    (args.description && args.description.trim()) ||
+    "Image reference";
+
+  return upsertLibraryObject(db, {
+    spaceId: args.spaceId,
+    userId: args.userId,
+    objectType: "image_source",
+    title,
+    summary: summary.slice(0, 280),
+    sourceRef: `img:${args.ingestedFileId}`,
+    contentSnapshot: {
+      image_url: imageUrl,
+      narrative: args.narrative,
+      description: args.description,
+      concept_slugs: args.conceptSlugs,
+      source_ingested_file_id: args.ingestedFileId,
+    },
+  });
 }
 
 // ── taste-prose pass ─────────────────────────────────────────────────
@@ -221,13 +355,19 @@ interface NarrativeArgs {
   extraction: StructuredImageExtraction;
 }
 
+interface NarrativeResult {
+  narrative: string | null;
+  taste: TasteQuality[];
+}
+
 async function composeImageNarrative(
   db: AnyDb,
   args: NarrativeArgs,
-): Promise<string | null> {
-  // Pull the space's existing glossary terms (top ~30 by recency) to
-  // anchor the narrative in the user's vocabulary.
-  const glossaryTerms = await loadGlossaryTermsForTaste(db, args.spaceId);
+): Promise<NarrativeResult> {
+  const { tasteTerms, otherTerms } = await loadGlossaryTermsForTaste(
+    db,
+    args.spaceId,
+  );
 
   const { extraction } = args;
   const entityList = extraction.entities
@@ -238,36 +378,46 @@ async function composeImageNarrative(
     .slice(0, 12)
     .map((r) => `- ${r.fromName} → ${r.toName} (${r.label})`)
     .join("\n");
-  const glossaryBlock = glossaryTerms.length
-    ? glossaryTerms.map((t) => `- ${t}`).join("\n")
-    : "(no glossary terms yet)";
+  const tasteBlock = tasteTerms.length
+    ? tasteTerms.map((t) => `- ${t}`).join("\n")
+    : "(no taste words yet — propose 1-3 if the image clearly embodies any aesthetic)";
+  const otherBlock = otherTerms.length
+    ? otherTerms.map((t) => `- ${t}`).join("\n")
+    : "(none)";
 
-  const system = `You write rich, taste-aware narratives that translate visual artifacts into prose anchored in a user's working vocabulary.
+  const system = `You translate visual references into BOTH (a) rich prose that ties what's shown back to the user's objective, AND (b) a small set of TASTE QUALITIES the image embodies — the aesthetic / texture adjectives that would re-weight a taste glossary term like "cute" or "minimal".
 
 You will receive:
-  - The user's OBJECTIVE (what they're working on).
-  - GLOSSARY TERMS — the user's earned vocabulary for this objective.
+  - The user's OBJECTIVE.
+  - TASTE WORDS — quality-kind glossary terms the user already cares about. PREFER reusing these when the image embodies them.
+  - OTHER GLOSSARY — the rest of the user's working vocabulary, for prose continuity.
   - A structured EXTRACTION from an image (description + entities + relationships).
 
-Write 3-5 sentences of clean prose that:
-  1. Names what the image is (don't restate the dry description).
-  2. Connects what it shows to the objective — be specific about which entities matter for which part of the objective.
-  3. WHERE NATURAL, uses the user's existing glossary vocabulary so the narrative reads as continuous with what the user already wrote. Don't shoehorn terms; only use them when they fit.
-  4. If the image surfaces a tension, contradiction, or implication for the objective, name it.
+Return strict JSON with two fields:
 
-Style:
-  - Direct, declarative. No filler ("This image shows…", "We can see…").
-  - No bullet lists. No headings.
-  - Don't invent details not present in the extraction.
-  - If the extraction is decorative / has no entities, return an empty string.
+1) "narrative" — 3-5 sentences of clean prose that:
+   - Names what the image is (don't restate the dry description).
+   - Connects what it shows to the objective — be specific about which entities matter for which part of the objective.
+   - WHERE NATURAL, uses the user's existing glossary vocabulary so the narrative reads as continuous with what the user already wrote. Don't shoehorn terms.
+   - If the image surfaces a tension, contradiction, or implication for the objective, name it.
+   - If the extraction is decorative / has no entities, return an empty string here.
+   - Direct, declarative. No filler ("This image shows…", "We can see…"). No bullet lists, no headings, no markdown.
 
-Return ONLY the prose. No JSON, no markdown fences, no preamble.`;
+2) "taste_qualities" — 0 to 6 entries. Each is an aesthetic / texture / mood word the image EMBODIES (not what's depicted: "cute", "dense", "minimal", "warm", "playful", "spare" — NOT "card", "icon", "dashboard"). PREFER words from the TASTE WORDS list when they fit; propose new ones only when the image clearly embodies a quality not on the list. For each entry:
+   - "term": single lowercased word or 2-word phrase. ≤20 chars.
+   - "evidence_phrase": 6-15 words naming the visible cues that read as that quality ("rounded forms, soft pastel palette, friendly weight"). This phrase becomes the grounding line behind that taste word in the user's glossary.
+   Return [] if the image is purely informational / has no aesthetic signal.
+
+Return ONLY the JSON object. No prose outside it.`;
 
   const user = `OBJECTIVE:
 ${args.objectiveText?.trim() || "(no objective text supplied)"}
 
-GLOSSARY TERMS:
-${glossaryBlock}
+TASTE WORDS (quality kind):
+${tasteBlock}
+
+OTHER GLOSSARY:
+${otherBlock}
 
 IMAGE DESCRIPTION:
 ${extraction.description || "(none)"}
@@ -278,36 +428,80 @@ ${entityList || "(none)"}
 RELATIONSHIPS:
 ${relationshipList || "(none)"}
 
-Write the narrative.`;
+Return the JSON.`;
+
+  const schema = {
+    name: "image_narrative_and_taste",
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        narrative: { type: "string" },
+        taste_qualities: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              term: { type: "string" },
+              evidence_phrase: { type: "string" },
+            },
+            required: ["term", "evidence_phrase"],
+          },
+        },
+      },
+      required: ["narrative", "taste_qualities"],
+    },
+  };
 
   try {
-    const { llmGenerate, MODEL_DEFAULTS } = await import("../llm");
-    const text = await llmGenerate({
+    const { llmJSON } = await import("../llm");
+    const raw = await llmJSON<{
+      narrative?: unknown;
+      taste_qualities?: TasteQualityRaw[];
+    }>({
       system,
       user,
-      provider: "anthropic",
-      model: MODEL_DEFAULTS.anthropic.fast,
-      maxTokens: 600,
+      responseSchema: schema,
       temperature: 0.5,
+      maxTokens: 900,
     });
-    const trimmed = text.trim();
-    if (!trimmed) return null;
-    // Soft cap so a runaway response doesn't bloat the row.
-    return trimmed.slice(0, 1400);
+    const narrative =
+      typeof raw?.narrative === "string" && raw.narrative.trim()
+        ? raw.narrative.trim().slice(0, 1400)
+        : null;
+    const taste: TasteQuality[] = [];
+    const seen = new Set<string>();
+    for (const t of Array.isArray(raw?.taste_qualities) ? raw.taste_qualities : []) {
+      const term =
+        typeof t?.term === "string" ? t.term.trim().toLowerCase().slice(0, 20) : "";
+      const evidence_phrase =
+        typeof t?.evidence_phrase === "string"
+          ? t.evidence_phrase.trim().slice(0, 200)
+          : "";
+      if (!term || !evidence_phrase) continue;
+      const slug = slugifyConcept(term);
+      if (!slug || seen.has(slug)) continue;
+      seen.add(slug);
+      taste.push({ term, slug, evidence_phrase });
+      if (taste.length >= 6) break;
+    }
+    return { narrative, taste };
   } catch (err) {
     console.warn(
       "[materialize-image-context] composeImageNarrative LLM call failed:",
       err,
     );
-    return null;
+    return { narrative: null, taste: [] };
   }
 }
 
-/** Pull glossary term labels from spaces.synthesis_data.glossary. Soft-fail. */
+/** Pull glossary terms from spaces.synthesis_data.glossary, partitioned
+ *  into TASTE words (kind==='quality') vs everything else. Soft-fail. */
 async function loadGlossaryTermsForTaste(
   db: AnyDb,
   spaceId: string,
-): Promise<string[]> {
+): Promise<{ tasteTerms: string[]; otherTerms: string[] }> {
   try {
     const { data } = await db
       .from("spaces")
@@ -315,20 +509,25 @@ async function loadGlossaryTermsForTaste(
       .eq("id", spaceId)
       .maybeSingle();
     const synth = (data as { synthesis_data?: unknown } | null)?.synthesis_data;
-    if (!synth || typeof synth !== "object") return [];
-    const glossary = (synth as Record<string, unknown>).glossary;
-    if (!Array.isArray(glossary)) return [];
-    const terms: string[] = [];
-    for (const g of glossary.slice(0, 30)) {
-      if (g && typeof g === "object") {
-        const term = (g as Record<string, unknown>).term;
-        if (typeof term === "string" && term.trim()) {
-          terms.push(term.trim().slice(0, 60));
-        }
-      }
+    if (!synth || typeof synth !== "object") {
+      return { tasteTerms: [], otherTerms: [] };
     }
-    return terms;
+    const glossary = (synth as Record<string, unknown>).glossary;
+    if (!Array.isArray(glossary)) return { tasteTerms: [], otherTerms: [] };
+    const tasteTerms: string[] = [];
+    const otherTerms: string[] = [];
+    for (const g of glossary.slice(0, 60)) {
+      if (!g || typeof g !== "object") continue;
+      const row = g as Record<string, unknown>;
+      const term = typeof row.term === "string" ? row.term.trim() : "";
+      if (!term) continue;
+      const trimmed = term.slice(0, 60);
+      if (row.kind === "quality") tasteTerms.push(trimmed);
+      else otherTerms.push(trimmed);
+      if (tasteTerms.length + otherTerms.length >= 40) break;
+    }
+    return { tasteTerms, otherTerms };
   } catch {
-    return [];
+    return { tasteTerms: [], otherTerms: [] };
   }
 }
