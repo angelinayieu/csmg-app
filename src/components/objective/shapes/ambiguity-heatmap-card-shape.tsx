@@ -19,15 +19,16 @@ import {
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { useState } from "react";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { forkAmbiguity } from "@/components/objective/board-bus";
 import { ZONE_LABEL, SHARPEN_COLOR } from "./prompt-sharpening-card-shape";
 
 const CARD_SIZE = 340; // square
 
 const SEV_COLOR: Record<string, string> = {
-  high: "#DC2626",
-  medium: "#D97706",
+  high: "#EF4444",
+  medium: "#F59E0B",
   low: "#94A3B8",
 };
 
@@ -103,6 +104,7 @@ function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape 
   const { color, sourceId } = shape.props;
   const heatmap = parseHeatmap(shape.props.heatmapJson);
   const keys = Object.keys(ZONE_LABEL);
+  const [hovered, setHovered] = useState<string | null>(null);
 
   function forkZone(key: string, e: React.MouseEvent) {
     e.stopPropagation();
@@ -126,10 +128,9 @@ function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape 
           width: "100%",
           height: "100%",
           borderRadius: 20,
-          background:
-            "linear-gradient(160deg, rgba(255,255,255,0.99) 0%, rgba(246,250,255,0.97) 100%)",
-          border: `1px solid ${color}33`,
-          boxShadow: `0 1px 2px rgba(11,18,40,0.05), 0 18px 46px -18px ${color}4D, 0 8px 22px -12px rgba(11,18,40,0.14)`,
+          background: "linear-gradient(180deg, #FFFFFF 0%, #FBFCFE 100%)",
+          border: `1px solid ${appleVibe.stroke.soft}`,
+          boxShadow: `0 1px 0 rgba(255,255,255,0.9) inset, 0 1px 2px rgba(11,18,40,0.04), 0 20px 44px -24px rgba(11,18,40,0.20), 0 8px 22px -18px ${color}33`,
           padding: "14px 14px 12px",
           display: "flex",
           flexDirection: "column",
@@ -142,7 +143,7 @@ function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape 
             display: "flex",
             alignItems: "center",
             gap: 7,
-            marginBottom: 6,
+            marginBottom: 3,
           }}
         >
           <span
@@ -182,7 +183,7 @@ function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape 
             display: "grid",
             gridTemplateColumns: "1fr 1fr",
             gridAutoRows: "1fr",
-            gap: 5,
+            gap: 6,
             minHeight: 0,
           }}
         >
@@ -190,11 +191,14 @@ function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape 
             const z = heatmap[key] ?? {};
             const sev = (z.severity as string) || "low";
             const sc = SEV_COLOR[sev] ?? SEV_COLOR.low;
+            const isH = hovered === key;
             return (
               <button
                 key={key}
                 type="button"
                 onPointerDown={stopEventPropagation}
+                onMouseEnter={() => setHovered(key)}
+                onMouseLeave={() => setHovered((h) => (h === key ? null : h))}
                 onClick={(e) => forkZone(key, e)}
                 title={z.ambiguity || ZONE_LABEL[key]}
                 style={{
@@ -203,10 +207,17 @@ function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape 
                   alignItems: "flex-start",
                   justifyContent: "center",
                   gap: 4,
-                  padding: "6px 9px",
-                  borderRadius: 10,
-                  border: `1px solid ${sc}33`,
-                  background: `${sc}10`,
+                  padding: "7px 10px",
+                  borderRadius: 12,
+                  border: isH
+                    ? `1px solid ${withAlpha(sc, 0.4)}`
+                    : `1px solid ${appleVibe.stroke.hairline}`,
+                  background: isH ? withAlpha(sc, 0.07) : "#FFFFFF",
+                  boxShadow: isH
+                    ? `0 8px 18px -10px ${withAlpha(sc, 0.5)}`
+                    : "0 1px 2px rgba(11,18,40,0.04)",
+                  transition:
+                    "background 120ms ease, border-color 120ms ease, box-shadow 120ms ease",
                   cursor: "pointer",
                   textAlign: "left",
                   minHeight: 0,
@@ -217,22 +228,23 @@ function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape 
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 6,
+                    gap: 7,
                     width: "100%",
                   }}
                 >
                   <span
                     style={{
-                      width: 7,
-                      height: 7,
+                      width: 8,
+                      height: 8,
                       borderRadius: 999,
                       background: sc,
+                      boxShadow: `0 0 0 3px ${withAlpha(sc, 0.16)}`,
                       flexShrink: 0,
                     }}
                   />
                   <span
                     style={{
-                      fontSize: 10.5,
+                      fontSize: 11,
                       fontWeight: 650,
                       color: appleVibe.text.primary,
                       overflow: "hidden",

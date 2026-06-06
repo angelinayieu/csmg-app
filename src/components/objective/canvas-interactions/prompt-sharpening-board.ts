@@ -236,10 +236,11 @@ export function forkAmbiguityOnBoard(
 }
 
 const HEATMAP_SIZE = 340;
-// Width matches the heatmap so the two forked cards read as a balanced pair
-// below the objective ("relatively same size"). Height stays taller for the list.
+// Both forked cards are the SAME 340 square now — the priority map is a
+// 2-column grid (mirrors the heatmap), so the pair reads as a balanced,
+// equally-scaled set below the objective ("relatively same size").
 const PRIORITY_W = 340;
-const PRIORITY_H = 440;
+const PRIORITY_H = 340;
 
 /** Spawn an Ambiguity Heatmap card to the RIGHT of the sharpening card.
  *  Idempotent per source — re-clicking the fork button focuses the existing
