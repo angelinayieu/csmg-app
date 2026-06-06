@@ -37,6 +37,9 @@ import type { SpacePulse } from "@/app/api/spaces/pulse/route";
 
 interface PulseTileProps {
   pulse: SpacePulse;
+  /** Space kind — 'ask' renders a distinctive chip so cross-whiteboard Q&A
+      whiteboards are visually separable in the returning-user index. */
+  kind?: "analysis" | "ask";
 }
 
 const PULSE_STYLES: Record<
@@ -72,10 +75,11 @@ const PULSE_STYLES: Record<
   },
 };
 
-export function PulseTile({ pulse }: PulseTileProps) {
+export function PulseTile({ pulse, kind = "analysis" }: PulseTileProps) {
   const [hovering, setHovering] = useState(false);
   const styles = PULSE_STYLES[pulse.pulse];
   const StatusIcon = styles.icon;
+  const isAsk = kind === "ask";
 
   const hasDetails =
     pulse.new_edges_24h > 0 ||
@@ -97,7 +101,7 @@ export function PulseTile({ pulse }: PulseTileProps) {
           styles.ring,
         )}
       >
-        {/* Top row: pulse dot + status label + name */}
+        {/* Top row: pulse dot + status label + ask chip + name */}
         <div className="flex items-center gap-2">
           <span className="relative flex h-2 w-2 shrink-0">
             {pulse.pulse === "fresh" && (
@@ -108,6 +112,15 @@ export function PulseTile({ pulse }: PulseTileProps) {
           <span className={cn("text-[9px] font-bold uppercase tracking-[0.14em]", styles.labelColor)}>
             {styles.label}
           </span>
+          {isAsk && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full border border-interaxis-200 bg-interaxis-50 px-1.5 py-px text-[9px] font-bold uppercase tracking-[0.14em] text-interaxis-700"
+              title="Ask whiteboard — cross-whiteboard synthesis"
+            >
+              <MessageCircleQuestion className="h-2.5 w-2.5" />
+              Ask
+            </span>
+          )}
           <span className="ml-auto flex items-center gap-1 text-[10px] text-gray-400 tabular-nums">
             <Boxes className="h-3 w-3" />
             {pulse.entity_count}

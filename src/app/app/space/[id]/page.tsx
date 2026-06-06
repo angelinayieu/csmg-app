@@ -8,6 +8,7 @@ import {
 } from "@/components/dashboard/production-sequence";
 import { SpaceInsightsStrip } from "@/components/dashboard/space-insights-strip";
 import { TwinSurface } from "@/components/twin/twin-surface";
+import { AskSpaceView } from "@/components/space/ask-space-view";
 import { useSpaceData } from "@/contexts/space-data-context";
 import { useRouter } from "next/navigation";
 
@@ -15,6 +16,14 @@ export default function SpaceDashboardPage() {
   const { space } = useSpaceData();
   const router = useRouter();
   const spaceId = space?.id;
+  const kind = (space as unknown as { kind?: "analysis" | "ask" } | null)?.kind ?? "analysis";
+
+  // Ask-kind whiteboards skip the full dashboard (production sequence, twin,
+  // apps, KG overview) — the user came here for a single synthesized answer
+  // with references. See AskSpaceView for the layout.
+  if (kind === "ask") {
+    return <AskSpaceView />;
+  }
 
   return (
     <div className="flex flex-col gap-6 px-6 pt-6 pb-2">

@@ -127,6 +127,7 @@ export type Database = {
           strategy_committed_at: string | null;
           digital_twin_state: "not_started" | "ready" | "active" | "retired";
           twin_initialized_at: string | null;
+          kind: "analysis" | "ask";
           created_at: string;
           updated_at: string;
         };
@@ -162,6 +163,7 @@ export type Database = {
           strategy_committed_at?: string | null;
           digital_twin_state?: "not_started" | "ready" | "active" | "retired";
           twin_initialized_at?: string | null;
+          kind?: "analysis" | "ask";
           created_at?: string;
           updated_at?: string;
         };
@@ -197,6 +199,7 @@ export type Database = {
           strategy_committed_at?: string | null;
           digital_twin_state?: "not_started" | "ready" | "active" | "retired";
           twin_initialized_at?: string | null;
+          kind?: "analysis" | "ask";
           created_at?: string;
           updated_at?: string;
         };

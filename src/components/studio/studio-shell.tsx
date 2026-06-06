@@ -77,6 +77,16 @@ export function StudioShell({
 
   const firstRun = spaces.length === 0;
 
+  // Lookup kind by space id so PulseTile can badge ask-kind whiteboards.
+  const kindById = useMemo(() => {
+    const m = new Map<string, "analysis" | "ask">();
+    for (const s of spaces) {
+      const k = (s as unknown as { kind?: "analysis" | "ask" }).kind ?? "analysis";
+      m.set(s.id, k);
+    }
+    return m;
+  }, [spaces]);
+
   // When pulse data hasn't arrived yet, render fallback tiles from the
   // server-sent space list so the user never sees an empty frame.
   const tileData: SpacePulse[] = useMemo(() => {
@@ -177,7 +187,7 @@ export function StudioShell({
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {visibleTiles.map((p) => (
-                  <PulseTile key={p.space_id} pulse={p} />
+                  <PulseTile key={p.space_id} pulse={p} kind={kindById.get(p.space_id)} />
                 ))}
               </div>
 
@@ -226,7 +236,7 @@ export function StudioShell({
               "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
             )}>
               {tileData.map((p) => (
-                <PulseTile key={`all-${p.space_id}`} pulse={p} />
+                <PulseTile key={`all-${p.space_id}`} pulse={p} kind={kindById.get(p.space_id)} />
               ))}
             </div>
           </section>
