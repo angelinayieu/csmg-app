@@ -1906,6 +1906,7 @@ export function WhiteboardBase({
           editor={editor}
           saveStatus={saveStatus}
           collaborators={collab.collaborators}
+          selfIdentity={collabIdentity}
         />
       )}
       {/* Contextual AI action — only while the board chrome is showing and

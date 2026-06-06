@@ -453,15 +453,18 @@ the screenshot implies. 8–9 sharpen + harden.
 
 ---
 
-## 11. Open decisions (for the user)
+## 11. Decisions (resolved 2026-06-05)
 
-1. **Auto vs. opt-in:** does the internal loop auto-run on every ambiguity at intake,
-   or only on the user's "AI resolve" click? (Plan supports both; default = opt-in
-   per card + a "Resolve all" — safest for cost + trust.)
-2. **Hero threshold:** how high must leverage be for a discovered feature to earn a
-   board card vs. Library-only? (Proposed: top-1 per resolution, or leverage ≥ 0.7.)
-3. **Budget per resolution:** default token/node cap (proposed: ~node depth 3,
-   ≤ ~8 nodes, K=2 dry rounds).
+1. **Trigger = the user's choice of THREE** (no silent auto-run): every ambiguity/card offers
+   **AI resolve** (this one) · **Resolve all** · **Answer questions** (Studio). All three already
+   exist (inline "Let AI decide" / `auto-resolve`-all; Resolution Studio = answer questions) —
+   surface them as an explicit 3-way choice at the resolve entry points.
+2. **Board is SUPER picky.** Only the single best, title-self-explanatory artifact reaches the
+   board. Everything else — variants, rejected readings, sub-detail, non-hero features — lives
+   INSIDE the operations / **expandable** sidebar + Library. Default-hide; promote rarely.
+3. **Start at Step 1** (wire the inert micro half) — IN PROGRESS.
+
+Default budget per resolution (tunable): node depth ~3, ≤ ~8 nodes, K=2 dry rounds.
 
 ---
 
@@ -512,3 +515,124 @@ standard row fields (`summary`, `subsystem`, `source_ref`, `card_face`, `object_
 **The one redundancy to avoid:** `decompose-cards` already mints features + variables —
 the engine must EXTEND that path (orchestrate it, enriched), **NOT** add a second
 parallel decomposer (§6.6).
+
+---
+
+## 13. Relationship to SpecForge (not a rival — the feeder)
+
+Clarify and SpecForge are different operations at different altitudes; they run in sequence.
+
+- **Clarify = breadth / WHAT** — the whole objective → a disambiguated feature + variable map. Light born-with metadata.
+- **SpecForge = depth / HOW** — ONE chosen feature → deep ~13-stage causal product spec → tech spec → prototype.
+
+```
+Objective ──[Clarify]──▶ clarified feature cards ──pick one──▶ [SpecForge] ──▶ tech spec ──▶ prototype
+```
+
+SpecForge stays very relevant — clarify just feeds it **cleaner inputs** (today SpecForge's first stage re-cleans raw input; with clarify upstream it starts from a disambiguated, typed, glossary-grounded feature and goes deeper faster). Three rules keep them from overlapping:
+1. **Light seed vs. deep spec.** The clarify `feature_proposal` is a *seed* (mechanism line, variable wiring, provenance). SpecForge owns the *deep* spec. Clarify must not produce the deep spec.
+2. **SpecForge consumes clarify output + short-circuits redundant stages.** Its "target user" / "problem" stages map onto clarify's ambiguity zones (`target_user`, `problem`) — read the clarified feature instead of re-deriving.
+3. **Share primitives.** Both use converge/diverge — reuse `converge-diverge.ts` + `specforge/engines.ts` at different scopes, never a parallel copy.
+
+---
+
+## 14. Ranking, grouping & sequence
+
+**Ranking = dependency-weighted "resolve-first":** `priority × downstream_fanout`, where
+`priority = leverage × (0.5 + 0.5·uncertainty)` (existing) and `downstream_fanout` = count
+of cards that `depend_on` this, computed from `object_links`. So "what to resolve now" =
+*the upstream root that unblocks the most*. Reuses `derive-depends-on` graph utils + the
+dormant `library_objects.rank_score` slot (no migration).
+**The seam to build:** a `concept_slug ↔ object_id` join (salience is slug-keyed,
+dependencies are id-keyed) so a concept's priority can be weighted by its card's fan-out.
+
+**Grouping = subsystem** (`library_objects.subsystem`) — the only LIVE auto-grouping
+(LLM-assigned at decompose, already rendered as swimlanes + Library folders). Layers /
+causal-chains are *future lenses* (they sit on deprecated/unmounted surfaces — do NOT build
+the default on them).
+
+**Expansion unit = the subsystem set** + one hero per resolution.
+
+**Surfacing = order, not numbers** — convey rank by *sequence + one "start here" highlight*,
+never scores/percentages/long text (the anti-overwhelm rule, literal).
+
+**The sequence (what shows up, in order):**
+1. Prompt submitted → goal rail appears instantly with the distilled **title** (heartbeat).
+2. Uncertainty map lands → **"Resolve next"** list, grouped by subsystem, ordered root-first; #1 highlighted "start here."
+3. User taps a subsystem set (or the hero) → headless **diverge → converge → self-question** loop; uncertainty bar drains live.
+4. Answers surface as **title-first feature cards**; variables sink silently into the substrate (glossary + KG).
+5. Self-questioning surfaces **new items** (soft "new" pulse) → list **re-ranks**.
+6. The list keeps re-ordering as resolutions land (resolving a root unblocks its dependents).
+7. Any card → explore further via its hover verbs (same ops the engine uses).
+8. A clarified feature shows **"Forge spec →"** → hands off to SpecForge.
+9. Auto-recs throughout = **one planner**, surfaced per context (rail = resolve-next; card-hover = what-to-do) — not three competing heuristics.
+
+---
+
+## 15. The generation experience (the choreography)
+
+**Core idea: the board *becomes* the living graph during generation, then curates itself
+down to clean cards.** The exploration plays out (nodes bloom, edges draw, bars drain), then
+on convergence the churn fades and only kept title-first cards remain. Thinking is temporal
+theater, not permanent clutter (consistent with `feedback_structural_events_only`).
+
+**Choreography:** title appears → "Resolve next" fills (bars full) → focal concept pulses →
+candidates fan out (diverge) → weak ones dim (converge) → survivors brighten + wire to their
+variables → the rail bar drains *in lockstep* → list re-orders → a new node buds (emergent) →
+the cluster collapses into one hero card; variables sink to substrate.
+
+**Five principles for "magical, not busy":**
+1. **One focal action at a time** — eye always knows where to look; rest is ambient.
+2. **Graph ↔ rail in lockstep** — one SSE event updates the node *and* its bar together.
+3. **Momentum one-way** — bars only drain, list only shrinks, checks only accrue.
+4. **Anticipation** — the "start here" pulse + budding "new" nodes pull you forward.
+5. **Calm after the storm** — the lively generation resolves into a still, organized board.
+
+**Build split:** **v1** = the resolve happens *in place* (forked card pulses → candidate chips
+fan/prune → settle into the hero card; bars drain via the existing event-bus/SSE) — magical with
+existing infra. **v2** = the full node-link graph theater — needs the deferred space-wide KG
+renderer (`object-cluster-graph` is per-object; `causal-map` graph-build isn't mounted). Both
+hit "something every second."
+
+---
+
+## 16. Visual system — DARK flow-builder theme + REAL bound connectors
+
+**Theme: DARK** (decided 2026-06-05). The objective board adopts a dark flow-builder look —
+dark rounded node cards on a near-black dotted canvas — matching the user's chosen reference.
+⚠️ **Scope note:** this is a meaningful restyle. `appleVibe` is a LIGHT token system; the board,
+rail, and cards are all light today, and the marketing/brand surfaces are warm-sun light. So the
+dark theme is **board-scoped** (a dark token set / board theme flag for the canvas + nodes +
+connectors + rail), kept distinct from the rest of the app — not a global flip.
+
+**Connectors: REAL, bound — never an overlay.** A custom tldraw **connector shape + binding**
+(tldraw `^4.5.9`, bindings already used in `connector-drag-layer.tsx` / `deploy-oc-cards`). The
+wire is locked to both cards and moves *natively* as they move. **Do NOT** reuse the
+`sharpening-connectors.tsx` SVG overlay — the user explicitly rejected "fake / drawn-on" wires.
+
+**Circular ports + strong connections** (the user's exact ask):
+- **Circular colored ports** at each end — **green = output ("feeds"), pink/magenta = input
+  ("depends_on")** — prominent filled dots; port color encodes relation direction.
+- **Strong gradient bezier wires** — smooth S-curves, bold (not faint), running green→pink to
+  match the ports. "Strong connections" = visually prominent wires + dots, not thin hairlines.
+- **Multi-port nodes** (several green-out / pink-in dots stacked on a side); right side = out,
+  left side = in.
+
+**Nodes:** dark rounded cards, **title-first collapsed**, expand to body + options. Selecting a
+node opens the **right-side inspector** = our `object-detail-drawer` (the rich `feature_proposal`
+sections, §6.5). The bottom node-type toolbar maps to card kinds / ops.
+
+**This is a cross-cutting visual layer** applied across Steps 5–7 (the agent's deploys, the
+per-card surface, and curation) — not a separate functional step. Verify in a `/preflight/*`
+harness (the user reviews pixels).
+
+---
+
+## 17. Status
+
+Plan finalized 2026-06-05. Decided: dark board theme · real bound connectors with circular
+green/pink ports + strong gradient wires · heatmap moves to the sidebar + forked nodes (out of
+the objective card) · ranking = dependency-weighted resolve-first · grouping = subsystem ·
+output = title-first feature cards with rich `feature_proposal` metadata in the expanded
+sidebar · clarify feeds SpecForge. Still the user's call before build (§11): auto vs. opt-in
+trigger · surfacing selectivity · confirm start at Step 1.

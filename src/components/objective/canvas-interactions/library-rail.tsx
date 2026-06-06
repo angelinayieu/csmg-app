@@ -1307,16 +1307,20 @@ function ObjectsView({
   // Spin a folder off into its OWN child board (room or sandbox): the route
   // copies the cards into a new child space; we seed sessionStorage so the child
   // board deploys them on load, then navigate there.
-  async function spinOff(folderName: string, items: LibObject[], mode: "room" | "sandbox") {
+  async function spinOff(folderName: string, items: LibObject[], mode: "room" | "page" | "sandbox") {
     setSpinMenu(null);
     const ids = items.map((o) => o.id);
     if (!ids.length) return;
-    showFlash(mode === "sandbox" ? "Opening sandbox…" : "Creating room…", 60000);
+    const apiMode = mode === "sandbox" ? "sandbox" : "room";
+    showFlash(
+      mode === "sandbox" ? "Opening sandbox…" : mode === "page" ? "Creating page…" : "Creating room…",
+      60000,
+    );
     try {
       const res = await fetch(`/api/objective/${spaceId}/spin-off-folder`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ folderName, objectIds: ids, mode }),
+        body: JSON.stringify({ folderName, objectIds: ids, mode: apiMode }),
       });
       const j = res.ok ? await res.json() : null;
       if (!j?.spaceId) {
@@ -1347,7 +1351,22 @@ function ObjectsView({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
-      {/* grouping axis + folder tools */}
+      {/* ── Banner: title sits FIRST, prominent. Caption + display toggle sit
+            on the same row so the catalog identity reads before any chrome. */}
+      <div style={catalogBanner}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={catalogTitle}>The catalog</div>
+          <div style={catalogCaption}>
+            {visibleObjects
+              ? `${visibleRoots.length} object${visibleRoots.length === 1 ? "" : "s"}${featureCount > 0 ? ` · ${featureCount} feature${featureCount === 1 ? "" : "s"}` : ""}`
+              : "—"}
+            <span style={{ marginLeft: 8, color: appleVibe.text.faint, fontWeight: 500 }}>· node-link map coming</span>
+          </div>
+        </div>
+        <DisplayToggle tiles={tiles} onChange={setTiles} />
+      </div>
+
+      {/* grouping axis + folder tools — secondary chrome below the banner */}
       <div style={objToolbar}>
         <div style={segWrap}>
           {axes.map((a) => {
@@ -1387,20 +1406,7 @@ function ObjectsView({
               Browse all
             </button>
           )}
-          <DisplayToggle tiles={tiles} onChange={setTiles} />
         </div>
-      </div>
-
-      <div style={{ padding: "2px 12px 0" }}>
-        <div style={{ fontFamily: CATALOG_SERIF, fontSize: 18, fontWeight: 600, letterSpacing: "-0.01em", color: appleVibe.text.primary }}>
-          The catalog
-        </div>
-      </div>
-      <div style={objCaption}>
-        {visibleObjects
-          ? `${visibleRoots.length} object${visibleRoots.length === 1 ? "" : "s"}${featureCount > 0 ? ` · ${featureCount} feature${featureCount === 1 ? "" : "s"}` : ""}`
-          : "—"}
-        <span style={{ marginLeft: 8, color: appleVibe.text.faint, fontWeight: 500 }}>· node-link map coming</span>
       </div>
 
       {newFolderOpen && (
@@ -1436,62 +1442,92 @@ function ObjectsView({
             const isCollapsed = collapsed.has(shelf.key);
             return (
               <div key={shelf.key} style={{ marginBottom: 8 }}>
-                {tiles ? (
-                  <CatalogShelfHeader
-                    label={shelf.label}
-                    count={shelf.items.length}
-                    collapsed={isCollapsed}
-                    onToggle={() => toggle(setCollapsed, shelf.key)}
-                    hue={shelf.key === "__unfiled" || shelf.key === "none" ? null : tropicalHue(shelfIdx)}
-                  />
-                ) : (
-                  <GroupHeader
-                    label={shelf.label}
-                    count={shelf.items.length}
-                    collapsed={isCollapsed}
-                    onToggle={() => toggle(setCollapsed, shelf.key)}
-                    dotColor={shelf.dot}
-                  />
-                )}
-                {axis === "folder" && shelf.key !== "__unfiled" && shelf.items.length > 0 && !isCollapsed && (
-                  <div
-                    draggable
-                    onDragStart={(e) =>
-                      encodeFolderDrag(e.dataTransfer, {
-                        v: 1,
-                        spaceId,
-                        folderName: shelf.label,
-                        cards: folderCards(shelf.items),
-                      })
-                    }
-                    style={folderActionsRow}
-                    title="Drag onto the board — or use Send"
-                  >
-                    <span style={folderActionsHint}>⠿ Drag to board</span>
-                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                      <button
-                        type="button"
-                        onClick={() => sendFolderToBoard(shelf.label, shelf.items)}
-                        style={sendFolderBtn}
-                      >
-                        Send to board
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSpinMenu(spinMenu === shelf.key ? null : shelf.key)}
-                        style={newRoomBtn}
-                        title="Spin this folder off into a new board"
-                      >
-                        New room ▾
-                      </button>
+                {/* The shelf TITLE itself is the drag handle for the whole folder.
+                    Wrapping it in a draggable container means: grab the title →
+                    drag the entire folder onto the board. Individual tiles below
+                    are still independently draggable. */}
+                {(() => {
+                  const isDraggable =
+                    axis === "folder" && shelf.key !== "__unfiled" && shelf.items.length > 0;
+                  const headerNode = tiles ? (
+                    <CatalogShelfHeader
+                      label={shelf.label}
+                      count={shelf.items.length}
+                      collapsed={isCollapsed}
+                      onToggle={() => toggle(setCollapsed, shelf.key)}
+                      hue={shelf.key === "__unfiled" || shelf.key === "none" ? null : tropicalHue(shelfIdx)}
+                    />
+                  ) : (
+                    <GroupHeader
+                      label={shelf.label}
+                      count={shelf.items.length}
+                      collapsed={isCollapsed}
+                      onToggle={() => toggle(setCollapsed, shelf.key)}
+                      dotColor={shelf.dot}
+                    />
+                  );
+                  if (!isDraggable) return headerNode;
+                  return (
+                    <div
+                      draggable
+                      onDragStart={(e) =>
+                        encodeFolderDrag(e.dataTransfer, {
+                          v: 1,
+                          spaceId,
+                          folderName: shelf.label,
+                          cards: folderCards(shelf.items),
+                        })
+                      }
+                      style={{ cursor: "grab" }}
+                      title="Drag this title onto the board to deploy the whole folder"
+                    >
+                      {headerNode}
                     </div>
+                  );
+                })()}
+                {axis === "folder" && shelf.key !== "__unfiled" && shelf.items.length > 0 && !isCollapsed && (
+                  <div style={deployRow}>
+                    <button
+                      type="button"
+                      onClick={() => setSpinMenu(spinMenu === shelf.key ? null : shelf.key)}
+                      style={deployBtn(spinMenu === shelf.key)}
+                      title="Deploy this folder"
+                    >
+                      <Plus style={{ width: 11, height: 11, flexShrink: 0 }} strokeWidth={2.6} />
+                      Deploy
+                      <ChevronDown
+                        style={{
+                          width: 10,
+                          height: 10,
+                          flexShrink: 0,
+                          transform: spinMenu === shelf.key ? "rotate(180deg)" : "none",
+                          transition: "transform .14s ease",
+                        }}
+                        strokeWidth={2.4}
+                      />
+                    </button>
                   </div>
                 )}
                 {spinMenu === shelf.key && !isCollapsed && (
                   <div style={menuPanel}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSpinMenu(null);
+                        sendFolderToBoard(shelf.label, shelf.items);
+                      }}
+                      style={menuItem(false)}
+                    >
+                      <Plus style={{ width: 12, height: 12, color: FOLDER_DOT, flexShrink: 0 }} strokeWidth={2.4} />
+                      <span style={menuItemText}>Send to this board</span>
+                    </button>
                     <button type="button" onClick={() => spinOff(shelf.label, shelf.items, "room")} style={menuItem(false)}>
                       <DoorOpen style={{ width: 12, height: 12, color: "#7C3AED", flexShrink: 0 }} strokeWidth={2.2} />
                       <span style={menuItemText}>New room — fresh board</span>
+                    </button>
+                    <button type="button" onClick={() => spinOff(shelf.label, shelf.items, "page")} style={menuItem(false)}>
+                      <NotebookPen style={{ width: 12, height: 12, color: "#0EA5A4", flexShrink: 0 }} strokeWidth={2.2} />
+                      <span style={menuItemText}>New page — focused canvas</span>
                     </button>
                     <button type="button" onClick={() => spinOff(shelf.label, shelf.items, "sandbox")} style={menuItem(false)}>
                       <Boxes style={{ width: 12, height: 12, color: FOLDER_DOT, flexShrink: 0 }} strokeWidth={2.2} />
@@ -2464,8 +2500,23 @@ const toolBtn: CSSProperties = {
   color: appleVibe.text.secondary,
   fontFamily: appleVibe.font.stack,
 };
-const objCaption: CSSProperties = {
-  padding: "0 12px 6px",
+const catalogBanner: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-end",
+  justifyContent: "space-between",
+  gap: 10,
+  padding: "14px 14px 8px",
+};
+const catalogTitle: CSSProperties = {
+  fontFamily: CATALOG_SERIF,
+  fontSize: 22,
+  lineHeight: 1.1,
+  fontWeight: 600,
+  letterSpacing: "-0.015em",
+  color: appleVibe.text.primary,
+};
+const catalogCaption: CSSProperties = {
+  marginTop: 3,
   fontSize: 11,
   fontWeight: 600,
   color: appleVibe.text.tertiary,
@@ -2567,49 +2618,27 @@ const emptyFolderHint: CSSProperties = {
   fontSize: 11,
   color: appleVibe.text.faint,
 };
-const folderActionsRow: CSSProperties = {
+const deployRow: CSSProperties = {
   display: "flex",
+  justifyContent: "flex-end",
+  margin: "4px 2px 6px",
+};
+const deployBtn = (active: boolean): CSSProperties => ({
+  display: "inline-flex",
   alignItems: "center",
-  justifyContent: "space-between",
-  gap: 8,
-  margin: "0 0 6px",
-  padding: "5px 8px",
-  borderRadius: appleVibe.radius.md,
-  border: "1px dashed var(--glass-border)",
-  background: appleVibe.surface.chip,
-  cursor: "grab",
-  fontFamily: appleVibe.font.stack,
-};
-const folderActionsHint: CSSProperties = {
+  gap: 5,
+  padding: "4px 10px 4px 9px",
+  borderRadius: appleVibe.radius.pill,
+  border: active ? `1px solid ${FOLDER_DOT}55` : "1px solid var(--glass-border)",
+  background: active ? `${FOLDER_DOT}14` : appleVibe.surface.card,
+  color: active ? FOLDER_DOT : appleVibe.text.secondary,
   fontSize: 10.5,
-  fontWeight: 600,
-  color: appleVibe.text.tertiary,
+  fontWeight: 700,
   letterSpacing: "0.01em",
-};
-const sendFolderBtn: CSSProperties = {
-  padding: "3px 10px",
-  borderRadius: appleVibe.radius.pill,
-  border: "none",
-  background: FOLDER_DOT,
-  color: "#fff",
-  fontSize: 10.5,
-  fontWeight: 700,
   cursor: "pointer",
   fontFamily: appleVibe.font.stack,
-  flexShrink: 0,
-};
-const newRoomBtn: CSSProperties = {
-  padding: "3px 10px",
-  borderRadius: appleVibe.radius.pill,
-  border: "1px solid var(--glass-border)",
-  background: appleVibe.surface.card,
-  color: appleVibe.text.secondary,
-  fontSize: 10.5,
-  fontWeight: 700,
-  cursor: "pointer",
-  fontFamily: appleVibe.font.stack,
-  flexShrink: 0,
-};
+  boxShadow: active ? "none" : appleVibe.shadow.chip,
+});
 const browseRoomsBtn: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
