@@ -278,9 +278,16 @@ function PromptSharpeningRenderer({
   const INLINE_DETAILS = false;
   const ranked = parseRanked(shape.props.rankedJson);
   const heatmap = parseHeatmap(shape.props.heatmapJson);
-  // No real heatmap yet → the artifact is still generating (the optimistic
-  // "Sharpening…" placeholder). Show a progress bar instead of the toggle.
-  const loading = Object.keys(heatmap).length === 0;
+  // Reveal the card the INSTANT the fast pass yields a title — the title +
+  // sharpened prompt are the first, fastest output, so we surface them
+  // immediately rather than holding the whole card behind the progress bar
+  // until the (slower) heatmap lands. The heatmap + priority then fork out as
+  // their own cards when ready, each with its own done/generating status below.
+  // (Gating on the heatmap is what left this card stuck at "Generating 94%"
+  // even after the title was already available.)
+  const hasTitle = !!(title && title.trim());
+  const loading = !hasTitle;
+  const heatmapReady = Object.keys(heatmap).length > 0;
   // Terminal-failure surface: if generation never lands (poll exhausted, or a
   // credits/error response) flip to a "couldn't sharpen — retry" state instead
   // of leaving the card stuck on the 94% bar forever. Retry re-triggers
@@ -516,6 +523,15 @@ function PromptSharpeningRenderer({
         salienceJson: JSON.stringify(salience),
         color,
       });
+      // Re-assert the heatmap fork at the SAME moment — deploying the priority
+      // map is exactly when the heatmap was observed to vanish (placement /
+      // restore churn). Both deploys are idempotent (focus the existing card,
+      // recreate a missing one), so this heals "heatmap disappears after the
+      // priority map appears" without ever duplicating it.
+      const hm = shape.props.heatmapJson;
+      if (hm && hm !== "{}") {
+        deployHeatmapCard({ sourceId: shape.id, spaceId, heatmapJson: hm, color });
+      }
     }
   }, [spaceId, salience, shape.id, color]);
 
@@ -938,6 +954,47 @@ function PromptSharpeningRenderer({
           ) : (
             <GenerationActivity color={color} />
           ))}
+
+        {/* Staged "forking out" status — appears the moment the title + desc are
+            up (no longer gated behind the heatmap) and disappears once BOTH
+            downstream products have landed, so the user sees what's still being
+            generated vs done. A Ready row is clickable to focus / re-assert its
+            forked card if it scrolled off-viewport or vanished. */}
+        {!loading && !(heatmapReady && !!(salience && salience.length)) && (
+          <div
+            style={{
+              marginTop: 11,
+              display: "flex",
+              flexDirection: "column",
+              gap: 5,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 9.5,
+                fontWeight: 600,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                color: appleVibe.text.tertiary,
+                marginBottom: 1,
+              }}
+            >
+              Forking out
+            </div>
+            <ForkStatusRow
+              label="Ambiguity map"
+              done={heatmapReady}
+              color={color}
+              onClick={forkOutHeatmap}
+            />
+            <ForkStatusRow
+              label="Priority map"
+              done={!!(salience && salience.length)}
+              color={color}
+              onClick={forkOutPriorityMap}
+            />
+          </div>
+        )}
 
         {/* Resolve panel — the FIRST thing the user sees once the artifact
             lands: an honest count of what still needs answering plus the two
@@ -1562,6 +1619,80 @@ function GenerationFailed({
         Retry
       </button>
     </div>
+  );
+}
+
+/** One staged-output row for the card's "forking out" strip — Ambiguity map /
+ *  Priority map, each Ready (green check; click to focus its forked card) or
+ *  Generating (pulsing dot). Lets the user see WHAT is still being produced
+ *  after the title + desc already surfaced, and re-focus / re-assert a fork that
+ *  scrolled off-viewport or vanished. */
+function ForkStatusRow({
+  label,
+  done,
+  color,
+  onClick,
+}: {
+  label: string;
+  done: boolean;
+  color: string;
+  onClick?: (e: React.MouseEvent) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onPointerDown={stopEventPropagation}
+      onClick={done ? onClick : undefined}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        width: "100%",
+        padding: "5px 8px",
+        borderRadius: 8,
+        border: "none",
+        background: done ? "rgba(16,185,129,0.07)" : "rgba(15,23,42,0.03)",
+        cursor: done && onClick ? "pointer" : "default",
+        textAlign: "left",
+      }}
+    >
+      {done ? (
+        <Check style={{ width: 13, height: 13, color: "#10b981" }} strokeWidth={3} />
+      ) : (
+        <span
+          className="animate-pulse"
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: 999,
+            background: color,
+            flexShrink: 0,
+            margin: "0 2.5px",
+          }}
+        />
+      )}
+      <span
+        style={{
+          fontSize: 11.5,
+          fontWeight: 600,
+          color: done ? appleVibe.text.secondary : appleVibe.text.tertiary,
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          marginLeft: "auto",
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: "0.05em",
+          textTransform: "uppercase",
+          color: done ? "#10b981" : appleVibe.text.tertiary,
+        }}
+      >
+        {done ? "Ready" : "Generating"}
+      </span>
+    </button>
   );
 }
 
