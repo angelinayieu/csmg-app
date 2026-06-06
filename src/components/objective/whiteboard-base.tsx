@@ -2572,6 +2572,58 @@ function PrototypeEventBridge({
           },
           meta: { sourceShapeId: d.shapeId },
         });
+        // Lineage arrow — visible "forked from" connector from the source
+        // tech-spec card to this prototype. Mirrors the UI-plan-card variant
+        // arrow pattern (~line 2744). Dashed grey + meta.prototypeLink so the
+        // board can distinguish lineage edges from real flow connectors. The
+        // arrow's bindings track the cards if either moves; if the source is
+        // deleted, the arrow becomes a free end (same as variant arrows).
+        if (d.shapeId) {
+          const arrowId = createShapeId();
+          const arrow: TLShapePartial<TLArrowShape> = {
+            id: arrowId,
+            type: "arrow",
+            props: {
+              color: "grey",
+              size: "s",
+              dash: "dashed",
+              arrowheadStart: "none",
+              arrowheadEnd: "arrow",
+              bend: 0,
+            },
+            meta: { prototypeLink: true, sourceShapeId: d.shapeId },
+          };
+          editor.createShapes([arrow]);
+          editor.createBindings([
+            {
+              fromId: arrowId,
+              toId: d.shapeId as TLShapeId,
+              type: "arrow",
+              props: {
+                terminal: "start",
+                normalizedAnchor: { x: 1, y: 0.5 },
+                isExact: false,
+                isPrecise: true,
+              },
+              meta: {},
+            },
+            {
+              fromId: arrowId,
+              toId: id,
+              type: "arrow",
+              props: {
+                terminal: "end",
+                normalizedAnchor: { x: 0, y: 0.5 },
+                isExact: false,
+                isPrecise: true,
+              },
+              meta: {},
+            },
+          ]);
+          // Send the arrow to the back so it doesn't intercept clicks on
+          // the prototype iframe or the spec card.
+          editor.sendToBack([arrowId]);
+        }
         editor.select(id);
         editor.centerOnPoint(
           { x: x + PROTO_W / 2, y: y + PROTO_H / 2 },
