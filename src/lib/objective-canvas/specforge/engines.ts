@@ -341,6 +341,121 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
     },
   },
 
+  // ── 5b · Question Expansion Engine (specforge_question_expansion_engine.md) ──
+  // Sits between cross_analysis and convergence. Generates a small ranked list
+  // of questions whose answers would change a downstream decision (target user,
+  // root constraint, desired result, differentiation, MVP direction, feature
+  // mechanism, evaluation criteria, or a hidden assumption). Does NOT regenerate
+  // the upstream models; every question MUST reference a node from them and
+  // carry ≥1 change_trigger. Questions are advisory — convergence remains the
+  // selector. Anti-patterns enforced: no generic "who is the user?" questions,
+  // no by-category listing (use a `layer` field instead), no question without
+  // why_it_matters + expected_answer_format.
+  question_expansion: {
+    temperature: 0.35,
+    maxTokens: 2400,
+    system:
+      "You are the SpecForge Question Expansion Engine. You DO NOT regenerate " +
+      "the target user, problem causal model, or desired result — those are " +
+      "given to you in the prior-stage context. Your job is to surface the " +
+      "small set of questions whose answers would CHANGE a downstream SpecForge " +
+      "decision: MVP direction, target user selection, root constraint, desired " +
+      "result, differentiation thesis, feature mechanism, evaluation criteria, " +
+      "or expose a hidden assumption. Every question is an optimization tool, " +
+      "not filler. STRICT RULES: (1) Output 6–10 questions in ONE ranked list " +
+      "sorted by expected_decision_impact (high → medium → low). DO NOT group " +
+      "by category — every question carries a `layer` field instead. (2) Every " +
+      "question MUST set `references.layer` and `references.node` to a CONCRETE " +
+      "node copied verbatim from the upstream models (a variable name, a user " +
+      "variant, a success metric, a feedback loop, a weak link, a cross-model " +
+      "contradiction, etc.) — generic questions like 'who is the user?' are " +
+      "forbidden. (3) Every question MUST set ≥1 `change_triggers` from the " +
+      "fixed enum. (4) `why_it_matters` MUST state which downstream decision " +
+      "moves when answered (≥30 chars). (5) `expected_answer_format` MUST " +
+      "describe the shape of a useful answer (e.g., '1–2 sentences', 'ranked " +
+      "list of 3', 'comparison table', 'a single user segment name'). (6) Pick " +
+      "the top 3 by impact for `top_critical_questions` (verbatim question " +
+      "text). (7) Put truly low-value descriptive questions you considered but " +
+      "discarded into `hidden_low_value_questions` (max 4). (8) Cover at least " +
+      "the user, problem, result, and one of differentiation/mvp/mechanism " +
+      "layers. Set confidence 0–100 honestly. Do NOT pick a thesis (convergence " +
+      "does that) and do NOT propose new variables (problem_tree does that)." +
+      SHARED_TAIL,
+    schema: {
+      name: "specforge_question_expansion",
+      schema: obj({
+        questions: arr(
+          obj({
+            question: str,
+            layer: {
+              type: "string",
+              enum: [
+                "user",
+                "problem",
+                "result",
+                "differentiation",
+                "mvp",
+                "mechanism",
+                "evaluation",
+                "validation",
+                "constraint",
+                "macro",
+              ],
+            },
+            references: obj({
+              layer: {
+                type: "string",
+                enum: [
+                  "user",
+                  "problem",
+                  "result",
+                  "differentiation",
+                  "mvp",
+                  "mechanism",
+                  "evaluation",
+                  "validation",
+                  "constraint",
+                  "macro",
+                ],
+              },
+              node: str,
+            }),
+            change_triggers: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: [
+                  "mvp_direction",
+                  "target_user",
+                  "root_constraint",
+                  "desired_result",
+                  "differentiation_thesis",
+                  "feature_mechanism",
+                  "evaluation_criteria",
+                  "hidden_assumption",
+                ],
+              },
+            },
+            why_it_matters: str,
+            expected_answer_format: str,
+            expected_decision_impact: {
+              type: "string",
+              enum: ["high", "medium", "low"],
+            },
+            answer_source: {
+              type: "string",
+              enum: ["user", "agent_reasoning", "research", "experiment"],
+            },
+          }),
+        ),
+        top_critical_questions: strArr,
+        hidden_low_value_questions: strArr,
+        recommended_next_action: str,
+        confidence: num,
+      }),
+    },
+  },
+
   // ── 6 · Convergence Engine (§11) ──
   convergence: {
     temperature: 0.4,

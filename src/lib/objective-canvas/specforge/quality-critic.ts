@@ -13,6 +13,8 @@ import type {
   ProblemTreeResult,
   DesiredResultResult,
   CrossAnalysisResult,
+  QuestionExpansionResult,
+  ExpandedQuestion,
   ConvergenceResult,
   DifferentiationResult,
   SolutionFamiliesResult,
@@ -181,6 +183,96 @@ export function evaluateSpecForgeQuality(
       add(issues, arr(r.convergence_inputs).length < 2, "high", "downstream usefulness", "convergence_inputs too thin", "list inputs convergence should prioritize");
       add(issues, !Number.isFinite(Number(r.confidence)), "medium", "evidence honesty", "missing confidence", "state confidence 0–100 honestly");
       return finalize(engine, issues, repaired, arr(r.convergence_inputs).map(clean).filter(Boolean).slice(0, 3));
+    }
+
+    case "question_expansion": {
+      const r = result as QuestionExpansionResult;
+      const questions = arr<ExpandedQuestion>(r.questions);
+      const total = questions.length;
+      const anyHasTrigger = questions.some(
+        (q) => Array.isArray(q?.change_triggers) && q.change_triggers.length > 0,
+      );
+      const genericQuestions = questions.filter((q) => {
+        const refLayer = clean(q?.references?.layer);
+        const refNode = clean(q?.references?.node);
+        const why = clean(q?.why_it_matters);
+        const impact = clean(q?.expected_decision_impact);
+        return !refLayer || !refNode || why.length < 30 || !impact;
+      }).length;
+      const layersCovered = new Set(
+        questions
+          .map((q) => clean(q?.layer))
+          .filter(Boolean) as string[],
+      );
+      const coversCoreLayer = ["user", "problem", "result", "differentiation"].some(
+        (layer) => layersCovered.has(layer),
+      );
+      const missingAnswerFormat = questions.some(
+        (q) => !clean(q?.expected_answer_format),
+      );
+
+      add(
+        issues,
+        total === 0,
+        "critical",
+        "downstream usefulness",
+        "no questions generated",
+        "return 6–10 decision-changing questions tied to upstream nodes",
+      );
+      add(
+        issues,
+        total > 0 && !anyHasTrigger,
+        "critical",
+        "decision impact",
+        "no question carries a change_trigger",
+        "tag every question with ≥1 change_trigger (mvp_direction, target_user, root_constraint, desired_result, differentiation_thesis, feature_mechanism, evaluation_criteria, hidden_assumption)",
+      );
+      add(
+        issues,
+        total > 0 && genericQuestions > 0,
+        "high",
+        "non-genericness",
+        `${genericQuestions} generic question${genericQuestions === 1 ? "" : "s"} (no node reference, weak why_it_matters, or missing impact)`,
+        "tie every question to a specific upstream node, write a ≥30-char why_it_matters, and set expected_decision_impact",
+      );
+      add(
+        issues,
+        total > 0 && total < 6,
+        "medium",
+        "downstream usefulness",
+        `only ${total} question${total === 1 ? "" : "s"} — fewer than 6`,
+        "expand to 6–10 ranked questions",
+      );
+      add(
+        issues,
+        total > 0 && !coversCoreLayer,
+        "medium",
+        "traceability",
+        "no question covers user / problem / result / differentiation",
+        "ensure questions span the core upstream layers, not just one",
+      );
+      add(
+        issues,
+        total > 0 && missingAnswerFormat,
+        "low",
+        "downstream usefulness",
+        "some questions are missing expected_answer_format",
+        "describe the shape of a useful answer for every question",
+      );
+      add(
+        issues,
+        !Number.isFinite(Number(r.confidence)),
+        "low",
+        "evidence honesty",
+        "missing confidence",
+        "state confidence 0–100 honestly",
+      );
+      return finalize(
+        engine,
+        issues,
+        repaired,
+        arr<string>(r.top_critical_questions).map(clean).filter(Boolean).slice(0, 3),
+      );
     }
 
     case "convergence": {

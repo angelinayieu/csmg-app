@@ -13,6 +13,8 @@ import type {
   DesiredResultResult,
   CrossAnalysisResult,
   CrossAnalysisFit,
+  QuestionExpansionResult,
+  ExpandedQuestion,
   ConvergenceResult,
   DifferentiationResult,
   SolutionFamiliesResult,
@@ -208,6 +210,41 @@ export function resultToCards(
               : "",
             conf !== null ? `Confidence: ${conf}/100` : "",
           ]),
+          layout: "spine",
+        },
+      ];
+    }
+
+    case "question_expansion": {
+      const r = result as QuestionExpansionResult;
+      const all = Array.isArray(r.questions) ? r.questions : [];
+      const impactWeight = (q: ExpandedQuestion): number =>
+        q?.expected_decision_impact === "high"
+          ? 3
+          : q?.expected_decision_impact === "medium"
+            ? 2
+            : q?.expected_decision_impact === "low"
+              ? 1
+              : 0;
+      const ranked = all
+        .filter((q): q is ExpandedQuestion => !!q && !!clean(q.question))
+        .slice()
+        .sort((a, b) => impactWeight(b) - impactWeight(a));
+      if (!ranked.length) return [];
+      const top = ranked[0];
+      const next = ranked.slice(1, 5);
+      return [
+        {
+          stage: "questions",
+          eyebrow: "Questions",
+          title: clean(top.question),
+          subtitle: clean(top.why_it_matters) || undefined,
+          body: bullets(
+            next.map((q) =>
+              [clean(q.layer), clean(q.question)].filter(Boolean).join(" — "),
+            ),
+            4,
+          ),
           layout: "spine",
         },
       ];
@@ -447,6 +484,41 @@ export function summarizeForContext(
         clean(r.highest_leverage_intervention_candidate) &&
           `Leverage candidate: ${clean(r.highest_leverage_intervention_candidate)}`,
         inputs && `Convergence inputs: ${inputs}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "question_expansion": {
+      const r = result as QuestionExpansionResult;
+      const all = Array.isArray(r.questions) ? r.questions : [];
+      const impactWeight = (q: ExpandedQuestion): number =>
+        q?.expected_decision_impact === "high"
+          ? 3
+          : q?.expected_decision_impact === "medium"
+            ? 2
+            : q?.expected_decision_impact === "low"
+              ? 1
+              : 0;
+      const ranked = all
+        .filter((q): q is ExpandedQuestion => !!q && !!clean(q.question))
+        .slice()
+        .sort((a, b) => impactWeight(b) - impactWeight(a))
+        .slice(0, 5);
+      const lines = ranked.map((q) => {
+        const triggers = Array.isArray(q.change_triggers)
+          ? q.change_triggers.map(clean).filter(Boolean).slice(0, 2).join("+")
+          : "";
+        const ref = q.references?.node ? ` [${clean(q.references.node)}]` : "";
+        return `Q (${clean(q.layer)}/${clean(q.expected_decision_impact) || "?"}): ${clean(q.question)}${ref}${triggers ? ` → ${triggers}` : ""}`;
+      });
+      const top = Array.isArray(r.top_critical_questions)
+        ? r.top_critical_questions.map(clean).filter(Boolean).slice(0, 3).join(" | ")
+        : "";
+      const action = clean(r.recommended_next_action);
+      return [
+        ...lines,
+        top && `Top critical: ${top}`,
+        action && `Next action: ${action}`,
       ]
         .filter(Boolean)
         .join("\n");

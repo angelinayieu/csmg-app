@@ -21,6 +21,7 @@ export type SpecForgeStage =
   | "result" // desired result stack (violet)
   | "depth" // depth selection controller (blue-cyan)
   | "analysis" // cross-analysis: user×problem×result fit + blockages (teal)
+  | "questions" // question expansion: decision-changing questions (amethyst)
   | "convergence" // root constraint · first-principles need · thesis (graphite)
   | "alternatives" // what exists today (amber)
   | "differentiation" // differentiation thesis (indigo)
@@ -44,6 +45,7 @@ export const STAGE_META: Record<SpecForgeStage, StageMeta> = {
   result: { label: "Desired result", color: "#8E7BEA" },
   depth: { label: "Depth selection", color: "#0E9BD8" },
   analysis: { label: "Cross-analysis", color: "#2BAA98" },
+  questions: { label: "Decision questions", color: "#A05FCC" },
   convergence: { label: "Convergence", color: "#566273" },
   alternatives: { label: "Alternatives today", color: "#D7993A" },
   differentiation: { label: "Differentiation", color: "#6366D6" },
@@ -60,6 +62,7 @@ export type SpecForgeEngineId =
   | "problem_tree"
   | "desired_result"
   | "cross_analysis"
+  | "question_expansion"
   | "convergence"
   | "differentiation"
   | "solution_families"
@@ -77,6 +80,7 @@ export const SPECFORGE_CHAIN: SpecForgeEngineId[] = [
   "problem_tree",
   "desired_result",
   "cross_analysis",
+  "question_expansion",
   "convergence",
   "differentiation",
   "solution_families",
@@ -91,6 +95,7 @@ export const ENGINE_LABEL: Record<SpecForgeEngineId, string> = {
   problem_tree: "Modeling the causal system",
   desired_result: "Layering the desired result",
   cross_analysis: "Interweaving user, problem, result",
+  question_expansion: "Surfacing decision-changing questions",
   convergence: "Converging on the product thesis",
   differentiation: "Comparing the alternatives",
   solution_families: "Generating solution families",
@@ -330,6 +335,71 @@ export interface CrossAnalysisResult {
   confidence: number; // 0..100
 }
 
+/** Question Expansion Engine: sits between cross_analysis and convergence.
+ *  Generates a small ranked list of questions whose answers would CHANGE a
+ *  downstream SpecForge decision (target user, root constraint, desired result,
+ *  differentiation, MVP direction, feature mechanism, evaluation criteria, or a
+ *  hidden assumption). Per spec §5: questions must be optimization tools, not
+ *  filler. Every question references a node from the upstream models and lists
+ *  ≥1 change_trigger. Output is advisory — convergence remains the deepest-
+ *  thesis selector. */
+export type QuestionLayer =
+  | "user"
+  | "problem"
+  | "result"
+  | "differentiation"
+  | "mvp"
+  | "mechanism"
+  | "evaluation"
+  | "validation"
+  | "constraint"
+  | "macro";
+
+export type QuestionChangeTrigger =
+  | "mvp_direction"
+  | "target_user"
+  | "root_constraint"
+  | "desired_result"
+  | "differentiation_thesis"
+  | "feature_mechanism"
+  | "evaluation_criteria"
+  | "hidden_assumption";
+
+export type QuestionImpact = "high" | "medium" | "low";
+
+export type QuestionAnswerSource =
+  | "user"
+  | "agent_reasoning"
+  | "research"
+  | "experiment";
+
+export interface QuestionReference {
+  /** Which upstream model this question hooks into. */
+  layer: QuestionLayer;
+  /** Concrete node name copied verbatim from that model (e.g., variable name,
+   *  user variant, success metric, weak link). */
+  node: string;
+}
+
+export interface ExpandedQuestion {
+  question: string;
+  layer: QuestionLayer;
+  references: QuestionReference;
+  change_triggers: QuestionChangeTrigger[];
+  why_it_matters: string;
+  expected_answer_format: string;
+  expected_decision_impact: QuestionImpact;
+  answer_source: QuestionAnswerSource;
+}
+
+export interface QuestionExpansionResult {
+  questions: ExpandedQuestion[];
+  top_critical_questions: string[];
+  hidden_low_value_questions: string[];
+  recommended_next_action: string;
+  confidence: number; // 0..100
+}
+
 export interface AlternativeItem {
   name: string;
   solves: string;
@@ -390,6 +460,7 @@ export interface EngineResultMap {
   problem_tree: ProblemTreeResult;
   desired_result: DesiredResultResult;
   cross_analysis: CrossAnalysisResult;
+  question_expansion: QuestionExpansionResult;
   convergence: ConvergenceResult;
   differentiation: DifferentiationResult;
   solution_families: SolutionFamiliesResult;
