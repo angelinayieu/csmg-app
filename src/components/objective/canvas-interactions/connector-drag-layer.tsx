@@ -32,11 +32,11 @@ import {
   type TLArrowShape,
   type TLShapePartial,
   createShapeId,
-  toRichText,
   useValue,
 } from "tldraw";
-import { Plus } from "lucide-react";
+import { ArrowRight, Plus } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { OPEN_CARD_DETAIL_EVENT } from "../shapes/oc-card-shape";
 
 type RelationKey = "feeds" | "depends_on" | "derived_from";
 const RELATIONS: { key: RelationKey; label: string }[] = [
@@ -54,18 +54,27 @@ function objectIdOf(shape: TLShape | undefined): string | null {
 }
 const isLinkable = (shape: TLShape | undefined): boolean => !!objectIdOf(shape);
 
+/** Best-effort display name for a card shape (oc-card / similar carry props.name). */
+function shapeName(shape: TLShape | undefined): string {
+  if (!shape) return "the card";
+  const n = (shape.props as { name?: unknown }).name;
+  if (typeof n === "string" && n.trim().length > 0) return n.trim();
+  return "the card";
+}
+
 interface ClientPt {
   x: number;
   y: number;
 }
 
 /** Draw a bound, directional arrow source → target (mirrors the binding shape
- *  used by createInsightWithLinks, with a visible head + relation label). */
+ *  used by createInsightWithLinks). No inline label — tldraw renders text labels
+ *  as a heavy black pill that obscures the line; the relation surfaces via the
+ *  post-connect toast + the object detail rail instead. */
 function createLinkArrow(
   editor: Editor,
   fromId: TLShapeId,
   toId: TLShapeId,
-  label: string,
 ) {
   const arrowId = createShapeId();
   const arrow: TLShapePartial<TLArrowShape> = {
@@ -77,7 +86,6 @@ function createLinkArrow(
       dash: "solid",
       arrowheadStart: "none",
       arrowheadEnd: "arrow",
-      richText: toRichText(label),
     },
     meta: { objectLink: true },
   };
@@ -143,6 +151,21 @@ export function ConnectorDragLayer({
     targetId: TLShapeId;
     at: ClientPt;
   } | null>(null);
+
+  // Post-connect confirmation toast — bottom-center glass chip, click "Open"
+  // to jump straight into the target card's detail rail. Auto-clears so it
+  // never lingers.
+  const [toast, setToast] = useState<{
+    targetObjectId: string;
+    targetName: string;
+    relationLabel: string;
+    count: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 6500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   const cancelClear = useCallback(() => {
     if (clearTimer.current) {
@@ -282,24 +305,45 @@ export function ConnectorDragLayer({
     (rel: RelationKey, label: string) => {
       const m = menu;
       if (!m) return;
-      const toObjectId = objectIdOf(editor.getShape(m.targetId));
+      const targetShape = editor.getShape(m.targetId);
+      const toObjectId = objectIdOf(targetShape);
+      let linkedCount = 0;
       if (toObjectId) {
         for (const sid of m.sourceIds) {
           const fromObjectId = objectIdOf(editor.getShape(sid));
           if (!fromObjectId || fromObjectId === toObjectId) continue;
-          createLinkArrow(editor, sid, m.targetId, label);
+          createLinkArrow(editor, sid, m.targetId);
           void fetch(`/api/objective/${spaceId}/link-objects`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ fromObjectId, toObjectId, relation: rel }),
           }).catch(() => {});
+          linkedCount += 1;
         }
+      }
+      if (toObjectId && linkedCount > 0) {
+        setToast({
+          targetObjectId: toObjectId,
+          targetName: shapeName(targetShape),
+          relationLabel: label,
+          count: linkedCount,
+        });
       }
       setMenu(null);
       setActiveId(null);
     },
     [menu, editor, spaceId],
   );
+
+  const openTarget = useCallback(() => {
+    if (!toast) return;
+    window.dispatchEvent(
+      new CustomEvent(OPEN_CARD_DETAIL_EVENT, {
+        detail: { objectId: toast.targetObjectId },
+      }),
+    );
+    setToast(null);
+  }, [toast]);
 
   // Menu Escape-to-close.
   useEffect(() => {
@@ -472,6 +516,107 @@ export function ConnectorDragLayer({
             ))}
           </div>
         </>
+      )}
+
+      {/* Post-connect confirmation toast — tells the user metadata now flows
+          into the target card, with a one-click way to open its detail rail. */}
+      {toast && (
+        <div
+          style={{
+            position: "fixed",
+            left: "50%",
+            bottom: 96,
+            transform: "translateX(-50%)",
+            zIndex: 92,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 12,
+            padding: "10px 12px 10px 14px",
+            borderRadius: 14,
+            background: "var(--glass-float-bg)",
+            backdropFilter: "blur(var(--blur-float)) saturate(1.8)",
+            WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.8)",
+            border: "1px solid var(--glass-border)",
+            boxShadow:
+              "inset 0 1px 0 var(--glass-highlight), 0 24px 60px -20px rgba(11,18,40,0.45)",
+            fontFamily: appleVibe.font.stack,
+            pointerEvents: "auto",
+          }}
+        >
+          <span
+            style={{
+              display: "inline-flex",
+              width: 22,
+              height: 22,
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 999,
+              background: `${appleVibe.accent.primary}1f`,
+              color: appleVibe.accent.primary,
+              flexShrink: 0,
+            }}
+          >
+            <ArrowRight style={{ width: 13, height: 13 }} strokeWidth={2.4} />
+          </span>
+          <span
+            style={{
+              fontSize: 12.5,
+              fontWeight: 600,
+              letterSpacing: "-0.01em",
+              color: appleVibe.text.primary,
+              maxWidth: 360,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {toast.count > 1
+              ? `${toast.count} cards now ${toast.relationLabel.toLowerCase()} `
+              : `${toast.relationLabel} `}
+            <span style={{ color: appleVibe.text.secondary, fontWeight: 500 }}>
+              →
+            </span>{" "}
+            <span style={{ color: appleVibe.accent.primary }}>
+              {toast.targetName}
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={openTarget}
+            style={{
+              fontFamily: appleVibe.font.stack,
+              fontSize: 12,
+              fontWeight: 600,
+              padding: "6px 10px",
+              borderRadius: 999,
+              border: `1px solid ${appleVibe.accent.primary}`,
+              background: appleVibe.accent.primary,
+              color: appleVibe.text.onAccent,
+              cursor: "pointer",
+              letterSpacing: "-0.005em",
+            }}
+          >
+            Open
+          </button>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            aria-label="Dismiss"
+            style={{
+              fontFamily: appleVibe.font.stack,
+              fontSize: 12,
+              fontWeight: 500,
+              padding: "6px 8px",
+              borderRadius: 8,
+              border: "none",
+              background: "transparent",
+              color: appleVibe.text.tertiary,
+              cursor: "pointer",
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
       )}
     </>
   );

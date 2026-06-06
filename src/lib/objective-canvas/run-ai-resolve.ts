@@ -13,6 +13,7 @@
 // the two resolve entry points.
 
 import type { Resolution } from "./prompt-sharpening-prompt";
+import { planResolution } from "./clarify-planner";
 
 export interface ResolveConcept {
   phrase: string;
@@ -34,8 +35,12 @@ const slugify = (s: string) =>
 export async function runAiResolve(
   spaceId: string,
   concepts: ResolveConcept[],
-): Promise<{ sharpenedPrompt?: string } | null> {
+): Promise<{ sharpenedPrompt?: string; shouldDecompose: boolean } | null> {
   if (!spaceId || concepts.length === 0) return null;
+  // Plan the strategy: only decompose into Feature/Variable cards when ≥1
+  // concept warrants it (a goal/pain/lever). A pure term/definition resolves
+  // into a glossary meaning, not a card spray (the super-picky board rule).
+  const plan = planResolution(concepts);
   const now = new Date().toISOString();
 
   // 1. One batched model call for a coherent reading per concept.
@@ -110,5 +115,5 @@ export async function runAiResolve(
   } catch {
     /* resolutions still saved — re-frame is best-effort */
   }
-  return { sharpenedPrompt };
+  return { sharpenedPrompt, shouldDecompose: plan.shouldDecompose };
 }

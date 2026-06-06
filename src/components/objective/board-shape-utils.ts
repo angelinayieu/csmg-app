@@ -29,6 +29,7 @@ import {
 } from "./canvas-interactions/voice-journal-board";
 import { CommentCardShapeUtil } from "./shapes/comment-card-shape";
 import { SysFrameShapeUtil } from "./shapes/sys-frame-shape";
+import { FlowConnectorShapeUtil } from "./shapes/flow-connector-shape";
 
 /** Every custom shape util the objective whiteboard registers, in registration
  *  order. Reused by the main <Tldraw> mount AND by static <TldrawImage>
@@ -57,4 +58,7 @@ export const CUSTOM_SHAPE_UTILS = [
   // Grouping underlay for a forked-out set of cards (decompose / ops). Was built
   // but never registered — without this, creating one throws "unknown shape".
   SysFrameShapeUtil,
+  // REAL bound flow connector (dark flow-builder look) — green-out/pink-in ports
+  // + gradient bezier; a board reactor keeps it synced so it moves with cards.
+  FlowConnectorShapeUtil,
 ];

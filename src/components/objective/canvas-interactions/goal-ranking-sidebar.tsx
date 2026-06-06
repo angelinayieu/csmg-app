@@ -133,6 +133,15 @@ async function fetchClarity(spaceId: string): Promise<ClarityData | null> {
           confidence?: number;
           needs_review?: boolean;
         }>;
+        activity?: Array<{
+          concept_slug?: string;
+          phrase?: string;
+          kind?: string;
+          answer_text?: string;
+          confidence?: number;
+          needs_review?: boolean;
+          at?: string;
+        }>;
       };
     };
     const a = j.artifact;
@@ -140,20 +149,38 @@ async function fetchClarity(spaceId: string): Promise<ClarityData | null> {
     const annsRaw = a.salience?.annotations;
     const anns = Array.isArray(annsRaw) ? (annsRaw as SalienceAnn[]) : [];
     const resolvedSlugs = new Set<string>();
-    const aiActivity: AiActivityItem[] = [];
     for (const r of a.resolutions ?? []) {
       if (r?.concept_slug) resolvedSlugs.add(r.concept_slug);
-      // AI activity strip — only AI-source commits, most recent first.
-      if (r?.source === "ai" && r.concept_slug && r.resolved_at) {
-        aiActivity.push({
-          concept_slug: r.concept_slug,
-          phrase: r.phrase ?? r.concept_slug,
-          kind: r.kind ?? "concept",
-          answer_text: r.answer_text ?? "",
-          resolved_at: r.resolved_at,
-          confidence: r.confidence,
-          needs_review: r.needs_review,
-        });
+    }
+    // AI-activity strip: prefer the durable append-only audit log (full history)
+    // and fall back to deriving from resolutions[] (last-write-wins) for legacy
+    // artifacts without one.
+    let aiActivity: AiActivityItem[] = [];
+    if (Array.isArray(a.activity) && a.activity.length) {
+      aiActivity = a.activity
+        .filter((e) => e?.concept_slug && e?.at)
+        .map((e) => ({
+          concept_slug: e.concept_slug as string,
+          phrase: e.phrase ?? (e.concept_slug as string),
+          kind: e.kind ?? "concept",
+          answer_text: e.answer_text ?? "",
+          resolved_at: e.at as string,
+          confidence: e.confidence,
+          needs_review: e.needs_review,
+        }));
+    } else {
+      for (const r of a.resolutions ?? []) {
+        if (r?.source === "ai" && r.concept_slug && r.resolved_at) {
+          aiActivity.push({
+            concept_slug: r.concept_slug,
+            phrase: r.phrase ?? r.concept_slug,
+            kind: r.kind ?? "concept",
+            answer_text: r.answer_text ?? "",
+            resolved_at: r.resolved_at,
+            confidence: r.confidence,
+            needs_review: r.needs_review,
+          });
+        }
       }
     }
     aiActivity.sort((x, y) => (y.resolved_at > x.resolved_at ? 1 : -1));

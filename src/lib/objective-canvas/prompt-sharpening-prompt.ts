@@ -52,6 +52,20 @@ export interface HiddenMetadata {
   downstream_payloads: Record<string, unknown>;
 }
 
+/** One AI auto-resolve commit — APPENDED (never overwritten), so the agent's
+ *  activity keeps a real history, unlike resolutions[] which is last-write-wins
+ *  by concept_slug. Drives the goal rail's AI-activity strip. */
+export interface AiActivityEntry {
+  concept_slug: string;
+  phrase: string;
+  kind: string;
+  answer_text: string;
+  confidence?: number;
+  needs_review?: boolean;
+  /** ISO timestamp of the commit. */
+  at: string;
+}
+
 export interface PromptSharpeningArtifact {
   artifact_type: "prompt_sharpening_card";
   raw_prompt: string;
@@ -70,6 +84,9 @@ export interface PromptSharpeningArtifact {
   /** ISO stamp when the resolutions were applied (glossary write-back +
    *  re-framed prompt). Phase 3. */
   resolutions_applied_at?: string;
+  /** Append-only audit of AI auto-resolve commits — full history (resolutions[]
+   *  is last-write-wins by slug). Powers the rail's AI-activity strip. */
+  activity?: AiActivityEntry[];
   quality_status: string;
   confidence: number;
   /** Stamped server-side at persist time (ISO). */

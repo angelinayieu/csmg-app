@@ -244,6 +244,10 @@ function PromptSharpeningRenderer({
 }) {
   const editor = util.editor;
   const { expanded, title, sharpenedPrompt, chips, color } = shape.props;
+  // The heatmap + priority map now FORK OUT as their own cards (the two-way
+  // downward fork below the objective); this card stays title + desc + the
+  // resolve CTA. Flip true to restore the inline heatmap/priority/chips.
+  const INLINE_DETAILS = false;
   const ranked = parseRanked(shape.props.rankedJson);
   const heatmap = parseHeatmap(shape.props.heatmapJson);
   // No real heatmap yet → the artifact is still generating (the optimistic
@@ -444,6 +448,34 @@ function PromptSharpeningRenderer({
     };
   }, [loading, spaceId, salience]);
 
+  // Auto-fork the heatmap + priority map out as their OWN cards (the two-way
+  // downward fork below the objective) so this card itself stays title+desc.
+  // Idempotent server-side per sourceId (updates, never duplicates); the refs
+  // stop re-firing within a session. Heatmap lands with the fast artifact;
+  // priority waits for the salience (depth) pass.
+  const autoForkedHeat = useRef(false);
+  const autoForkedPriority = useRef(false);
+  useEffect(() => {
+    if (loading || !spaceId || autoForkedHeat.current) return;
+    const hm = shape.props.heatmapJson;
+    if (hm && hm !== "{}") {
+      autoForkedHeat.current = true;
+      deployHeatmapCard({ sourceId: shape.id, spaceId, heatmapJson: hm, color });
+    }
+  }, [loading, spaceId, shape.props.heatmapJson, shape.id, color]);
+  useEffect(() => {
+    if (!spaceId || autoForkedPriority.current) return;
+    if (salience && salience.length > 0) {
+      autoForkedPriority.current = true;
+      deployPriorityMapCard({
+        sourceId: shape.id,
+        spaceId,
+        salienceJson: JSON.stringify(salience),
+        color,
+      });
+    }
+  }, [spaceId, salience, shape.id, color]);
+
   // Phase 3: re-fetch + re-render when resolutions are applied (the re-framed
   // sharpened prompt). The card is past `loading`, so its self-heal poll is
   // off — this event is how the re-framed objective reaches the card in place.
@@ -592,6 +624,7 @@ function PromptSharpeningRenderer({
   // Feature/Variable cards. Falls back to each concept's top candidate reading
   // if the auto-resolve call fails so something is always committed.
   const [autoResolving, setAutoResolving] = useState(false);
+  const [hovered, setHovered] = useState(false);
   async function aiDecideInline(e: React.MouseEvent) {
     e.stopPropagation();
     if (!salience || salience.length === 0 || autoResolving) return;
@@ -775,7 +808,9 @@ function PromptSharpeningRenderer({
 
   return (
     <HTMLContainer
-      style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
+      style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all", position: "relative" }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       <div
         ref={contentRef}
@@ -868,7 +903,7 @@ function PromptSharpeningRenderer({
             opens the Resolution Studio so the user answers in their own words.
             Surfacing this above the salience/heatmap means the user never has
             to expand the card to act on it. */}
-        {!loading && (salience !== null || saliencePending) ? (
+        {INLINE_DETAILS && !loading && (salience !== null || saliencePending) ? (
           <ResolvePanel
             color={color}
             count={salience?.length ?? 0}
@@ -883,7 +918,7 @@ function PromptSharpeningRenderer({
             weighting). Lands a beat after the card via the lazy depth pass;
             shows a quiet "weighing…" hint until it does. Leads ABOVE the
             ambiguities: the levers are the result, the ambiguities are the gaps. */}
-        {!loading && (salience?.length || saliencePending) ? (
+        {INLINE_DETAILS && !loading && (salience?.length || saliencePending) ? (
           <div style={{ marginTop: 11 }}>
             <div
               style={{
@@ -980,7 +1015,7 @@ function PromptSharpeningRenderer({
         ) : null}
 
         {/* Ambiguity chips (top ranked) */}
-        {chips.length > 0 && (
+        {INLINE_DETAILS && chips.length > 0 && (
           <div style={{ marginTop: 10 }}>
             <div
               style={{
@@ -1034,7 +1069,7 @@ function PromptSharpeningRenderer({
         )}
 
         {/* Expanded: priority map + heatmap + actions */}
-        {expanded && (
+        {INLINE_DETAILS && expanded && (
           <div
             style={{
               marginTop: 12,
@@ -1379,6 +1414,44 @@ function PromptSharpeningRenderer({
           </div>
         )}
       </div>
+
+      {/* Hovering floating resolve pill. The objective card is pure title+desc;
+          the resolve action floats in on hover (gently), firing the AI to
+          resolve every ambiguity. The 3-mode choice lives on the forked cards. */}
+      {!loading && salience && salience.length > 0 && (
+        <button
+          type="button"
+          onPointerDown={stopEventPropagation}
+          onClick={aiDecideInline}
+          disabled={autoResolving}
+          title="Let AI resolve every ambiguity"
+          style={{
+            position: "absolute",
+            left: "50%",
+            bottom: 12,
+            transform: `translateX(-50%) translateY(${hovered || autoResolving ? 0 : 8}px)`,
+            opacity: hovered || autoResolving ? 1 : 0,
+            transition: "opacity 0.22s ease, transform 0.22s ease",
+            pointerEvents: hovered || autoResolving ? "all" : "none",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "8px 16px",
+            borderRadius: 999,
+            border: "none",
+            cursor: autoResolving ? "default" : "pointer",
+            background: color,
+            color: "white",
+            fontSize: 12.5,
+            fontWeight: 650,
+            boxShadow: `0 10px 24px -6px ${color}AA`,
+            whiteSpace: "nowrap",
+          }}
+        >
+          <Sparkle style={{ width: 14, height: 14 }} strokeWidth={2.5} />
+          {autoResolving ? "Resolving…" : "AI resolve"}
+        </button>
+      )}
     </HTMLContainer>
   );
 }

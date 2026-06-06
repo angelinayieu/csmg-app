@@ -140,9 +140,24 @@ export async function generateEmergentSalienceForSpace(
       return { salience: artifact.salience, emergentCount: 0 };
     }
 
+    // Count the fresh emergent rows that actually SURVIVED the merge's priority
+    // cap — NOT the net size delta (which reads 0 when fresh rows displace
+    // existing ones at the 10-cap, hiding the "N new questions" banner).
+    const existingSlugs2 = new Set(
+      freshArtifact.salience.annotations.map((a) => a.concept_slug),
+    );
+    const freshSlugs = new Set(
+      emergent
+        .map((e) => e.concept_slug)
+        .filter((s) => !existingSlugs2.has(s)),
+    );
+    const survivedCount = merged.filter((m) =>
+      freshSlugs.has(m.concept_slug),
+    ).length;
+
     return {
       salience: nextSalience,
-      emergentCount: merged.length - freshArtifact.salience.annotations.length,
+      emergentCount: survivedCount,
     };
   } catch (err) {
     console.warn(

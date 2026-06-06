@@ -26,7 +26,7 @@ import { stashPendingIntake } from "@/components/landing/pending-intake";
 import { AuthModal } from "@/components/auth/auth-modal";
 import { StarburstSVG } from "@/components/landing/starburst-svg";
 import { CardIcon } from "@/components/landing/card-icon";
-import { TEMPLATE_META } from "@/components/landing/template-meta";
+import { TEMPLATE_META, type TemplateMeta, type MetaItem } from "@/components/landing/template-meta";
 import { InterAxisLogo } from "@/components/brand/interaxis-logo";
 
 // 3D hero node — code-split off the initial bundle (three.js is heavy) and
@@ -53,6 +53,25 @@ export interface LandingCard {
 const NAV = ["Plans", "About"];
 
 const INK = "#0B0B0C"; // cold near-black — landing is monochrome, do NOT warm
+
+// Master input vocabulary — every distinct kind of thing you can feed in,
+// aggregated across all templates. Surfaced ONCE in the shared pill above
+// the rail (which then connects via a single line to the glass tray), so
+// each card's back face can focus on what it GENERATES instead of repeating
+// the input list per template. Order is first-seen across TEMPLATE_META.
+const ALL_INPUTS: MetaItem[] = (() => {
+  const seen = new Set<string>();
+  const out: MetaItem[] = [];
+  for (const meta of Object.values(TEMPLATE_META) as TemplateMeta[]) {
+    for (const it of meta.inputs) {
+      if (!seen.has(it.label)) {
+        seen.add(it.label);
+        out.push(it);
+      }
+    }
+  }
+  return out;
+})();
 
 // Small monochrome "verified by akiboe" seal — drawn with the same pen
 // as the hero starburst + card glyphs (round-cap ink), so it reads as the
@@ -243,6 +262,21 @@ export function LandingV2({
                   0 0 0 3px rgba(19,162,176,0.18),
                   0 0 24px 4px rgba(19,162,176,0.20);
               }
+              /* Subtle drift on the back-face output chips — the same
+                 ambient idea as the old immersive home's floating cards,
+                 dialed down for a few-pixel float so they read as
+                 "loose / floating" without breaking the connector geometry. */
+              @keyframes oc-float-1 { 0%,100% { transform: translate3d(0,0,0) rotate(-0.6deg); } 50% { transform: translate3d(2px,-3px,0) rotate(0.4deg); } }
+              @keyframes oc-float-2 { 0%,100% { transform: translate3d(0,0,0) rotate(0.7deg); } 50% { transform: translate3d(-3px,2px,0) rotate(-0.5deg); } }
+              @keyframes oc-float-3 { 0%,100% { transform: translate3d(0,0,0) rotate(-0.4deg); } 50% { transform: translate3d(3px,3px,0) rotate(0.6deg); } }
+              @keyframes oc-float-4 { 0%,100% { transform: translate3d(0,0,0) rotate(0.5deg); } 50% { transform: translate3d(-2px,-2px,0) rotate(-0.7deg); } }
+              .oc-float-1 { animation: oc-float-1 11s ease-in-out infinite; }
+              .oc-float-2 { animation: oc-float-2 13s ease-in-out infinite; }
+              .oc-float-3 { animation: oc-float-3 15s ease-in-out infinite; }
+              .oc-float-4 { animation: oc-float-4 17s ease-in-out infinite; }
+              @media (prefers-reduced-motion: reduce) {
+                .oc-float-1, .oc-float-2, .oc-float-3, .oc-float-4 { animation: none; }
+              }
             `,
           }}
         />
@@ -276,19 +310,138 @@ export function LandingV2({
 
       {/* ── Template gallery (scroll-snap rail) ── */}
       <section className="relative w-full px-6 pb-3">
-        <div className="relative mx-auto max-w-[1180px] pb-5">
-          {/* Whiteboard base — a dot-grid surface (matches the app's tldraw
-              canvas) that starts below the rail's top, so a hovered card lifts
-              up out of it instead of being clipped by the scroller's overflow. */}
+        <div className="mx-auto max-w-[1180px]">
+          {/* Shared "Feed in" pill — ONE translucent glass pill listing every
+              input the platform accepts, surfaced above the whole rail so the
+              vocabulary doesn't repeat on every card. A single line drops
+              from this pill into the glass tray below; each card's back face
+              now focuses on what it GENERATES. */}
+          <div className="flex justify-center pt-1">
+            <div className="mx-auto flex max-w-full flex-wrap items-center justify-center gap-x-2.5 gap-y-1 rounded-full border border-white/60 bg-white/55 px-5 py-2 backdrop-blur-md shadow-[0_20px_38px_-18px_rgba(11,18,40,0.25),inset_0_1px_0_rgba(255,255,255,0.75)]">
+              <span
+                className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+                style={{
+                  color: appleVibe.text.tertiary,
+                  fontFamily: appleVibe.font.display,
+                }}
+              >
+                Feed in
+              </span>
+              {ALL_INPUTS.map((it, i) => {
+                const Icon = it.icon;
+                return (
+                  <span
+                    key={it.label}
+                    className="inline-flex items-center gap-1.5 text-[11.5px] font-medium leading-none text-[#0B0B0C]"
+                  >
+                    {i === 0 ? (
+                      <span aria-hidden className="-ml-0.5 text-[10px] opacity-40">·</span>
+                    ) : (
+                      <span aria-hidden className="text-[10px] opacity-30">·</span>
+                    )}
+                    <Icon
+                      className="h-3 w-3 shrink-0"
+                      style={{ color: INK }}
+                      strokeWidth={2.2}
+                    />
+                    {it.label}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+
+        <div className="relative pb-5">
+          {/* Single connector — flow-builder wire from the master "Feed in"
+              pill above into the glass tray below. Same language as the
+              dark-connectors preflight (bezier path, gradient stroke,
+              chunky circular ports, animated pulse on the source) but
+              adapted to the landing's cold monochrome palette. */}
+          <svg
+            aria-hidden
+            viewBox="0 0 18 68"
+            preserveAspectRatio="xMidYMid meet"
+            className="pointer-events-none absolute left-1/2 z-10 h-[68px] w-[18px] -translate-x-1/2"
+            style={{ top: -22 }}
+          >
+            <defs>
+              <linearGradient
+                id="lp-wire"
+                gradientUnits="userSpaceOnUse"
+                x1="9"
+                y1="0"
+                x2="9"
+                y2="68"
+              >
+                <stop offset="0%" stopColor="#1A1A1C" stopOpacity="0.5" />
+                <stop offset="55%" stopColor="#1A1A1C" stopOpacity="0.85" />
+                <stop offset="100%" stopColor="#1A1A1C" stopOpacity="0.95" />
+              </linearGradient>
+            </defs>
+
+            {/* Bezier wire — gentle S so it reads as a routed flow-builder
+                connection, not a flat hairline. Round caps + 2.5px so it
+                holds visual weight at this size. */}
+            <path
+              d="M 9 5 C 12 22, 6 46, 9 63"
+              fill="none"
+              stroke="url(#lp-wire)"
+              strokeWidth={2.5}
+              strokeLinecap="round"
+            />
+
+            {/* Source port at the pill bottom — solid ink with a soft
+                white ring (separates it from the glass pill), plus an
+                animated halo that pulses outward to suggest live flow. */}
+            <circle
+              cx={9}
+              cy={5}
+              r={3.6}
+              fill="#1A1A1C"
+              stroke="#FFFFFF"
+              strokeWidth={1.2}
+            />
+            <circle cx={9} cy={5} r={3.6} fill="none" stroke="#1A1A1C" strokeWidth={1} opacity={0.45}>
+              <animate
+                attributeName="r"
+                values="3.6;7.5;3.6"
+                dur="2.4s"
+                repeatCount="indefinite"
+              />
+              <animate
+                attributeName="opacity"
+                values="0.45;0;0.45"
+                dur="2.4s"
+                repeatCount="indefinite"
+              />
+            </circle>
+
+            {/* Target port — lands on the glass tray's top edge. */}
+            <circle
+              cx={9}
+              cy={63}
+              r={3.6}
+              fill="#1A1A1C"
+              stroke="#FFFFFF"
+              strokeWidth={1.2}
+            />
+          </svg>
+
+          {/* Glassmorphism tray — replaces the solid grey base. Same dot
+              grid (the product's canvas pattern) but rendered on a
+              translucent white surface with a hairline border + backdrop
+              blur, so it reads as the same material as the master pill. */}
           <div
             aria-hidden
-            className="absolute inset-x-0 bottom-0 rounded-[32px]"
+            className="absolute inset-x-0 bottom-0 rounded-[32px] border border-white/55 backdrop-blur-md"
             style={{
               top: 40,
-              backgroundColor: "#F2F4F7",
+              backgroundColor: "rgba(255,255,255,0.42)",
               backgroundImage:
-                "radial-gradient(rgba(15,23,42,0.085) 1.1px, transparent 1.1px)",
+                "radial-gradient(rgba(15,23,42,0.075) 1.1px, transparent 1.1px)",
               backgroundSize: "22px 22px",
+              boxShadow:
+                "0 28px 60px -32px rgba(11,18,40,0.22), inset 0 1px 0 rgba(255,255,255,0.7)",
             }}
           />
 
@@ -331,7 +484,7 @@ export function LandingV2({
                       {/* Flip inner — rotates 180° on hover, swapping front for
                           back. Fixed height so the rail never reflows mid-flip;
                           both faces fill the same box. */}
-                      <div className="relative h-[332px] transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] [transform-style:preserve-3d] group-hover:[transform:rotateY(180deg)]">
+                      <div className="relative h-[220px] transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] [transform-style:preserve-3d] group-hover:[transform:rotateY(180deg)]">
                         {/* ── Front face — banner + name + tagline + footer ── */}
                         <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_2px_2px_rgba(11,18,40,0.04),0_16px_36px_-18px_rgba(11,18,40,0.22)] ring-1 ring-black/[0.04] [backface-visibility:hidden] [-webkit-backface-visibility:hidden]">
                           <div
@@ -409,96 +562,51 @@ export function LandingV2({
                           </div>
                         </div>
 
-                        {/* ── Back face — what the template eats and produces ── */}
+                        {/* ── Back face — what the template generates ── */}
                         <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_2px_2px_rgba(11,18,40,0.05),0_38px_64px_-20px_rgba(11,18,40,0.45)] ring-1 ring-black/[0.04] [backface-visibility:hidden] [-webkit-backface-visibility:hidden] [transform:rotateY(180deg)]">
-                          {/* Thin accent strip — keeps the per-template color
-                              cue on the back so flipped cards still feel like
-                              the same template, not a generic panel. */}
-                          <div
-                            className="h-[6px] w-full shrink-0"
-                            style={{
-                              background: `linear-gradient(90deg, ${banner} 0%, ${banner}80 100%)`,
-                            }}
-                          />
-
-                          <div className="flex flex-1 flex-col px-4 pb-4 pt-3">
-                            {/* Tiny header so the user knows which template
-                                they're looking at — small name + category. */}
-                            <div className="flex items-center justify-between gap-2">
-                              <div
-                                className="line-clamp-1 text-[12.5px] font-semibold tracking-[-0.01em]"
-                                style={{ color: appleVibe.text.primary }}
-                              >
-                                {card.name}
-                              </div>
-                              <span
-                                className="shrink-0 rounded-full px-1.5 py-[2px] text-[8.5px] font-semibold uppercase tracking-[0.08em]"
-                                style={{
-                                  color: banner,
-                                  background: `${banner}1a`,
-                                  fontFamily: appleVibe.font.display,
-                                }}
-                              >
-                                {card.category}
-                              </span>
-                            </div>
-
+                          <div className="flex flex-1 flex-col px-4 pb-4 pt-3.5">
                             {(() => {
                               const meta = TEMPLATE_META[card.id];
                               if (!meta) return null;
+                              const outs = meta.outputs;
                               return (
                                 <>
-                                  {/* Feed in — small caps section header + tight
-                                      chips. Densified vs the original hover-
-                                      reveal so the longest template (5 in /
-                                      4 out) still fits the flip box. */}
-                                  <div
-                                    className="mt-2.5 text-[9.5px] font-semibold uppercase tracking-[0.08em]"
-                                    style={{ color: appleVibe.text.tertiary }}
-                                  >
-                                    Feed in
-                                  </div>
-                                  <div className="mt-1.5 flex flex-wrap gap-1">
-                                    {meta.inputs.map((it) => {
-                                      const Icon = it.icon;
-                                      return (
-                                        <span
-                                          key={it.label}
-                                          className="inline-flex items-center gap-1 rounded-full bg-gradient-to-b from-white/90 to-white/55 px-2 py-[3px] text-[10.5px] font-medium leading-none text-[#0B0B0C] ring-1 ring-black/[0.06] shadow-[0_2px_8px_-4px_rgba(11,18,40,0.18),inset_0_1px_0_rgba(255,255,255,0.7)] backdrop-blur-md"
-                                        >
-                                          <Icon
-                                            className="h-2.5 w-2.5 shrink-0"
-                                            style={{ color: card.accent }}
-                                            strokeWidth={2.2}
-                                          />
-                                          {it.label}
-                                        </span>
-                                      );
-                                    })}
-                                  </div>
-
-                                  {/* Generates — 2-column grid so 3–4 outputs
-                                      stack as 2 rows instead of 4, keeping the
-                                      whole back face inside the 332px box. */}
-                                  <div
-                                    className="mt-2.5 text-[9.5px] font-semibold uppercase tracking-[0.08em]"
-                                    style={{ color: appleVibe.text.tertiary }}
-                                  >
+                                  {/* Generates — black, left-aligned, the
+                                      original CardDecomposition treatment.
+                                      Inputs aren't repeated here because they
+                                      live in the shared pill above the rail. */}
+                                  <div className="text-[12.5px] font-semibold tracking-[-0.01em] text-[#0B0B0C]">
                                     Generates
                                   </div>
-                                  <div className="mt-1.5 grid grid-cols-2 gap-x-1 gap-y-1 rounded-xl bg-white/45 p-1.5 ring-1 ring-black/[0.04] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] backdrop-blur-sm">
-                                    {meta.outputs.map((it) => {
+
+                                  {/* Single-column floating glass output
+                                      chips — full card width so longer labels
+                                      ("Cross-book Links", "Experiment Plan")
+                                      never crop. Each chip is flex-1 so they
+                                      share the available column space evenly:
+                                      3-output cards get taller chips, 4-output
+                                      get tighter ones, no empty bottom on
+                                      either. Drift keyframes oc-float-1..4
+                                      keep the group gently floating. */}
+                                  <div className="mt-2 flex flex-1 flex-col gap-1.5">
+                                    {outs.map((it, i) => {
                                       const Icon = it.icon;
                                       return (
                                         <div
                                           key={it.label}
-                                          className="flex min-w-0 items-center gap-1 rounded-md px-1 py-[5px] text-[10px] font-medium leading-tight text-[#1A1F2B]"
+                                          className={`oc-float-${(i % 4) + 1} flex min-h-[28px] flex-1 min-w-0 items-center gap-2.5 rounded-xl border border-white/60 bg-white/55 px-2.5 py-1 text-[11.5px] font-medium leading-tight text-[#1A1F2B] backdrop-blur-md shadow-[0_8px_18px_-10px_rgba(11,18,40,0.28),inset_0_1px_0_rgba(255,255,255,0.75)]`}
+                                          style={{ willChange: "transform" }}
                                         >
-                                          <Icon
-                                            className="h-3 w-3 shrink-0"
-                                            style={{ color: card.accent }}
-                                            strokeWidth={2.2}
-                                          />
+                                          <span
+                                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg"
+                                            style={{ background: `${card.accent}15` }}
+                                          >
+                                            <Icon
+                                              className="h-3.5 w-3.5"
+                                              style={{ color: card.accent }}
+                                              strokeWidth={2.2}
+                                            />
+                                          </span>
                                           <span className="truncate">{it.label}</span>
                                         </div>
                                       );
@@ -543,7 +651,7 @@ export function LandingV2({
             </div>
           </div>
 
-          {/* Live scroll-progress bar (sits on the grey tray). */}
+          {/* Live scroll-progress bar (sits on the glass tray). */}
           <div
             className="relative mx-auto mt-4 h-[4px] w-20 overflow-hidden rounded-full"
             style={{ background: "rgba(15,23,42,0.1)" }}
@@ -554,6 +662,7 @@ export function LandingV2({
               style={{ width: "33%", background: "#1A1A1C" }}
             />
           </div>
+        </div>
         </div>
       </section>
 

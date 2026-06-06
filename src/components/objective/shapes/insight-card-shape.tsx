@@ -39,6 +39,8 @@ import {
   runAiResolve,
   type ResolveConcept,
 } from "@/lib/objective-canvas/run-ai-resolve";
+import { runDeepResolve } from "@/lib/objective-canvas/run-deep-resolve";
+import { shapeToScanTarget } from "@/components/objective/canvas-interactions/shape-node-adapter";
 import { Spark } from "@/components/objective/icons/spark";
 
 /** A web source backing a Deep Synthesize node. */
@@ -287,24 +289,57 @@ function InsightCardRenderer({
   // Reuses the shared orchestrator (auto-resolve → resolutions → apply) + the
   // existing decompose event — the proven pipeline, scoped here to one or all
   // ambiguities. Recursive diverge/converge depth is a later enhancement.
-  async function finishResolve(sid: string, concepts: ResolveConcept[]) {
-    const res = await runAiResolve(sid, concepts);
+  // Apply a resolve result: refresh the card + (only if the planner says so)
+  // decompose into Feature/Variable cards. Shared by both resolve paths.
+  // Only sprays cards when the planner flags it (a goal/pain/lever); a pure
+  // term/definition resolves into a glossary meaning, no card spray (picky board).
+  function postResolve(
+    sid: string,
+    res: { sharpenedPrompt?: string; shouldDecompose?: boolean } | null,
+  ) {
     refreshSharpening(sid);
-    window.dispatchEvent(
-      new CustomEvent("objective-board:decompose-into-cards", {
-        detail: res?.sharpenedPrompt
-          ? { objective: res.sharpenedPrompt }
-          : undefined,
-      }),
-    );
+    if (res?.shouldDecompose) {
+      window.dispatchEvent(
+        new CustomEvent("objective-board:decompose-into-cards", {
+          detail: res.sharpenedPrompt
+            ? { objective: res.sharpenedPrompt }
+            : undefined,
+        }),
+      );
+    }
   }
 
+  // Board cards for the board-aware emergent self-question pass.
+  function boardCardsForEmergent(): { id: string; text: string }[] {
+    try {
+      const out: { id: string; text: string }[] = [];
+      for (const s of editor.getCurrentPageShapes()) {
+        const t = shapeToScanTarget(s);
+        if (t?.shapeId && t.text?.trim()) out.push({ id: t.shapeId, text: t.text });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  // "Resolve all" — one broad pass over the given concepts.
+  async function finishResolve(sid: string, concepts: ResolveConcept[]) {
+    postResolve(sid, await runAiResolve(sid, concepts));
+  }
+
+  // "AI resolve" (this one) — the BOUNDED recursive agent: resolve → let new
+  // sub-questions emerge → resolve those → … (hard round cap), mapping this
+  // branch's full landscape rather than stopping after a single pass.
   function aiResolveOne(e: React.MouseEvent) {
     e.stopPropagation();
     const sid = forkMeta.spaceId;
     if (!sid || busy) return;
     setBusy("one");
-    void finishResolve(sid, [thisConcept]).finally(() => setBusy(null));
+    void (async () => {
+      const res = await runDeepResolve(sid, [thisConcept], boardCardsForEmergent());
+      postResolve(sid, res);
+    })().finally(() => setBusy(null));
   }
 
   async function aiResolveAll(e: React.MouseEvent) {

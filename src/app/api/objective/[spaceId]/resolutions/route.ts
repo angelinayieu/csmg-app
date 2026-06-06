@@ -146,8 +146,25 @@ export async function POST(req: Request, ctx: Ctx) {
   for (const r of incoming) bySlug.set(r.concept_slug, r);
   const merged = [...bySlug.values()];
 
+  // Durable AI-activity audit (append-only, capped). resolutions[] is
+  // last-write-wins by slug; this keeps the FULL history of what the AI
+  // committed + when + its confidence — the agent's activity trail.
+  const prevActivity = Array.isArray(artifact.activity) ? artifact.activity : [];
+  const newActivity = incoming
+    .filter((r) => r.source === "ai")
+    .map((r) => ({
+      concept_slug: r.concept_slug,
+      phrase: r.phrase,
+      kind: r.kind,
+      answer_text: r.answer_text,
+      confidence: r.confidence,
+      needs_review: r.needs_review,
+      at: r.resolved_at,
+    }));
+  const activity = [...prevActivity, ...newActivity].slice(-50);
+
   const patched = patchObjectiveCanvasState(space.synthesis_data, {
-    prompt_sharpening: { ...artifact, resolutions: merged },
+    prompt_sharpening: { ...artifact, resolutions: merged, activity },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
   const writeRes = await db

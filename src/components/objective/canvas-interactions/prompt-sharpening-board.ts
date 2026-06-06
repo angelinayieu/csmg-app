@@ -4,7 +4,11 @@
 // the objective card, and fork an ambiguity off it as its own node. Reuses
 // the createShape + createBindings arrow recipe from synthesis-map.ts.
 
-import { createShapeId, type Editor, type TLShapeId } from "tldraw";
+import {
+  createShapeId,
+  type Editor,
+  type TLShapeId,
+} from "tldraw";
 import { reserveSpace } from "./placement";
 import {
   SHARPEN_COLOR,
@@ -57,6 +61,22 @@ function findObjectiveCard(editor: Editor): TLShapeId | null {
   return obj ? obj.id : null;
 }
 
+/** SUPERSEDED by the real flow-connector (green/pink ports + gradient): the
+ *  board's flow-connector reactor now draws objective→sharpening too, for ONE
+ *  consistent connector style. Kept (callers still invoke it) but it now ONLY
+ *  sweeps any legacy native `objSharpArrow` so the wire never doubles. */
+export function ensureObjectiveSharpeningArrow(editor: Editor): void {
+  const ids = editor
+    .getCurrentPageShapes()
+    .filter(
+      (s) =>
+        s.type === "arrow" &&
+        (s.meta as { objSharpArrow?: boolean })?.objSharpArrow,
+    )
+    .map((s) => s.id);
+  if (ids.length > 0) editor.deleteShapes(ids);
+}
+
 /** Materialize the Prompt Sharpening Card below the objective card, with a
  *  downward connector. Idempotent — one sharpening card per board. */
 export function deployPromptSharpeningOnBoard(
@@ -92,6 +112,7 @@ export function deployPromptSharpeningOnBoard(
         ...(wasExpanded ? {} : { h: CARD_H }),
       },
     });
+    ensureObjectiveSharpeningArrow(editor);
     return;
   }
 
@@ -130,7 +151,9 @@ export function deployPromptSharpeningOnBoard(
     },
   });
 
-  // The objective→sharpening connector is drawn by the bezier overlay.
+  // The objective→sharpening connector is now a REAL bound arrow (the bezier
+  // overlay wasn't rendering it).
+  ensureObjectiveSharpeningArrow(editor);
   editor.select(cardId);
   editor.centerOnPoint(
     { x: x + CARD_W / 2, y: y + CARD_H / 2 },
@@ -213,7 +236,9 @@ export function forkAmbiguityOnBoard(
 }
 
 const HEATMAP_SIZE = 340;
-const PRIORITY_W = 360;
+// Width matches the heatmap so the two forked cards read as a balanced pair
+// below the objective ("relatively same size"). Height stays taller for the list.
+const PRIORITY_W = 340;
 const PRIORITY_H = 440;
 
 /** Spawn an Ambiguity Heatmap card to the RIGHT of the sharpening card.
@@ -243,8 +268,10 @@ export function deployHeatmapCardOnBoard(
 
   const sb = editor.getShapePageBounds(sourceId);
   const vp = editor.getViewportPageBounds();
-  const preferredLeft = sb ? sb.maxX + 80 : vp.center.x;
-  const top = sb ? sb.minY : vp.center.y;
+  // Two-way downward fork (the objective forks DOWN into two cards): the
+  // ambiguity heatmap takes the LEFT branch, below the source.
+  const preferredLeft = sb ? sb.midX - 56 - HEATMAP_SIZE : vp.center.x - HEATMAP_SIZE - 56;
+  const top = sb ? sb.maxY + 96 : vp.center.y;
   const spot = reserveSpace(
     editor,
     { w: HEATMAP_SIZE, h: HEATMAP_SIZE },
@@ -297,23 +324,12 @@ export function deployPriorityMapCardOnBoard(
     return;
   }
 
-  // Prefer slotting below the heatmap if it's already on the board.
-  const heatmap = editor
-    .getCurrentPageShapes()
-    .find(
-      (s) =>
-        s.type === "ambiguity-heatmap-card" &&
-        (s as AmbiguityHeatmapCardShape).props.sourceId === d.sourceId,
-    );
   const sb = editor.getShapePageBounds(sourceId);
-  const hb = heatmap ? editor.getShapePageBounds(heatmap.id) : null;
   const vp = editor.getViewportPageBounds();
-  const preferredLeft = hb
-    ? hb.minX
-    : sb
-      ? sb.maxX + 80
-      : vp.center.x - PRIORITY_W / 2;
-  const top = hb ? hb.maxY + 36 : sb ? sb.minY : vp.center.y;
+  // Two-way downward fork: the priority map takes the RIGHT branch, below the
+  // source — mirroring the heatmap on the left.
+  const preferredLeft = sb ? sb.midX + 56 : vp.center.x + 56;
+  const top = sb ? sb.maxY + 96 : vp.center.y;
   const spot = reserveSpace(
     editor,
     { w: PRIORITY_W, h: PRIORITY_H },

@@ -10,8 +10,8 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { usePanel, setPanel } from "@/lib/objective-canvas/board-panel-signal";
-import { useValue, type Editor, type TLShapeId } from "tldraw";
-import { FileCode2, MapPin, Send } from "lucide-react";
+import { useValue, type Editor } from "tldraw";
+import { Send } from "lucide-react";
 import {
   Wand2,
   TreeStructure,
@@ -23,7 +23,6 @@ import {
   AppWindow,
   Pencil,
   Package,
-  Search,
   X,
 } from "@/lib/cute-icons";
 import { Sparkle } from "@/components/objective/icons/sparkle";
@@ -35,7 +34,7 @@ import {
 } from "@/lib/objective-canvas/canvas-operations";
 import { executeCardOperation } from "./operation-executor";
 import { shapeToScanTarget } from "./shape-node-adapter";
-import { labelFor, panToShape } from "@/components/objective/favorites-sidebar";
+import { labelFor } from "@/components/objective/favorites-sidebar";
 import {
   getAiSettings,
   setAiSetting,
@@ -45,14 +44,12 @@ import {
   type AiSettings,
 } from "@/lib/objective-canvas/ai-settings";
 import { BUILD_UI_PLANS_EVENT, type BuildUiPlansDetail } from "@/components/objective/shapes/ui-plan-card-shape";
-import { OPEN_CARD_DETAIL_EVENT } from "./object-detail-drawer";
-import { deploySharpeningCard } from "@/components/objective/board-bus";
-import type { ObjectiveCardShape } from "@/components/objective/shapes/objective-card-shape";
 import { pushRightPanel } from "@/lib/objective-canvas/right-panel-signal";
 import {
   requestDecomposeIntoCards,
   DECOMPOSE_DONE_EVENT,
 } from "./deploy-oc-cards";
+import { deployChatboxOnBoard } from "./intake-board";
 
 /** Fired by the rail's Forge button → WhiteboardBase runs the SpecForge chain
  *  on the current selection (handleForge lives there, with editor + state). */
@@ -64,7 +61,6 @@ export const FORGE_STATE_EVENT = "objective-board:forge-state";
 // Mirror tech-spec-card-shape.tsx event names — kept local so this rail doesn't
 // pull the shape util into its bundle (and can't form an import cycle).
 const BUILD_PROTOTYPE_EVENT = "objective-board:build-prototype";
-const OPEN_TECH_SPEC_EVENT = "objective-board:open-tech-spec";
 
 const OP_ICON: Record<string, typeof Package> = {
   decompose: Package,
@@ -113,12 +109,6 @@ const ACCENT_BORDER = "rgba(79, 70, 229, 0.32)";
 const ACCENT_GLOW =
   "0 0 0 1px rgba(79,70,229,0.18) inset, 0 14px 32px -14px rgba(79,70,229,0.45)";
 
-interface ArtifactRow {
-  id: TLShapeId;
-  title: string;
-  kind: string;
-}
-
 export function PowerupRail({
   spaceId,
   editor,
@@ -162,51 +152,6 @@ export function PowerupRail({
   // full rail shows — matches the prior behavior.
   const powerups = POWERUPS.filter((o) => operationFitsKind(o, sel.sourceKind));
 
-  // Artifacts on the board (tech-spec + prototype cards are ephemeral shapes).
-  const boardArtifacts = useValue(
-    "powerup-board-artifacts",
-    () =>
-      editor
-        .getCurrentPageShapes()
-        .filter((s) => s.type === "tech-spec-card" || s.type === "prototype-card")
-        .map((s) => ({
-          id: s.id as TLShapeId,
-          kind: s.type === "prototype-card" ? "Prototype" : "Tech spec",
-          title:
-            (s.props as { title?: string }).title ||
-            (s.type === "prototype-card" ? "Prototype" : "Tech spec"),
-        })) as ArtifactRow[],
-    [editor],
-  );
-
-  // Polished / included library objects (fetched on open).
-  const [included, setIncluded] = useState<
-    { id: string; title: string; type: string }[] | null
-  >(null);
-  useEffect(() => {
-    if (!open) return;
-    let alive = true;
-    fetch(`/api/brainstorm/space/${spaceId}/library/objects?in_spec=true`)
-      .then((r) => (r.ok ? r.json() : { objects: [] }))
-      .then((j) => {
-        if (!alive) return;
-        const objs = Array.isArray(j.objects) ? j.objects : [];
-        setIncluded(
-          objs.map((o: { id: string; title?: string; object_type?: string }) => ({
-            id: String(o.id),
-            title: o.title || "Untitled",
-            type: o.object_type || "object",
-          })),
-        );
-      })
-      .catch(() => {
-        if (alive) setIncluded([]);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [open, spaceId]);
-
   // AI settings (live — shared with the popup + top bar).
   const [settings, setSettings] = useState<AiSettings>(() => getAiSettings());
   useEffect(() => {
@@ -244,77 +189,14 @@ export function PowerupRail({
     return () => window.removeEventListener(FORGE_STATE_EVENT, onState);
   }, []);
 
-  // New objective → set + refine: the user types a fresh objective, we persist
-  // it + run prompt refinement (the sharpening agent), then drop its card on the
-  // board (same artifact → deploySharpeningCard mapping as the intake mount).
-  const [showNewObj, setShowNewObj] = useState(false);
-  const [newObjText, setNewObjText] = useState("");
-  const [refining, setRefining] = useState(false);
-  // Create-or-refresh the OBJECTIVE card on the board — the SAME card intake
-  // produces. One objective per board, so update it in place if present; the
-  // sharpening card then lands below it (deploySharpeningCard anchors to it).
-  function placeObjectiveCard(text: string) {
-    const shortTitle =
-      text.length > 64 ? text.slice(0, 63).trimEnd() + "…" : text;
-    const existing = editor
-      .getCurrentPageShapes()
-      .find((s) => s.type === "objective-card");
-    if (existing) {
-      editor.updateShape<ObjectiveCardShape>({
-        id: existing.id,
-        type: "objective-card",
-        props: { spaceId, title: shortTitle, objective: text },
-      });
-      return;
-    }
-    const vp = editor.getViewportPageBounds();
-    editor.createShape<ObjectiveCardShape>({
-      type: "objective-card",
-      x: vp.center.x - 170,
-      y: vp.center.y - 240,
-      props: {
-        w: 340,
-        h: 168,
-        spaceId,
-        title: shortTitle,
-        objective: text,
-        color: appleVibe.stage.objective,
-      },
-    });
-  }
-  async function refineNewObjective() {
-    const text = newObjText.trim();
-    if (!text || refining) return;
-    setRefining(true);
-    placeObjectiveCard(text);
-    setShowNewObj(false);
-    setNewObjText("");
-    try {
-      const res = await fetch(`/api/objective/${spaceId}/prompt-sharpening`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ objective: text }),
-      });
-      const json = (await res.json().catch(() => null)) as { artifact?: any } | null;
-      const a = json?.artifact;
-      if (a) {
-        const ranked: any[] = Array.isArray(a.ranked_ambiguities) ? a.ranked_ambiguities : [];
-        deploySharpeningCard({
-          spaceId,
-          title: a.distilled_title ?? "",
-          sharpenedPrompt: a.sharpened_prompt ?? "",
-          chips: ranked
-            .slice(0, 3)
-            .map((r) => String(r?.ambiguity_type || r?.ambiguity || "Ambiguity")),
-          heatmapJson: JSON.stringify(a.ambiguity_heatmap ?? {}),
-          rankedJson: JSON.stringify(ranked),
-        });
-      }
-    } catch {
-      /* soft-fail — the user can retry */
-    } finally {
-      setRefining(false);
-    }
+  // New objective → drop a fresh chatbox-card onto the board (the SAME card
+  // intake mounts). The user types into it directly; on submit the chatbox
+  // promotes in-place to an objective-card and the Sharpening fork fires —
+  // the existing chatbox → promote pipeline handles all of it.
+  function spawnNewObjectiveChatbox() {
+    deployChatboxOnBoard(editor, { spaceId, seedText: "" }, { force: true });
+    // Step out of the way so the new chatbox is in view.
+    setOpen(false);
   }
 
   const [running, setRunning] = useState<string | null>(null);
@@ -377,38 +259,6 @@ export function PowerupRail({
     window.setTimeout(() => setRunning((c) => (c === "ui-plans" ? null : c)), 600);
   }
 
-  function openArtifact(id: TLShapeId) {
-    const shape = editor.getShape(id);
-    if (shape?.type === "tech-spec-card") {
-      const p = shape.props as { specJson?: string; markdown?: string; title?: string };
-      window.dispatchEvent(
-        new CustomEvent(OPEN_TECH_SPEC_EVENT, {
-          detail: {
-            specJson: p.specJson ?? "",
-            markdown: p.markdown ?? "",
-            title: p.title ?? "Tech spec",
-            shapeId: id,
-          },
-        }),
-      );
-    }
-    panToShape(editor, id);
-  }
-  function openIncluded(id: string) {
-    window.dispatchEvent(
-      new CustomEvent(OPEN_CARD_DETAIL_EVENT, { detail: { objectId: id } }),
-    );
-  }
-
-  // Search/filter across Flows + Operations. Lowercased substring match against
-  // label + intent — covers "decompose", "spec", "data", etc.
-  const [query, setQuery] = useState("");
-  const q = query.trim().toLowerCase();
-  function matches(label: string, intent: string) {
-    if (!q) return true;
-    return label.toLowerCase().includes(q) || intent.toLowerCase().includes(q);
-  }
-
   // Headless when closed — the trigger lives in BoardTopRightBar.
   if (!open) return null;
 
@@ -431,7 +281,7 @@ export function PowerupRail({
   }).concat([
     { id: "custom", label: "Custom", intent: "Run your own prompt" },
   ]);
-  const visibleOps = opRows.filter((o) => matches(o.label, o.intent));
+  const visibleOps = opRows;
 
   // Flows — composite, multi-step actions. Forge is the hero; the rest are
   // "do something the operations list can't do in a single shot."
@@ -457,10 +307,10 @@ export function PowerupRail({
     {
       id: "new_objective",
       label: "New objective",
-      intent: "Type a new objective, refine it",
+      intent: "Drop a fresh typing card on the board",
     },
   ];
-  const visibleFlows = flows.filter((f) => matches(f.label, f.intent));
+  const visibleFlows = flows;
 
   return (
     <div onPointerDown={(e) => e.stopPropagation()} style={rail}>
@@ -478,28 +328,6 @@ export function PowerupRail({
         >
           <X style={{ width: 15, height: 15 }} strokeWidth={2.2} />
         </button>
-      </div>
-
-      {/* Search — thin filter for both Flows + Operations. */}
-      <div style={searchWrap}>
-        <Search style={searchIcon} strokeWidth={2} />
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onPointerDown={(e) => e.stopPropagation()}
-          placeholder="Filter actions"
-          style={searchInput}
-        />
-        {query && (
-          <button
-            type="button"
-            onClick={() => setQuery("")}
-            style={searchClear}
-            aria-label="Clear filter"
-          >
-            <X style={{ width: 11, height: 11 }} strokeWidth={2.4} />
-          </button>
-        )}
       </div>
 
       <div style={scroll}>
@@ -655,68 +483,30 @@ export function PowerupRail({
                   </button>
                 );
               }
-              // new_objective — toggle opens a small composer inline.
+              // new_objective — drops a fresh typing card on the board (no
+              // inline composer). Same shape intake uses; submitting it
+              // promotes to an objective-card + fires Sharpening.
               return (
-                <div key="new_objective">
-                  <button
-                    type="button"
-                    onClick={() => setShowNewObj((v) => !v)}
-                    style={{ ...flowRow, marginTop: 6 }}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.background = appleVibe.surface.chipHover)
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.background = appleVibe.surface.chip)
-                    }
-                  >
-                    <span style={flowIconWrap}>
-                      <Sparkle style={{ width: 13, height: 13 }} strokeWidth={2} />
-                    </span>
-                    <span style={{ minWidth: 0, flex: 1 }}>
-                      <span style={opLabel}>{f.label}</span>
-                      <span style={opIntent}>{f.intent}</span>
-                    </span>
-                  </button>
-                  {showNewObj && (
-                    <div style={{ marginTop: 6 }}>
-                      <textarea
-                        autoFocus
-                        value={newObjText}
-                        onChange={(e) => setNewObjText(e.target.value)}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onKeyDown={(e) => {
-                          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                            e.preventDefault();
-                            void refineNewObjective();
-                          }
-                        }}
-                        placeholder="Type a new objective to refine…"
-                        rows={3}
-                        style={composerArea}
-                      />
-                      <button
-                        type="button"
-                        disabled={!newObjText.trim() || refining}
-                        onClick={() => void refineNewObjective()}
-                        style={{
-                          ...flowRow,
-                          marginTop: 6,
-                          justifyContent: "center",
-                          opacity: newObjText.trim() && !refining ? 1 : 0.55,
-                        }}
-                      >
-                        {refining ? (
-                          <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
-                        ) : (
-                          <Wand2 style={{ width: 13, height: 13 }} strokeWidth={2.2} />
-                        )}
-                        <span style={opLabel}>
-                          {refining ? "Refining…" : "Refine → card"}
-                        </span>
-                      </button>
-                    </div>
-                  )}
-                </div>
+                <button
+                  key="new_objective"
+                  type="button"
+                  onClick={spawnNewObjectiveChatbox}
+                  style={{ ...flowRow, marginTop: 6 }}
+                  onMouseEnter={(e) =>
+                    (e.currentTarget.style.background = appleVibe.surface.chipHover)
+                  }
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.background = appleVibe.surface.chip)
+                  }
+                >
+                  <span style={flowIconWrap}>
+                    <Sparkle style={{ width: 13, height: 13 }} strokeWidth={2} />
+                  </span>
+                  <span style={{ minWidth: 0, flex: 1 }}>
+                    <span style={opLabel}>{f.label}</span>
+                    <span style={opIntent}>{f.intent}</span>
+                  </span>
+                </button>
               );
             })}
           </div>
@@ -729,10 +519,7 @@ export function PowerupRail({
         {visibleOps.length > 0 && (
           <>
             <div style={hairline} />
-            <div style={sectionLabel}>
-              EXPLORE
-              <span style={sectionHint}>‹ › same as on each card</span>
-            </div>
+            <div style={sectionLabel}>EXPLORE</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
               {visibleOps.map((op) => {
                 const Icon = op.id === "custom" ? Pencil : (OP_ICON[op.id] ?? Sparkle);
@@ -833,57 +620,6 @@ export function PowerupRail({
           </>
         )}
 
-        {/* Empty-filter state — only if BOTH groups are filtered to nothing. */}
-        {q && visibleFlows.length === 0 && visibleOps.length === 0 && (
-          <div style={{ ...helperLine, marginTop: 14 }}>
-            No actions match “{query}”.
-          </div>
-        )}
-
-        {/* Artifacts — finished / polished outputs. */}
-        <div style={hairline} />
-        <div style={artifactsHead}>
-          <FileCode2 style={{ width: 12, height: 12 }} strokeWidth={2} />
-          <span>Artifacts</span>
-        </div>
-        {boardArtifacts.length === 0 && (included?.length ?? 0) === 0 ? (
-          <div style={{ ...helperLine, marginTop: 6 }}>
-            Polished specs &amp; included objects land here.
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 6 }}>
-            {boardArtifacts.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                onClick={() => openArtifact(a.id)}
-                style={artifactRow}
-                title={`Find "${a.title}" on the board`}
-              >
-                <MapPin style={artifactArrow} strokeWidth={2.2} />
-                <span style={{ minWidth: 0, flex: 1 }}>
-                  <span style={opLabel}>{a.title}</span>
-                  <span style={opIntent}>{a.kind} · on board</span>
-                </span>
-              </button>
-            ))}
-            {(included ?? []).map((o) => (
-              <button
-                key={o.id}
-                type="button"
-                onClick={() => openIncluded(o.id)}
-                style={artifactRow}
-                title={`Open "${o.title}"`}
-              >
-                <FileCode2 style={artifactArrow} strokeWidth={2.2} />
-                <span style={{ minWidth: 0, flex: 1 }}>
-                  <span style={opLabel}>{o.title}</span>
-                  <span style={opIntent}>{o.type} · in spec</span>
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -966,48 +702,6 @@ const iconBtn: CSSProperties = {
   cursor: "pointer",
   color: appleVibe.text.tertiary,
 };
-const searchWrap: CSSProperties = {
-  position: "relative",
-  display: "flex",
-  alignItems: "center",
-  margin: "10px 12px 0",
-  height: 30,
-  borderRadius: appleVibe.radius.sm,
-  background: appleVibe.surface.chip,
-  border: "1px solid var(--glass-border)",
-  paddingLeft: 28,
-  paddingRight: 6,
-};
-const searchIcon: CSSProperties = {
-  position: "absolute",
-  left: 8,
-  width: 12,
-  height: 12,
-  color: appleVibe.text.tertiary,
-};
-const searchInput: CSSProperties = {
-  flex: 1,
-  minWidth: 0,
-  height: "100%",
-  border: "none",
-  background: "transparent",
-  fontSize: 12.5,
-  color: appleVibe.text.primary,
-  fontFamily: appleVibe.font.stack,
-  outline: "none",
-  padding: 0,
-};
-const searchClear: CSSProperties = {
-  display: "inline-grid",
-  placeItems: "center",
-  width: 18,
-  height: 18,
-  border: "none",
-  background: "transparent",
-  cursor: "pointer",
-  color: appleVibe.text.tertiary,
-  flexShrink: 0,
-};
 const scroll: CSSProperties = { flex: 1, overflowY: "auto", padding: "10px 14px 16px", minHeight: 0 };
 const helperLine: CSSProperties = {
   fontSize: 11.5,
@@ -1020,9 +714,6 @@ const hairline: CSSProperties = {
   background: "var(--glass-border)",
   margin: "14px 0 10px",
 };
-// Tracked-uppercase eyebrow above each action group. Names the *kind* of move
-// (BUILD makes real persistent objects · EXPLORE drops throwaway chips below
-// a card). Light typography so it never competes with the rows it labels.
 const sectionLabel: CSSProperties = {
   display: "flex",
   alignItems: "baseline",
@@ -1033,16 +724,6 @@ const sectionLabel: CSSProperties = {
   textTransform: "uppercase",
   color: appleVibe.text.tertiary,
   marginBottom: 6,
-};
-// Helper text trailing the EXPLORE label — ties the rail rows to the per-card
-// ‹ › buttons so users know the same verbs exist in both places.
-const sectionHint: CSSProperties = {
-  fontSize: 10.5,
-  fontWeight: 400,
-  letterSpacing: 0,
-  textTransform: "none",
-  color: appleVibe.text.tertiary,
-  opacity: 0.75,
 };
 const chip: CSSProperties = {
   display: "inline-flex",
@@ -1129,20 +810,6 @@ const flowIconWrap: CSSProperties = {
   background: "rgba(255,255,255,0.7)",
   color: appleVibe.text.secondary,
 };
-const composerArea: CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  resize: "vertical",
-  padding: "8px 10px",
-  borderRadius: appleVibe.radius.sm,
-  border: "1px solid var(--glass-border)",
-  background: "rgba(255,255,255,0.6)",
-  fontSize: 12.5,
-  lineHeight: 1.45,
-  color: appleVibe.text.primary,
-  fontFamily: appleVibe.font.stack,
-  outline: "none",
-};
 const customInput: CSSProperties = {
   flex: 1,
   minWidth: 0,
@@ -1208,33 +875,5 @@ const planChip: CSSProperties = {
   color: appleVibe.text.secondary,
   fontFamily: appleVibe.font.stack,
   cursor: "pointer",
-  flexShrink: 0,
-};
-const artifactsHead: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  fontSize: 11.5,
-  fontWeight: 600,
-  color: appleVibe.text.secondary,
-  letterSpacing: "-0.005em",
-};
-const artifactRow: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  width: "100%",
-  textAlign: "left",
-  padding: "7px 9px",
-  borderRadius: appleVibe.radius.sm,
-  border: "1px solid transparent",
-  background: appleVibe.surface.chip,
-  cursor: "pointer",
-  fontFamily: appleVibe.font.stack,
-};
-const artifactArrow: CSSProperties = {
-  width: 13,
-  height: 13,
-  color: appleVibe.text.tertiary,
   flexShrink: 0,
 };

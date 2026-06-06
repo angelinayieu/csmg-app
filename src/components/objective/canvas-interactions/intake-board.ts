@@ -48,20 +48,40 @@ export function clearStaleChatboxCards(editor: Editor): void {
   if (ids.length > 0) editor.deleteShapes(ids);
 }
 
-/** Seed the chatbox card centered on the board (draft spaces). Idempotent. */
+/** Seed the chatbox card centered on the board (draft spaces). Idempotent.
+ *  `opts.force` bypasses the intake-only guard so a promoted board can also
+ *  drop a fresh chatbox (the rail's "New objective" action). When forced AND
+ *  an objective already lives on the board, the chatbox lands to the right
+ *  of it so the two don't overlap. */
 export function deployChatboxOnBoard(
   editor: Editor,
   detail: { spaceId: string; seedText: string },
+  opts?: { force?: boolean },
 ): void {
+  const force = !!opts?.force;
   // Promoted board → there's no intake to do; never drop a chatbox on top of
   // a finished objective (the cause of "a typing card over my objective").
-  if (hasObjective(editor)) return;
+  // Force=true (rail's New-objective action) explicitly opts out of this.
+  if (!force && hasObjective(editor)) return;
   if (editor.getCurrentPageShapes().some((s) => s.type === "chatbox-card")) {
     return;
   }
-  const c = centerOf(editor);
-  const x = c.x - CHATBOX_W / 2;
-  const y = c.y - CHATBOX_H / 2;
+  let x: number;
+  let y: number;
+  // When forced onto a board that already has an objective-card, place the
+  // chatbox to the right of it (24px gap) so they sit side-by-side.
+  const anchor = force
+    ? editor.getCurrentPageShapes().find((s) => s.type === "objective-card")
+    : undefined;
+  if (anchor) {
+    const ap = anchor as unknown as { x: number; y: number; props: { w: number } };
+    x = ap.x + ap.props.w + 24;
+    y = ap.y;
+  } else {
+    const c = centerOf(editor);
+    x = c.x - CHATBOX_W / 2;
+    y = c.y - CHATBOX_H / 2;
+  }
   const id = createShapeId();
   editor.createShape<ChatboxCardShape>({
     id,
@@ -76,6 +96,7 @@ export function deployChatboxOnBoard(
       color: appleVibe.accent.primary,
     },
   });
+  editor.select(id);
   editor.centerOnPoint(
     { x: x + CHATBOX_W / 2, y: y + CHATBOX_H / 2 },
     { animation: { duration: 200 } },

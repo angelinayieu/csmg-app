@@ -1199,6 +1199,18 @@ declare module "@tldraw/tlschema" {
       createdAtIso: string;
       color: string;
     };
+    // Objective board — REAL bound flow connector (the dark flow-builder look):
+    // a bezier wire with a circular green-out / pink-in port pair + a green→pink
+    // gradient, locked to two cards via fromId/toId. A board reactor keeps its
+    // geometry synced to the endpoints so it MOVES with the cards — a true scene
+    // shape, NOT an SVG overlay.
+    "flow-connector": {
+      w: number;
+      h: number;
+      fromId: string;
+      toId: string;
+      color: string;
+    };
   }
 }
 

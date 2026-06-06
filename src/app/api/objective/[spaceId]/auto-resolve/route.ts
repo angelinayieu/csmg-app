@@ -12,11 +12,15 @@ import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
 import { llmJSON } from "@/lib/llm";
 import { buildSpaceContext } from "@/lib/objective-canvas/build-space-context";
+import { isFactual } from "@/lib/objective-canvas/clarify-planner";
+import { groundFactualConcept } from "@/lib/objective-canvas/ground-factual-concept";
 import type { Resolution } from "@/lib/objective-canvas/prompt-sharpening-prompt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 45;
+// Web-research grounding (factual concepts) adds web_search latency on top of
+// the resolution call, so allow more headroom than a bare resolve.
+export const maxDuration = 120;
 
 type Ctx = { params: Promise<{ spaceId: string }> };
 
@@ -117,6 +121,24 @@ export async function POST(req: Request, ctx: Ctx) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sctx = await buildSpaceContext(supabase as any, spaceId);
 
+  // Web-research grounding for FACTUAL ambiguities (legal/technical/market) so
+  // the model resolves them against real facts, not guesses. Intent/taste/scope
+  // concepts are NEVER researched (the user's call). Bounded (≤4), parallel,
+  // soft-fail — a failed search just drops that concept's grounding.
+  const grounded = await Promise.all(
+    concepts
+      .filter((c) => isFactual({ phrase: c.phrase, kind: c.kind, why: c.why }))
+      .slice(0, 4)
+      .map(async (c) => ({
+        slug: c.concept_slug,
+        g: await groundFactualConcept(c.phrase, c.why),
+      })),
+  );
+  const groundingBlock = grounded
+    .filter((x) => x.g && x.g.findings)
+    .map((x) => `GROUNDING for ${x.slug}:\n${x.g!.findings}`)
+    .join("\n\n");
+
   const list = concepts
     .map((c, i) => {
       const reads = c.candidate_readings.length
@@ -132,6 +154,9 @@ export async function POST(req: Request, ctx: Ctx) {
 
   const userMsg = [
     sctx.preamble || "",
+    groundingBlock
+      ? `WEB-RESEARCH GROUNDING — use these facts for the matching slugs; do not contradict them:\n\n${groundingBlock}`
+      : "",
     `Resolve all ${concepts.length} ambiguities below, one entry per slug.\n\n${list}`,
     `Return the auto_resolve JSON.`,
   ]

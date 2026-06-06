@@ -15,14 +15,13 @@ import {
   createShapeId,
   toRichText,
   type Editor,
-  type TLArrowShape,
   type TLShapeId,
-  type TLShapePartial,
 } from "tldraw";
 import type { OcCardShape, OcCardKind } from "../shapes/oc-card-shape";
 import { layoutSystemsGraph } from "@/lib/objective-canvas/layout-systems-graph";
 import { reserveSpace } from "./placement";
 import { frameForkedGroup } from "./group-frame";
+import { deployFlowConnector } from "./flow-connector-board";
 
 /** Fire to ask the board to decompose the current objective into cards. */
 export const DECOMPOSE_INTO_CARDS_EVENT = "objective-board:decompose-into-cards";
@@ -169,54 +168,16 @@ export function deployOcCards(
     });
   }
 
-  // ── Directed dependency arrows — clean, solid, small arrowhead; bound
-  //    source-right → target-left so direction reads as the left→right flow. ──
+  // ── Directed dependency wires — the REAL flow-connector (green-out / pink-in
+  //    ports + green→pink gradient), source → target downstream. A board reactor
+  //    keeps them synced so they move with the cards. Replaces the old native
+  //    grey arrows for ONE consistent connector style across the board. ──
   for (const e of edges) {
     const a = idByObject.get(e.from);
     const b = idByObject.get(e.to);
     if (!a || !b) continue;
-    const arrowId = createShapeId();
-    const arrow: TLShapePartial<TLArrowShape> = {
-      id: arrowId,
-      type: "arrow",
-      props: {
-        color: "grey",
-        size: "s",
-        dash: "solid",
-        arrowheadStart: "none",
-        arrowheadEnd: "arrow",
-        bend: 0,
-      },
-      meta: { ocLink: true },
-    };
-    editor.createShapes([arrow]);
-    allCreated.push(arrowId);
-    editor.createBindings([
-      {
-        fromId: arrowId,
-        toId: a,
-        type: "arrow",
-        props: {
-          terminal: "start",
-          normalizedAnchor: { x: 1, y: 0.5 },
-          isExact: false,
-          isPrecise: true,
-        },
-        meta: {},
-      },
-      {
-        fromId: arrowId,
-        toId: b,
-        type: "arrow",
-        props: {
-          terminal: "end",
-          normalizedAnchor: { x: 0, y: 0.5 },
-          isExact: false,
-          isPrecise: true,
-        },
-        meta: {},
-      },
-    ]);
+    const wireId = deployFlowConnector(editor, a, b);
+    if (wireId) allCreated.push(wireId);
   }
 
   // ── Grouping underlay + fork connector ── wrap the whole decomposition in a

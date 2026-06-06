@@ -208,9 +208,13 @@ import {
   deployHeatmapCardOnBoard,
   deployPriorityMapCardOnBoard,
   clearLegacySharpeningArrows,
+  ensureObjectiveSharpeningArrow,
 } from "./canvas-interactions/prompt-sharpening-board";
 import { reflowIntakeStack } from "./canvas-interactions/board-reflow";
-import { SharpeningConnectorsOverlay } from "./canvas-interactions/sharpening-connectors";
+import {
+  ensureSharpeningFlowConnectors,
+  registerFlowConnectorReactor,
+} from "./canvas-interactions/flow-connector-board";
 import { ImageWireOverlay } from "./canvas-interactions/image-wire-overlay";
 import { SpecForgeConnectorsOverlay } from "./canvas-interactions/specforge-connectors";
 import { SpecForgeSourceLaneConnector } from "./canvas-interactions/specforge-source-connector";
@@ -703,7 +707,9 @@ const BOARD_COMPONENTS: TLComponents = {
   OnTheCanvas: function ComposedConnectors() {
     return (
       <>
-        <SharpeningConnectorsOverlay />
+        {/* SharpeningConnectorsOverlay retired — the sharpening-fork connectors
+            are now REAL flow-connector shapes (flow-connector-board.ts): green/
+            pink ports + gradient, and they move with the cards. */}
         <SpecForgeConnectorsOverlay />
         <CommentStrandsOverlay />
         <GroupForkConnectorsOverlay />
@@ -767,6 +773,12 @@ export function WhiteboardBase({
     // the objective canvas is pearl-light).
     editor.user.updateUserPreferences({ colorScheme: "light" });
     editor.updateInstanceState({ isGridMode: true });
+    // Real flow connectors (green/pink ports + gradient) for the sharpening fork
+    // — replaces the SVG overlay; the reactor draws them + keeps them synced as
+    // cards move. Initial pass covers a returning board; the listener handles
+    // post-restore + live edits.
+    ensureSharpeningFlowConnectors(editor);
+    registerFlowConnectorReactor(editor);
     onEditorReadyRef.current?.(editor);
   }, []);
 
@@ -871,6 +883,9 @@ export function WhiteboardBase({
     // straight-line duplicate under each curve. Sweep them once the board is
     // restored (deploy doesn't re-run on a returning visit).
     clearLegacySharpeningArrows(ed);
+    // Returning board: ensure the REAL objective→sharpening bound arrow exists
+    // (deploy doesn't re-run on a returning visit).
+    ensureObjectiveSharpeningArrow(ed);
     // Self-heal a board that wrongly carries a chatbox card ON TOP of a
     // promoted objective (stale draft id seeded intake onto a finished board).
     clearStaleChatboxCards(ed);

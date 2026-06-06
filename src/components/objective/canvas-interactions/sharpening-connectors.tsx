@@ -70,29 +70,9 @@ function computeSegments(editor: Editor): Seg[] {
 
   const segs: Seg[] = [];
 
-  // objective → sharpening (vertical, smooth curve)
-  const obj =
-    shapes.find((s) => s.type === "objective-card") ??
-    shapes.find(
-      (s) =>
-        s.type === "room-card" &&
-        (s as RoomCardShape).props.roomId === "__obj",
-    ) ??
-    shapes.find((s) => s.type === "room-card");
-  if (obj) {
-    const ob = editor.getShapePageBounds(obj.id);
-    if (ob) {
-      const from = { x: ob.x + ob.w / 2, y: ob.y + ob.h }; // bottom-center
-      const to = { x: sb.x + sb.w / 2, y: sb.y }; // top-center
-      const dy = Math.max(26, (to.y - from.y) * 0.5);
-      segs.push({
-        id: `obj-${sharp.id}`,
-        d: `M ${from.x} ${from.y} C ${from.x} ${from.y + dy}, ${to.x} ${to.y - dy}, ${to.x} ${to.y}`,
-        from,
-        to,
-      });
-    }
-  }
+  // objective → sharpening is now a REAL bound tldraw arrow (created in
+  // prompt-sharpening-board.ts → ensureObjectiveSharpeningArrow) so it always
+  // renders + moves with the cards. The overlay only draws the forks below.
 
   // sharpening → ambiguity heatmap card (only the ones sourced FROM this card)
   // and sharpening → priority map card. Each is a horizontal S-curve.
