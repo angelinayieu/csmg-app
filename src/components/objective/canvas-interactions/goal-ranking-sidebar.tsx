@@ -27,6 +27,7 @@ import {
   Sparkles,
   AlertTriangle,
   RotateCcw,
+  Check,
 } from "lucide-react";
 import { shapeToScanTarget } from "./shape-node-adapter";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -336,6 +337,44 @@ function focusNode(editor: Editor, id: string) {
 /** Fired by the top-right nav bar to open this rail (the launcher's own left
  *  pill is retired — the nav bar is the single trigger). */
 export const OPEN_BOARD_GOAL_EVENT = "board:open-goal";
+
+// ── ONE concept-kind color language ──────────────────────────────────────────
+// The single biggest "what is what" cue: every concept row — whether it still
+// NEEDS YOU or was already AI-RESOLVED — wears the same color-coded kind tag, so
+// a glance separates a pain from a goal from a limit without reading the words.
+const KIND: Record<string, { label: string; fg: string; bg: string }> = {
+  pain: { label: "Pain", fg: "#E11D48", bg: "rgba(225,29,72,0.10)" },
+  goal: { label: "Goal", fg: "#2563EB", bg: "rgba(37,99,235,0.10)" },
+  constraint: { label: "Limit", fg: "#D97706", bg: "rgba(217,119,6,0.10)" },
+  lever: { label: "Lever", fg: "#0D9488", bg: "rgba(13,148,136,0.10)" },
+  concept: { label: "Term", fg: "#64748B", bg: "rgba(100,116,139,0.10)" },
+};
+const kindOf = (k: string) => KIND[k] ?? KIND.concept;
+
+/** Fixed-width color-coded kind tag — uniform width keeps the phrases aligned in
+ *  a clean column so the list scans top-to-bottom. */
+function KindTag({ kind }: { kind: string }) {
+  const k = kindOf(kind);
+  return (
+    <span
+      style={{
+        flexShrink: 0,
+        width: 42,
+        textAlign: "center",
+        fontSize: 9,
+        fontWeight: 800,
+        letterSpacing: "0.02em",
+        textTransform: "uppercase",
+        padding: "2.5px 0",
+        borderRadius: 6,
+        color: k.fg,
+        background: k.bg,
+      }}
+    >
+      {k.label}
+    </span>
+  );
+}
 
 export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Editor }) {
   const [open, setOpen] = useState(false);
@@ -841,21 +880,20 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
             <span style={{ display: "block", height: "100%", borderRadius: 999, width: `${clarityPct}%`, background: "#059669", transition: "width 0.4s ease" }} />
           </div>
           <div style={{ marginTop: 5, fontSize: 11.5, color: appleVibe.text.tertiary }}>
-            {totals.answered} of {totals.total} sub-questions answered
-            {anns.length > 0 && (
-              <span style={{ color: appleVibe.text.faint }}>
-                {" · "}
-                {resolvedConcepts}/{anns.length} concepts
-              </span>
-            )}
+            {totals.answered} of {totals.total} questions answered
           </div>
 
           {priOpen && (
             <>
               {openQuestions.length > 0 ? (
                 <div style={{ marginTop: 9 }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: appleVibe.text.faint, marginBottom: 5 }}>
-                    Nail next
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 6 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: appleVibe.text.faint }}>
+                      Needs you
+                    </span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: appleVibe.text.faint }}>
+                      {openQuestions.length}
+                    </span>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                     {openQuestions.map((a, i) => {
@@ -875,9 +913,7 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
                           onMouseEnter={(e) => (e.currentTarget.style.background = appleVibe.surface.chipHover)}
                           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                         >
-                          <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: appleVibe.text.faint, flexShrink: 0 }}>
-                            {a.kind}
-                          </span>
+                          <KindTag kind={a.kind} />
                           <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, fontWeight: 600, color: appleVibe.text.primary }}>
                             {a.phrase}
                           </span>
@@ -938,11 +974,6 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
                               })}
                             </span>
                           )}
-                          {showDots && (
-                            <span style={{ fontSize: 10.5, fontWeight: 600, color: appleVibe.text.faint, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
-                              {s.answered}/{s.total}
-                            </span>
-                          )}
                         </button>
                       );
                     })}
@@ -965,9 +996,11 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
         </div>
       )}
 
-      {/* ai activity — auto-resolver presence at the objective altitude.
-          Renders when a call is in flight (pulse) OR when there are recent
-          AI commits in the artifact. Each ⚠ row is a one-click review path. */}
+      {/* ai resolved — concepts the auto-resolver already decided, in the SAME
+          kind-color language as "Needs you". ✓ green = confident (click to
+          override); ⚠ + amber "Review" pill = low-confidence (click to review).
+          The raw confidence % moved to the tooltip — the icon + pill carry the
+          signal, so the list scans without reading numbers. */}
       {(aiBusy || (clarity && clarity.aiActivity.length > 0)) && (
         <div style={{ padding: "10px 12px 12px", borderBottom: "1px solid var(--glass-border)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
@@ -981,13 +1014,17 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
               strokeWidth={2.4}
             />
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: appleVibe.text.faint }}>
-              AI activity
+              AI resolved
             </span>
-            {aiBusy && (
+            {aiBusy ? (
               <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, color: "#7C3AED", fontVariantNumeric: "tabular-nums" }}>
                 resolving {aiBusy.conceptCount}…
               </span>
-            )}
+            ) : clarity && clarity.aiActivity.length > 0 ? (
+              <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, color: appleVibe.text.faint }}>
+                {clarity.aiActivity.length}
+              </span>
+            ) : null}
           </div>
           {clarity && clarity.aiActivity.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -1004,8 +1041,8 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
                     onClick={() => openReviewFor(item)}
                     title={
                       review
-                        ? `Low-confidence AI decision — click to review`
-                        : `AI decided · click to override`
+                        ? `Low-confidence AI decision${confPct !== null ? ` (${confPct}%)` : ""} — click to review`
+                        : `AI decided${confPct !== null ? ` · ${confPct}% confident` : ""} · click to override`
                     }
                     style={aiActivityRow}
                     onMouseEnter={(e) => (e.currentTarget.style.background = appleVibe.surface.chipHover)}
@@ -1013,20 +1050,16 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
                   >
                     {review ? (
                       <AlertTriangle
-                        style={{ width: 11, height: 11, color: "#D97706", flexShrink: 0 }}
+                        style={{ width: 12, height: 12, color: "#D97706", flexShrink: 0 }}
                         strokeWidth={2.4}
                       />
                     ) : (
-                      <span
-                        style={{
-                          width: 5,
-                          height: 5,
-                          borderRadius: 999,
-                          background: "#7C3AED",
-                          flexShrink: 0,
-                        }}
+                      <Check
+                        style={{ width: 12, height: 12, color: "#059669", flexShrink: 0 }}
+                        strokeWidth={2.6}
                       />
                     )}
+                    <KindTag kind={item.kind} />
                     <span
                       style={{
                         flex: 1,
@@ -1041,22 +1074,27 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
                     >
                       {item.phrase}
                     </span>
-                    {confPct !== null && (
+                    {review ? (
                       <span
                         style={{
-                          fontSize: 10.5,
-                          fontWeight: 600,
-                          color: review ? "#D97706" : appleVibe.text.faint,
-                          fontVariantNumeric: "tabular-nums",
                           flexShrink: 0,
+                          fontSize: 9,
+                          fontWeight: 800,
+                          letterSpacing: "0.03em",
+                          textTransform: "uppercase",
+                          padding: "2px 6px",
+                          borderRadius: 6,
+                          color: "#D97706",
+                          background: "rgba(217,119,6,0.12)",
                         }}
                       >
-                        {confPct}%
+                        Review
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 10, color: appleVibe.text.faint, flexShrink: 0 }}>
+                        {relTime(item.resolved_at)}
                       </span>
                     )}
-                    <span style={{ fontSize: 10, color: appleVibe.text.faint, flexShrink: 0 }}>
-                      {relTime(item.resolved_at)}
-                    </span>
                   </button>
                 );
               })}
