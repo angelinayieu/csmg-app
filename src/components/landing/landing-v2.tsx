@@ -35,6 +35,7 @@ import {
   DatasetsIcon,
   type LandingIcon,
 } from "@/components/landing/landing-icons";
+import { Mic, AppWindow, Users, type LucideIcon } from "lucide-react";
 
 // 3D hero node — code-split off the initial bundle (three.js is heavy) and
 // client-only. The flat SVG is the instant loading state + the graceful
@@ -57,6 +58,16 @@ export interface LandingCard {
 }
 
 const INK = "#0B0B0C"; // cold near-black — landing is monochrome, do NOT warm
+
+// Tiny "it also does this" whispers under the hero CTA — frosted chips in the
+// same glass language as the nav + data-source tiles, each with a soft accent
+// spark (reusing the start-cta teal / product sky / brand terracotta). Quiet
+// enough to sit in the monochrome hero, cute enough to read as an add-on.
+const HERO_FEATURES: { label: string; color: string; Icon: LucideIcon }[] = [
+  { label: "voice brainstorm", color: "#13A2B0", Icon: Mic },
+  { label: "prototype on canvas", color: "#0EA5E9", Icon: AppWindow },
+  { label: "team & friends", color: "#C2593B", Icon: Users },
+];
 
 // ── Floating-card anchors ── positions for the 8-card swarm, expressed as
 // percentages of a CENTRED max-width band (not the raw viewport) so the cards
@@ -93,8 +104,8 @@ const FLOATING_ANCHORS: Anchor[] = [
   { top: "43%", left: "-3%", rot: 3, z: 3, drift: 3, scale: 1.0 }, // 3 · L mid FRONT — Research Project
   { top: "30%", right: "-3%", rot: 5, z: 3, drift: 7, scale: 1.2 }, // 4 · R mid FRONT — Product Development (BIG · emphasised)
   { top: "41%", right: "9%", rot: -4, z: 1, drift: 4, scale: 0.82, depth: true }, // 5 · R mid BEHIND — Reading Notes (depth)
-  { top: "65%", left: "19%", rot: 4, z: 2, drift: 5, scale: 0.88 }, // 6 · lower-left — Team Retrospective (raised so it isn't cropped)
-  { top: "66%", right: "16%", rot: -5, z: 2, drift: 1, scale: 0.86 }, // 7 · lower-right — Career Pivot (raised so it isn't cropped)
+  { top: "70%", left: "6%", rot: 4, z: 2, drift: 5, scale: 0.88 }, // 6 · lower-left — Team Retrospective (out + down to clear the centred chip row, still uncropped)
+  { top: "71%", right: "5%", rot: -5, z: 2, drift: 1, scale: 0.86 }, // 7 · lower-right — Career Pivot
 ];
 
 /** Open the hash-driven AuthModal (mounted below) on signup. */
@@ -548,6 +559,21 @@ export function LandingV2({
               <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>tabs</span>{" "}
               <span className="font-normal">and</span>{" "}
               <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>google drive</span>
+            </div>
+
+            {/* Capability whisper — a row of frosted chips surfacing the other
+                things akiboe does, cutely + on-theme. */}
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              {HERO_FEATURES.map((f) => (
+                <span
+                  key={f.label}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.06] bg-white/70 px-3 py-1.5 text-[11.5px] font-medium backdrop-blur-md shadow-[0_6px_18px_-10px_rgba(11,18,40,0.25),inset_0_1px_0_rgba(255,255,255,0.85)]"
+                  style={{ color: appleVibe.text.secondary }}
+                >
+                  <f.Icon className="h-3.5 w-3.5 shrink-0" style={{ color: f.color }} strokeWidth={2} />
+                  {f.label}
+                </span>
+              ))}
             </div>
           </>
         ) : (
