@@ -294,8 +294,12 @@ export function deployHeatmapCardOnBoard(
     },
   });
   editor.select(id);
+  // Descend the camera STRAIGHT DOWN on the SOURCE's vertical axis — not to the
+  // off-center forked card. Centering on the card's own (down-left) midpoint
+  // makes the camera pan sideways ("descends from side, twists to middle"); the
+  // two-way fork should read as a clean downward descent.
   editor.centerOnPoint(
-    { x: spot.x + HEATMAP_SIZE / 2, y: spot.y + HEATMAP_SIZE / 2 },
+    { x: sb ? sb.midX : spot.x + HEATMAP_SIZE / 2, y: spot.y + HEATMAP_SIZE / 2 },
     { animation: { duration: 320 } },
   );
 }
@@ -352,8 +356,10 @@ export function deployPriorityMapCardOnBoard(
     },
   });
   editor.select(id);
+  // Straight-down descent on the source's vertical axis (same as the heatmap) —
+  // no sideways pan to the off-center card.
   editor.centerOnPoint(
-    { x: spot.x + PRIORITY_W / 2, y: spot.y + PRIORITY_H / 2 },
+    { x: sb ? sb.midX : spot.x + PRIORITY_W / 2, y: spot.y + PRIORITY_H / 2 },
     { animation: { duration: 320 } },
   );
 }

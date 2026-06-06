@@ -107,11 +107,18 @@ export async function generateSharpeningDepthForSpace(
         user: SHARPENING_DEPTH_USER(raw, sharpened),
         provider: "anthropic",
         model: DEPTH_MODEL,
-        // Interpretation fields + up to ~10 salience annotations, each with 2–4
-        // micro_questions — a large output. 8192 is sonnet's default cap; if it
-        // still truncates, the ranked-ambiguities fallback below keeps the
-        // downstream alive.
-        maxTokens: 8192,
+        // CRITICAL: llmJSON's anthropic path aborts each attempt at 60s
+        // (timeout: 60_000) and withRetry then retries up to 4×, so an output
+        // that takes >60s to GENERATE never returns — it just times out, retries,
+        // and blows past the route's 120s maxDuration → 504 → nothing persists
+        // (both the card fork AND the goal rail go blank). The prompt is now
+        // capped at 5 annotations × 2–3 micros precisely so the response stays
+        // ~2–2.8k tokens and generates in well under 60s. maxTokens 3500 leaves
+        // headroom against truncation while bounding worst-case time. If it
+        // STILL truncates, the ranked-ambiguities fallback below keeps the
+        // downstream alive. Do NOT raise this without also raising the SDK
+        // per-attempt timeout in llm.ts — they are coupled.
+        maxTokens: 3500,
         responseSchema: SHARPENING_DEPTH_RESPONSE_SCHEMA,
       });
     } catch (e) {

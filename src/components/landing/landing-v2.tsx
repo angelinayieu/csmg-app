@@ -316,7 +316,7 @@ export function LandingV2({
               vocabulary doesn't repeat on every card. A single line drops
               from this pill into the glass tray below; each card's back face
               now focuses on what it GENERATES. */}
-          <div className="flex justify-center pt-1">
+          <div className="flex justify-center pb-3 pt-1">
             <div className="mx-auto flex max-w-full flex-wrap items-center justify-center gap-x-2.5 gap-y-1 rounded-full border border-white/60 bg-white/55 px-5 py-2 backdrop-blur-md shadow-[0_20px_38px_-18px_rgba(11,18,40,0.25),inset_0_1px_0_rgba(255,255,255,0.75)]">
               <span
                 className="text-[10px] font-semibold uppercase tracking-[0.14em]"
@@ -359,10 +359,10 @@ export function LandingV2({
               adapted to the landing's cold monochrome palette. */}
           <svg
             aria-hidden
-            viewBox="0 0 18 68"
+            viewBox="0 0 18 52"
             preserveAspectRatio="xMidYMid meet"
-            className="pointer-events-none absolute left-1/2 z-10 h-[68px] w-[18px] -translate-x-1/2"
-            style={{ top: -22 }}
+            className="pointer-events-none absolute left-1/2 z-10 h-[52px] w-[18px] -translate-x-1/2"
+            style={{ top: -10 }}
           >
             <defs>
               <linearGradient
@@ -371,7 +371,7 @@ export function LandingV2({
                 x1="9"
                 y1="0"
                 x2="9"
-                y2="68"
+                y2="52"
               >
                 <stop offset="0%" stopColor="#1A1A1C" stopOpacity="0.5" />
                 <stop offset="55%" stopColor="#1A1A1C" stopOpacity="0.85" />
@@ -383,28 +383,29 @@ export function LandingV2({
                 connection, not a flat hairline. Round caps + 2.5px so it
                 holds visual weight at this size. */}
             <path
-              d="M 9 5 C 12 22, 6 46, 9 63"
+              d="M 9 6 C 12 18, 6 32, 9 46"
               fill="none"
               stroke="url(#lp-wire)"
               strokeWidth={2.5}
               strokeLinecap="round"
             />
 
-            {/* Source port at the pill bottom — solid ink with a soft
-                white ring (separates it from the glass pill), plus an
-                animated halo that pulses outward to suggest live flow. */}
+            {/* Source port — solid ink with a soft white ring (separates
+                it from the glass pill) and an animated halo. Sits clearly
+                BELOW the pill bottom (the parent flex container's pb-3
+                gives a 12px gap above this SVG). */}
             <circle
               cx={9}
-              cy={5}
-              r={3.6}
+              cy={6}
+              r={3.4}
               fill="#1A1A1C"
               stroke="#FFFFFF"
               strokeWidth={1.2}
             />
-            <circle cx={9} cy={5} r={3.6} fill="none" stroke="#1A1A1C" strokeWidth={1} opacity={0.45}>
+            <circle cx={9} cy={6} r={3.4} fill="none" stroke="#1A1A1C" strokeWidth={1} opacity={0.45}>
               <animate
                 attributeName="r"
-                values="3.6;7.5;3.6"
+                values="3.4;6.6;3.4"
                 dur="2.4s"
                 repeatCount="indefinite"
               />
@@ -419,8 +420,8 @@ export function LandingV2({
             {/* Target port — lands on the glass tray's top edge. */}
             <circle
               cx={9}
-              cy={63}
-              r={3.6}
+              cy={46}
+              r={3.4}
               fill="#1A1A1C"
               stroke="#FFFFFF"
               strokeWidth={1.2}
@@ -484,7 +485,7 @@ export function LandingV2({
                       {/* Flip inner — rotates 180° on hover, swapping front for
                           back. Fixed height so the rail never reflows mid-flip;
                           both faces fill the same box. */}
-                      <div className="relative h-[220px] transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] [transform-style:preserve-3d] group-hover:[transform:rotateY(180deg)]">
+                      <div className="relative h-[228px] transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] [transform-style:preserve-3d] group-hover:[transform:rotateY(180deg)]">
                         {/* ── Front face — banner + name + tagline + footer ── */}
                         <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_2px_2px_rgba(11,18,40,0.04),0_16px_36px_-18px_rgba(11,18,40,0.22)] ring-1 ring-black/[0.04] [backface-visibility:hidden] [-webkit-backface-visibility:hidden]">
                           <div
@@ -563,7 +564,7 @@ export function LandingV2({
                         </div>
 
                         {/* ── Back face — what the template generates ── */}
-                        <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_2px_2px_rgba(11,18,40,0.05),0_38px_64px_-20px_rgba(11,18,40,0.45)] ring-1 ring-black/[0.04] [backface-visibility:hidden] [-webkit-backface-visibility:hidden] [transform:rotateY(180deg)]">
+                        <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_4px_10px_-4px_rgba(11,18,40,0.08),0_24px_48px_-20px_rgba(11,18,40,0.25)] ring-1 ring-black/[0.04] [backface-visibility:hidden] [-webkit-backface-visibility:hidden] [transform:rotateY(180deg)]">
                           <div className="flex flex-1 flex-col px-4 pb-4 pt-3.5">
                             {(() => {
                               const meta = TEMPLATE_META[card.id];
@@ -581,28 +582,28 @@ export function LandingV2({
 
                                   {/* Single-column floating glass output
                                       chips — full card width so longer labels
-                                      ("Cross-book Links", "Experiment Plan")
-                                      never crop. Each chip is flex-1 so they
-                                      share the available column space evenly:
-                                      3-output cards get taller chips, 4-output
-                                      get tighter ones, no empty bottom on
-                                      either. Drift keyframes oc-float-1..4
-                                      keep the group gently floating. */}
-                                  <div className="mt-2 flex flex-1 flex-col gap-1.5">
+                                      never crop. FIXED height (not flex-1)
+                                      so 3-output and 4-output cards share the
+                                      same chip rhythm; any leftover space
+                                      goes to a comfortable gap above the
+                                      footer, NOT into stretched chips. Drift
+                                      keyframes oc-float-1..4 keep the group
+                                      gently floating. */}
+                                  <div className="mt-2 flex flex-col gap-1.5">
                                     {outs.map((it, i) => {
                                       const Icon = it.icon;
                                       return (
                                         <div
                                           key={it.label}
-                                          className={`oc-float-${(i % 4) + 1} flex min-h-[28px] flex-1 min-w-0 items-center gap-2.5 rounded-xl border border-white/60 bg-white/55 px-2.5 py-1 text-[11.5px] font-medium leading-tight text-[#1A1F2B] backdrop-blur-md shadow-[0_8px_18px_-10px_rgba(11,18,40,0.28),inset_0_1px_0_rgba(255,255,255,0.75)]`}
+                                          className={`oc-float-${(i % 4) + 1} flex h-[28px] min-w-0 items-center gap-2 rounded-xl border border-white/60 bg-white/55 px-2 text-[11px] font-medium leading-tight text-[#1A1F2B] backdrop-blur-md shadow-[0_6px_14px_-8px_rgba(11,18,40,0.22),inset_0_1px_0_rgba(255,255,255,0.75)]`}
                                           style={{ willChange: "transform" }}
                                         >
                                           <span
-                                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg"
+                                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
                                             style={{ background: `${card.accent}15` }}
                                           >
                                             <Icon
-                                              className="h-3.5 w-3.5"
+                                              className="h-3 w-3"
                                               style={{ color: card.accent }}
                                               strokeWidth={2.2}
                                             />

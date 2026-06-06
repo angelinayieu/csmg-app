@@ -226,6 +226,34 @@ function parseRanked(json: string): RankedItem[] {
     return [];
   }
 }
+
+/** Client fallback for the priority map. The depth pass can 504 (the LLM output
+ *  takes >60s → SDK aborts → retries → exceeds the route's maxDuration), in
+ *  which case NOTHING persists and the GET stays "pending" forever. Rather than
+ *  leave the priority-map fork blank, derive a coarse map from the ranked
+ *  ambiguities the card already holds. No micro-decomposition / candidate
+ *  readings (the depth pass owns those) — but never nothing. Mirrors
+ *  deriveSalienceFromRanked() in generate-sharpening-depth.ts. */
+function deriveSalienceFallback(ranked: RankedItem[]): SalienceItem[] {
+  return ranked.slice(0, 6).map((r) => {
+    const uncertainty =
+      r.severity === "high" ? 0.85 : r.severity === "medium" ? 0.6 : 0.4;
+    const phrase =
+      (r.ambiguity_type || "").replace(/ambiguity/i, "").trim() ||
+      (r.ambiguity || "").slice(0, 48) ||
+      "Ambiguity";
+    const leverage = 0.7;
+    return {
+      phrase,
+      kind: "concept",
+      leverage,
+      uncertainty,
+      why: (r.ambiguity || r.question_to_resolve || "").trim(),
+      candidate_readings: [],
+      priority: Math.round(leverage * (0.5 + 0.5 * uncertainty) * 1000) / 1000,
+    };
+  });
+}
 function parseHeatmap(json: string): Record<string, HeatZone> {
   try {
     const v = JSON.parse(json);
@@ -389,6 +417,12 @@ function PromptSharpeningRenderer({
       setSalience(items);
       setSaliencePending(false);
     }
+    // Coarse priority map from the ranked ambiguities the card already holds —
+    // used whenever the server depth pass can't deliver (504 / error / polled
+    // out) so the fork + resolve panel never stay blank.
+    function fallback(): SalienceItem[] {
+      return deriveSalienceFallback(parseRanked(shape.props.rankedJson));
+    }
 
     async function tick() {
       if (cancelled) return;
@@ -402,7 +436,7 @@ function PromptSharpeningRenderer({
             status?: string;
             salience?: { annotations?: SalienceItem[] };
           };
-          if (j.status === "ready" && j.salience?.annotations) {
+          if (j.status === "ready" && j.salience?.annotations?.length) {
             done(j.salience.annotations);
             return;
           }
@@ -425,20 +459,29 @@ function PromptSharpeningRenderer({
               status?: string;
               salience?: { annotations?: SalienceItem[] };
             };
-            if (j.status === "ready" && j.salience?.annotations) {
+            if (j.status === "ready" && j.salience?.annotations?.length) {
               done(j.salience.annotations);
               return;
             }
+          } else if (r.status >= 500) {
+            // Depth pass timed out (504) or errored server-side — it won't
+            // recover by polling, so surface the coarse fallback immediately.
+            done(fallback());
+            return;
           }
         } catch {
-          /* fall through to polling */
+          // Network error / abort (the 504 often surfaces as a throw) — same.
+          done(fallback());
+          return;
         }
       }
       if (cancelled) return;
       if (tries < 8) {
         timer = setTimeout(tick, 2000);
       } else {
-        setSaliencePending(false);
+        // Polled out with nothing persisted → last-resort coarse fallback so the
+        // priority map + resolve panel still appear.
+        done(fallback());
       }
     }
     timer = setTimeout(tick, 400);

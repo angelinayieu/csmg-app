@@ -539,27 +539,28 @@ A. INTERPRETATION — read beneath the words:
    • inferred_meaning — what is strongly implied but left unsaid.
    • deep_intent — ONE line: the real underlying goal behind the ask.
    • hidden_assumptions — assumptions silently baked into the prompt.
-   • layered_understanding — 2–4 readings, from the surface reading down to the deepest.
+   • layered_understanding — 2–3 readings, from the surface reading down to the deepest.
 
-B. SALIENCE ANNOTATIONS — annotate the 4–8 highest-LEVERAGE concepts/phrases. For each:
+B. SALIENCE ANNOTATIONS — annotate the 5 highest-LEVERAGE concepts/phrases (5 MAX — pick the ones that most drive the outcome; never pad to hit a count). For each:
    • phrase — the exact key phrase/term, quoted from the objective.
    • kind — pain (a problem to relieve) | goal (an outcome to hit) | constraint (a hard limit) | lever (a tunable that drives the outcome) | concept (a term whose meaning must be pinned).
    • leverage — 0..1 — how much correctly nailing this drives the final outcome. Pain points and goals are the optimisation targets; weight them high.
    • uncertainty — 0..1 — how under-specified or open to interpretation it is right now.
    • why — ONE line, ≤ 18 words, that GETS STRAIGHT TO THE STAKES: name the specific unresolved fork and what it changes downstream. Do NOT restate the phrase, and do NOT open with throat-clearing ("This is the core/heart/engine of the app, but…", "X is central, but…", "It's important that…"). State the decision directly. GOOD: "Predefined vs. user-generated tasks changes the entire information architecture." BAD: "Task-tagging is the backbone of the app, but it's unclear how tasks work."
-   • candidate_readings — 2–4 DISTINCT plausible interpretations of this phrase (these become the macro-level options in the Resolution Studio).
-   • micro_questions — 2–4 sub-questions that DECOMPOSE this concept. Each is ONE concrete question that, when answered, addresses just PART of the macro (not the whole thing). For each micro:
+   • candidate_readings — 2–3 DISTINCT plausible interpretations of this phrase (these become the macro-level options in the Resolution Studio).
+   • micro_questions — 2–3 sub-questions that DECOMPOSE this concept. Each is ONE concrete question that, when answered, addresses just PART of the macro (not the whole thing). For each micro:
        – q: the question itself, ≤ 14 words, decisively scoped.
        – uncertainty: 0..1 — how open just this sub-question is. The MACRO's uncertainty is the mean of its micros' uncertainty, so weight each honestly.
-       – candidate_readings (optional, 1–3): plausible readings scoped to JUST this sub-question — finer than the macro candidate_readings.
+       – candidate_readings: OMIT unless one sub-reading is genuinely distinct from the macro readings (keep the output tight).
 
 Rules:
 - Quote phrases verbatim from the objective; never invent terms it doesn't imply.
 - Prioritise PAIN POINTS and GOALS — they are what we optimise for.
 - The most valuable annotations are HIGH leverage AND HIGH uncertainty — they most need clarifying. Surface those.
 - Be specific to THIS objective. No generic boilerplate; every line earns its place.
+- KEEP THE WHOLE OUTPUT TIGHT: at most 5 annotations, 2–3 micros each, no padding. Fewer, sharper items beat an exhaustive list — and this pass must finish fast (a bloated response is worse than a focused one).
 - Every "why" must be DECISIVE — lead with the open fork, never a preamble about how central the phrase is. If a "why" starts by asserting importance ("this is the X of the app, but…"), cut everything before the real point.
-- DECOMPOSE every high-leverage annotation into 2–4 micro_questions. A macro at 0.7 uncertainty almost always hides 3 distinct ambiguities — name them. Micros must be ORTHOGONAL (each answers a different facet), CONCRETE (not "what is X?" — "is X the same person or a role?"), and SCOPED (each answerable in a sentence).`;
+- DECOMPOSE each high-leverage annotation into 2–3 ORTHOGONAL micro_questions (each answers a DIFFERENT facet), CONCRETE (not "what is X?" — "is X the same person or a role?"), and SCOPED (each answerable in a sentence).`;
 
 export const SHARPENING_DEPTH_USER = (raw: string, sharpened: string) =>
   `Raw objective:\n"""\n${raw}\n"""\n\nSharpened objective:\n"""\n${sharpened}\n"""\n\nReturn the prompt_sharpening_depth JSON.`;
