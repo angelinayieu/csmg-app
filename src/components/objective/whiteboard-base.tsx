@@ -121,6 +121,7 @@ import {
 import { getAiSettings } from "@/lib/objective-canvas/ai-settings";
 import { setPanel } from "@/lib/objective-canvas/board-panel-signal";
 import { BoardTopRightBar } from "./canvas-interactions/board-top-right-bar";
+import { CuteCollaboratorCursor } from "./canvas-interactions/cute-cursor";
 import { ObjectDetailMount } from "./canvas-interactions/object-detail-drawer";
 import { ConnectorDragLayer } from "./canvas-interactions/connector-drag-layer";
 import { GoalLauncher } from "./canvas-interactions/goal-ranking-sidebar";
@@ -686,6 +687,10 @@ function PageTabs() {
 const BOARD_COMPONENTS: TLComponents = {
   StylePanel: CollapsibleStylePanel,
   TopPanel: PageTabs,
+  // Custom bubble-pointer cursor for peers — replaces tldraw's plain
+  // arrow with a glossy color-tinted teardrop + name pill. Page-space
+  // coords + 1/zoom scaling are handled inside the component.
+  CollaboratorCursor: CuteCollaboratorCursor,
   // The custom PageTabs (top-center) replaces tldraw's default page menu — drop
   // the duplicate "Page 1 ▾" from the top-left cluster.
   PageMenu: null,

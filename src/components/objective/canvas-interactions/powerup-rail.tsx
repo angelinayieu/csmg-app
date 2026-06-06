@@ -11,25 +11,21 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { usePanel, setPanel } from "@/lib/objective-canvas/board-panel-signal";
 import { useValue, type Editor, type TLShapeId } from "tldraw";
+import { FileCode2, MapPin, Send } from "lucide-react";
 import {
   Wand2,
-  Split,
+  TreeStructure,
   Shuffle,
   HelpCircle,
   ListChecks,
-  Wrench,
-  Layers3,
-  Workflow,
+  Blueprint,
   Loader2,
-  FileCode2,
-  MapPin,
   AppWindow,
   Pencil,
-  PackageOpen,
-  Send,
+  Package,
   Search,
   X,
-} from "lucide-react";
+} from "@/lib/cute-icons";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import {
@@ -70,17 +66,12 @@ export const FORGE_STATE_EVENT = "objective-board:forge-state";
 const BUILD_PROTOTYPE_EVENT = "objective-board:build-prototype";
 const OPEN_TECH_SPEC_EVENT = "objective-board:open-tech-spec";
 
-const OP_ICON: Record<string, typeof Split> = {
-  // "Unpack" (formerly "Decompose") — PackageOpen visually separates it from
-  // the top BUILD button "Decompose objective" (Split). Same word collision is
-  // what users were confused by; different icon + different name fixes it.
-  decompose: PackageOpen,
+const OP_ICON: Record<string, typeof Package> = {
+  decompose: Package,
   variations: Shuffle,
   questions: HelpCircle,
   make_plan: ListChecks,
-  make_technical: Wrench,
-  layers: Layers3,
-  data_flow: Workflow,
+  make_technical: Blueprint,
 };
 
 // Local label/intent overrides — terser, verb-first names that read better in a
@@ -97,15 +88,20 @@ const OP_OVERRIDES: Record<string, { label?: string; intent?: string }> = {
   variations: { intent: "Alternative angles" },
   questions: { label: "Clarify", intent: "Questions to answer first" },
   make_plan: { label: "Action plan", intent: "Turn this into a plan" },
-  make_technical: { label: "Technical spec", intent: "Mechanism + components" },
-  layers: { label: "Layer stack", intent: "Substrate → outcome" },
-  data_flow: { label: "Data flow", intent: "Upstream → downstream" },
+  make_technical: { label: "Technical spec", intent: "Mechanism, components, data flow" },
 };
+
+// Rail-only: hide ops that have been folded into other rows. The op stays
+// runnable by id (executor + scanner still see it); just no row in the rail.
+//   layers   → folded into Unpack (both are vertical decompositions)
+//   data_flow → folded into Technical spec (make_technical already returns it)
+const RAIL_HIDDEN_OPS = new Set(["layers", "data_flow"]);
 
 // The operations list = every wired, visible text op (converge/diverge are
 // hidden — they're the popup verbs; sub_objective/entity ops aren't wired).
 const POWERUPS = CANVAS_OPERATIONS.filter(
-  (o) => o.contract === "text" && o.wired && !o.hidden,
+  (o) =>
+    o.contract === "text" && o.wired && !o.hidden && !RAIL_HIDDEN_OPS.has(o.id),
 );
 
 // Accent for the hero (Forge) — the one tinted color in the rail. A muted
@@ -445,18 +441,18 @@ export function PowerupRail({
     intent: string;
   };
   const flows: Flow[] = [
-    { id: "forge", label: "Forge full spec", intent: "Idea → root cause → MVPs → first build" },
+    { id: "forge", label: "Scope the build", intent: "Idea → MVPs → first build" },
+    {
+      id: "decompose_objective",
+      label: "Decompose product system",
+      intent: "Whole objective → Feature & Variable cards",
+    },
     {
       id: "prototype",
       label: "Build prototype",
       intent: selHasTechSpec
         ? "Clickable UI from this tech spec"
         : `Fork ${settings.uiPlanCount} UI plans, pick one`,
-    },
-    {
-      id: "decompose_objective",
-      label: "Decompose objective",
-      intent: "Whole objective → Feature & Variable cards",
     },
     {
       id: "new_objective",
@@ -649,7 +645,7 @@ export function PowerupRail({
                       {busy ? (
                         <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} />
                       ) : (
-                        <Split style={{ width: 13, height: 13 }} strokeWidth={2} />
+                        <TreeStructure size={13} />
                       )}
                     </span>
                     <span style={{ minWidth: 0, flex: 1 }}>

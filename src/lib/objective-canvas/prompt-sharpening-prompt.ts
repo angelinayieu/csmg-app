@@ -407,6 +407,27 @@ export function macroProgress(a: SalienceAnnotation): {
   };
 }
 
+/** Live macro uncertainty derived from the CURRENT micro state — unlike the
+ *  value frozen at generation, this drops as micros get addressed / resolved,
+ *  so the rail bars + ranking move as work lands (Step 1 of the clarification
+ *  engine). Resolved micros contribute 0; addressed-but-open micros contribute
+ *  a damped share (more addressing refs → lower); open micros contribute their
+ *  full uncertainty. Falls back to the stored value for legacy artifacts with
+ *  no micros. Pure. */
+export function liveUncertainty(a: SalienceAnnotation): number {
+  const m = a.micro_questions;
+  if (!m || m.length === 0) return a.uncertainty;
+  let sum = 0;
+  for (const q of m) {
+    if (q.resolved_at) continue; // fully resolved → 0
+    const refs = q.addressed_by?.length ?? 0;
+    // Addressed-but-open: damp up to 60% as refs accrue (0 refs → full weight).
+    const damp = refs > 0 ? Math.max(0.4, 1 - 0.25 * refs) : 1;
+    sum += q.uncertainty * damp;
+  }
+  return Math.round((sum / m.length) * 1000) / 1000;
+}
+
 export interface SalienceMetadata {
   annotations: SalienceAnnotation[];
   /** Stamped server-side at persist time (ISO). */

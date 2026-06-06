@@ -14,7 +14,7 @@
 // This keeps the focused objective board free of the heavy canvas
 // chrome the main InteraxisCanvas uses for the same lifecycle.
 
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
@@ -30,8 +30,16 @@ import {
 import { Check, X, Globe, HelpCircle } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
-import { openResolutionStudio } from "@/components/objective/board-bus";
+import {
+  openResolutionStudio,
+  refreshSharpening,
+} from "@/components/objective/board-bus";
 import { slugifyConcept } from "@/lib/objective-canvas/normalize-annotations";
+import {
+  runAiResolve,
+  type ResolveConcept,
+} from "@/lib/objective-canvas/run-ai-resolve";
+import { Spark } from "@/components/objective/icons/spark";
 
 /** A web source backing a Deep Synthesize node. */
 export type InsightCitation = { title: string; url: string };
@@ -241,6 +249,7 @@ function InsightCardRenderer({
   // proven studio → resolutions → apply-resolutions → pinned-glossary path.
   const forkMeta = shape.meta as { ambiguityFork?: boolean; spaceId?: string };
   const isFork = !!forkMeta.ambiguityFork;
+  const [busy, setBusy] = useState<null | "one" | "all">(null);
 
   function resolveFork(e: React.MouseEvent) {
     e.stopPropagation();
@@ -262,6 +271,98 @@ function InsightCardRenderer({
       ],
     });
   }
+
+  // This forked ambiguity as a resolve concept (mirrors resolveFork's seed).
+  const thisConcept: ResolveConcept = {
+    phrase: headline,
+    kind: "concept",
+    leverage: 0.7,
+    uncertainty: 0.7,
+    why: body,
+    candidate_readings: [],
+    concept_slug: slugifyConcept(headline),
+  };
+
+  // Headless AI resolve → re-frame → decompose into Feature/Variable cards.
+  // Reuses the shared orchestrator (auto-resolve → resolutions → apply) + the
+  // existing decompose event — the proven pipeline, scoped here to one or all
+  // ambiguities. Recursive diverge/converge depth is a later enhancement.
+  async function finishResolve(sid: string, concepts: ResolveConcept[]) {
+    const res = await runAiResolve(sid, concepts);
+    refreshSharpening(sid);
+    window.dispatchEvent(
+      new CustomEvent("objective-board:decompose-into-cards", {
+        detail: res?.sharpenedPrompt
+          ? { objective: res.sharpenedPrompt }
+          : undefined,
+      }),
+    );
+  }
+
+  function aiResolveOne(e: React.MouseEvent) {
+    e.stopPropagation();
+    const sid = forkMeta.spaceId;
+    if (!sid || busy) return;
+    setBusy("one");
+    void finishResolve(sid, [thisConcept]).finally(() => setBusy(null));
+  }
+
+  async function aiResolveAll(e: React.MouseEvent) {
+    e.stopPropagation();
+    const sid = forkMeta.spaceId;
+    if (!sid || busy) return;
+    setBusy("all");
+    // Pull every salient ambiguity so "Resolve all" covers the whole map; fall
+    // back to just this one if the fetch fails.
+    let concepts: ResolveConcept[] = [thisConcept];
+    try {
+      const r = await fetch(`/api/objective/${sid}/prompt-sharpening`, {
+        cache: "no-store",
+      });
+      if (r.ok) {
+        const j = (await r.json()) as {
+          artifact?: {
+            salience?: {
+              annotations?: Array<{
+                phrase?: string;
+                kind?: string;
+                why?: string;
+                candidate_readings?: string[];
+                concept_slug?: string;
+              }>;
+            };
+          };
+        };
+        const anns = j.artifact?.salience?.annotations;
+        if (Array.isArray(anns) && anns.length) {
+          concepts = anns
+            .filter((a) => typeof a.phrase === "string" && a.phrase.trim())
+            .map((a) => ({
+              phrase: a.phrase as string,
+              kind: a.kind || "concept",
+              why: a.why,
+              candidate_readings: a.candidate_readings || [],
+              concept_slug: a.concept_slug,
+            }));
+        }
+      }
+    } catch {
+      /* fall back to the single concept */
+    }
+    await finishResolve(sid, concepts).finally(() => setBusy(null));
+  }
+
+  const quietAction: React.CSSProperties = {
+    border: "none",
+    background: "transparent",
+    cursor: busy ? "default" : "pointer",
+    padding: 0,
+    fontSize: 11.5,
+    fontWeight: 600,
+    color: appleVibe.text.secondary,
+    fontFamily: appleVibe.font.stack,
+    opacity: busy ? 0.5 : 1,
+  };
 
   const eyebrow = isHub
     ? "Synthesis map"
@@ -477,11 +578,22 @@ function InsightCardRenderer({
         {/* Forked ambiguity → Resolve: opens the studio scoped to THIS one,
             turning a visual-only fork into the entry point for capturing taste. */}
         {isFork && forkMeta.spaceId && (
-          <div style={{ marginTop: 12, display: "flex" }}>
+          <div
+            style={{
+              marginTop: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            {/* The 3-mode resolve choice: AI resolve (this one, headless) ·
+                Resolve all (every ambiguity) · Answer (the Studio). */}
             <button
               type="button"
               onPointerDown={stopEventPropagation}
-              onClick={resolveFork}
+              onClick={aiResolveOne}
+              disabled={!!busy}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -489,16 +601,35 @@ function InsightCardRenderer({
                 padding: "6px 13px",
                 borderRadius: 999,
                 border: "none",
-                cursor: "pointer",
+                cursor: busy ? "default" : "pointer",
                 background: color,
                 color: "white",
                 fontSize: 11.5,
                 fontWeight: 600,
                 boxShadow: `0 4px 12px -3px ${color}88`,
+                opacity: busy ? 0.6 : 1,
               }}
             >
-              <HelpCircle style={{ width: 12, height: 12 }} strokeWidth={2.6} />
-              Resolve
+              <Spark style={{ width: 12, height: 12 }} strokeWidth={2.6} />
+              {busy === "one" ? "Resolving…" : "AI resolve"}
+            </button>
+            <button
+              type="button"
+              onPointerDown={stopEventPropagation}
+              onClick={aiResolveAll}
+              disabled={!!busy}
+              style={quietAction}
+            >
+              {busy === "all" ? "Resolving all…" : "Resolve all"}
+            </button>
+            <button
+              type="button"
+              onPointerDown={stopEventPropagation}
+              onClick={resolveFork}
+              disabled={!!busy}
+              style={quietAction}
+            >
+              Answer
             </button>
           </div>
         )}

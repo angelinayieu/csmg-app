@@ -347,4 +347,86 @@ export const History: IconComp = (p) => (
   </SVG>
 );
 
+// ─── actions rail (cute set) ─────────────────────────────────────────────
+
+// Decompose product system → root node with two branches (chunky tree)
+export const TreeStructure: IconComp = (p) => (
+  <SVG {...p}>
+    <rect x={9} y={3} width={6} height={5} rx={1.6} fill="currentColor" opacity={0.22} />
+    <rect x={9} y={3} width={6} height={5} rx={1.6} />
+    <rect x={3} y={16} width={6} height={5} rx={1.6} fill="currentColor" opacity={0.22} />
+    <rect x={3} y={16} width={6} height={5} rx={1.6} />
+    <rect x={15} y={16} width={6} height={5} rx={1.6} fill="currentColor" opacity={0.22} />
+    <rect x={15} y={16} width={6} height={5} rx={1.6} />
+    <path d="M12 8v3.5M6 16v-1.5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2V16" />
+  </SVG>
+);
+
+// Technical spec → mini blueprint (paper + circuit dots + connector)
+export const Blueprint: IconComp = (p) => (
+  <SVG {...p}>
+    <rect x={3.5} y={4} width={17} height={16} rx={2.5} fill="currentColor" opacity={0.18} />
+    <rect x={3.5} y={4} width={17} height={16} rx={2.5} />
+    <circle cx={8} cy={9} r={1.4} fill="currentColor" stroke="none" />
+    <circle cx={16} cy={9} r={1.4} fill="currentColor" stroke="none" />
+    <circle cx={12} cy={15.5} r={1.4} fill="currentColor" stroke="none" />
+    <path d="M8 9h8M8 9l4 6.5M16 9l-4 6.5" />
+  </SVG>
+);
+
+// Build prototype → app window with cursor dot
+export const AppWindow: IconComp = (p) => (
+  <SVG {...p}>
+    <rect x={3} y={5} width={18} height={14} rx={2.5} fill="currentColor" opacity={0.18} />
+    <rect x={3} y={5} width={18} height={14} rx={2.5} />
+    <path d="M3 9h18" />
+    <circle cx={6} cy={7} r={0.8} fill="currentColor" stroke="none" />
+    <circle cx={8.5} cy={7} r={0.8} fill="currentColor" stroke="none" />
+    <path d="m12.5 14 2 2 1-1 2 2.5" />
+  </SVG>
+);
+
+// Unpack → open box with lid floating off
+export const Package: IconComp = (p) => (
+  <SVG {...p}>
+    <path d="M4 9.5 12 13l8-3.5L12 6 4 9.5Z" fill="currentColor" opacity={0.22} />
+    <path d="M4 9.5 12 13l8-3.5L12 6 4 9.5Z" />
+    <path d="M4 9.5v8L12 21v-8M20 9.5v8L12 21" />
+    <path d="M9 3.5 12 5l3-1.5" opacity={0.7} />
+  </SVG>
+);
+
+// Variations → two arrows swapping (shuffle)
+export const Shuffle: IconComp = (p) => (
+  <SVG {...p}>
+    <path d="M3 7h3.5l4.5 10H15" />
+    <path d="M3 17h3.5l4.5-10H15" />
+    <path d="m13.5 5 2 2-2 2" />
+    <path d="m13.5 15 2 2-2 2" />
+  </SVG>
+);
+
+// Clarify → soft circle with question mark
+export const HelpCircle: IconComp = (p) => (
+  <SVG {...p}>
+    <circle cx={12} cy={12} r={8.5} fill="currentColor" opacity={0.18} />
+    <circle cx={12} cy={12} r={8.5} />
+    <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .7-1 1.4v.3" />
+    <circle cx={12} cy={16.5} r={0.9} fill="currentColor" stroke="none" />
+  </SVG>
+);
+
+// Action plan → checklist (two checked rows)
+export const ListChecks: IconComp = (p) => (
+  <SVG {...p}>
+    <rect x={3} y={5} width={4} height={4} rx={1} fill="currentColor" opacity={0.22} />
+    <rect x={3} y={5} width={4} height={4} rx={1} />
+    <path d="m3.8 7 1 1L6.4 6.5" />
+    <rect x={3} y={15} width={4} height={4} rx={1} fill="currentColor" opacity={0.22} />
+    <rect x={3} y={15} width={4} height={4} rx={1} />
+    <path d="m3.8 17 1 1L6.4 16.5" />
+    <path d="M10 7h11M10 17h11" />
+  </SVG>
+);
+
 export type LucideIcon = IconComp;

@@ -10,6 +10,7 @@
 
 import { useEffect, useRef } from "react";
 import { deploySharpeningCard } from "./board-bus";
+import { OPEN_BOARD_GOAL_EVENT } from "./canvas-interactions/goal-ranking-sidebar";
 
 interface RankedItem {
   ambiguity_type?: string;
@@ -25,6 +26,7 @@ function chipLabel(r: RankedItem): string {
 
 export function PromptSharpeningMount({ spaceId }: { spaceId: string }) {
   const dispatched = useRef(false);
+  const openedRail = useRef(false);
 
   useEffect(() => {
     if (!spaceId) return;
@@ -103,6 +105,15 @@ export function PromptSharpeningMount({ spaceId }: { spaceId: string }) {
           }
           if (json.objectivePresent) {
             pendingWithObjective += 1;
+            // FRESH intake (objective set, artifact still generating) → open the
+            // Goal rail so the user watches it work: the title lands fast, the
+            // clarity metrics fill as they generate. We're in the not-ready
+            // branch (ready short-circuits above + returns), so this never fires
+            // on a returning board whose artifact already exists.
+            if (!openedRail.current && typeof window !== "undefined") {
+              openedRail.current = true;
+              window.dispatchEvent(new CustomEvent(OPEN_BOARD_GOAL_EVENT));
+            }
             // ~3 polls (~6s) with an objective set but no artifact ⇒ the
             // post-response generation didn't land — drive it once, awaited.
             if (!drove && pendingWithObjective >= 3) {

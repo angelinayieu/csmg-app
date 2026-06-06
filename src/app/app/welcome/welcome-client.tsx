@@ -74,7 +74,7 @@ export function SynergyWelcomeClient({
           description: "Opening a fresh whiteboard for you…",
         });
       }
-      router.push("/app/synergy/new");
+      router.push("/app");
     } catch (e) {
       toast.error("Couldn't complete onboarding", {
         description: (e as Error).message,

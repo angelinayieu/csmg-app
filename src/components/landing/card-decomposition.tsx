@@ -20,11 +20,16 @@ export function CardDecomposition({
   templateId,
   accent,
   forceOpen = false,
+  outerClassName = "mt-3",
 }: {
   templateId: string;
   accent: string;
   /** Featured card: expanded by default (no hover needed). */
   forceOpen?: boolean;
+  /** Wrapper spacing class. Defaults to `mt-3` for the original below-the-tagline
+   *  placement; pass `""` (or your own) when the call site owns the vertical
+   *  spacing — e.g. the flip back face on the landing card. */
+  outerClassName?: string;
 }) {
   const meta = TEMPLATE_META[templateId];
   if (!meta) return null;
@@ -38,7 +43,7 @@ export function CardDecomposition({
 
   return (
     <div
-      className={`mt-3 grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${reveal}`}
+      className={`${outerClassName} grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${reveal}`}
     >
       <div className="min-h-0 overflow-hidden">
         {/* Feed in — the lead. Frosted glass chips that float in. */}

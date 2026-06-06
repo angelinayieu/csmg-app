@@ -44,7 +44,7 @@ function slugify(s: string): string {
 }
 
 const SYSTEM = `You decompose a user's objective into the concrete building blocks of a plan, as two kinds of cards:
-- FEATURE — a concrete capability or action the plan will build or do. Name it DIRECTLY by its utility: simple, clear, no metaphors, no buzzwords (e.g. "Daily check-in reminder", NOT "Engagement catalyst"). Give a sharp, information-dense 1-2 sentence description of what it does.
+- FEATURE — a concrete capability or action the plan will build or do. Name it DIRECTLY by its utility: simple, clear, no metaphors, no buzzwords (e.g. "Daily check-in reminder", NOT "Engagement catalyst"). Give a sharp, information-dense 1-2 sentence description of what it does. ALSO emit per feature: mechanism — ONE line on HOW it works (inputs → logic → output), concrete to THIS objective; confidence — 0..1, how sure you are it's the right build for the objective.
 - VARIABLE — a measurable concept the objective turns on (a quantity, factor, or condition). Name it plainly (e.g. "Posting friction", "Sleep quality"). Give a sharp 1-sentence definition.
 Then CONNECT them with links: a feature "feeds" a variable it moves/improves, and "depends_on" a variable it needs.
 Also GROUP everything into 2-4 cohesive SUBSYSTEMS — clusters of features plus the variables they act on that form one functional part of the plan. Give each a short Title Case name (<= 3 words, e.g. "Onboarding", "Content Engine", "Retention Loop"). Assign EVERY feature and variable a "subsystem" equal to one of those names.
@@ -65,9 +65,11 @@ const SCHEMA: { name: string; schema: Record<string, unknown> } = {
             slug: { type: "string" },
             name: { type: "string" },
             description: { type: "string" },
+            mechanism: { type: "string" },
+            confidence: { type: "number" },
             subsystem: { type: "string" },
           },
-          required: ["slug", "name", "description", "subsystem"],
+          required: ["slug", "name", "description", "mechanism", "confidence", "subsystem"],
         },
       },
       variables: {
@@ -107,6 +109,8 @@ interface RawCard {
   name?: unknown;
   description?: unknown;
   definition?: unknown;
+  mechanism?: unknown;
+  confidence?: unknown;
   subsystem?: unknown;
 }
 interface RawLink {
@@ -182,6 +186,22 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     const subsystem =
       (typeof raw.subsystem === "string" ? raw.subsystem : "").trim().slice(0, 40) || "Core";
     const slug = slugify(typeof raw.slug === "string" && raw.slug ? raw.slug : name);
+    // Born-with rich metadata (the feature_proposal seed) → library_objects.evaluation
+    // (no migration — the dormant JSONB slot). Features only, and only when the
+    // model gave us content, so we never clobber an existing eval with an empty.
+    let evaluation: Record<string, unknown> | undefined;
+    if (kind === "feature") {
+      const mechanism = (typeof raw.mechanism === "string" ? raw.mechanism : "").trim().slice(0, 400);
+      const confidence =
+        typeof raw.confidence === "number" && isFinite(raw.confidence)
+          ? Math.max(0, Math.min(1, raw.confidence))
+          : undefined;
+      if (mechanism || confidence !== undefined) {
+        evaluation = { kind: "feature_proposal" };
+        if (mechanism) evaluation.mechanism = mechanism;
+        if (confidence !== undefined) evaluation.confidence = confidence;
+      }
+    }
     const objectId = await upsertLibraryObject(db, {
       spaceId,
       userId,
@@ -192,6 +212,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       sourceEntityId: null,
       subsystem,
       cardFace: { name, body, from_updated_at: now },
+      evaluation,
     });
     if (!objectId) return;
     cards.push({ objectId, kind, name, body, subsystem });

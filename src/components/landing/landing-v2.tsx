@@ -26,7 +26,7 @@ import { stashPendingIntake } from "@/components/landing/pending-intake";
 import { AuthModal } from "@/components/auth/auth-modal";
 import { StarburstSVG } from "@/components/landing/starburst-svg";
 import { CardIcon } from "@/components/landing/card-icon";
-import { CardDecomposition } from "@/components/landing/card-decomposition";
+import { TEMPLATE_META } from "@/components/landing/template-meta";
 import { InterAxisLogo } from "@/components/brand/interaxis-logo";
 
 // 3D hero node — code-split off the initial bundle (three.js is heavy) and
@@ -310,120 +310,236 @@ export function LandingV2({
               className="flex items-start gap-6 overflow-x-auto overscroll-x-contain px-[calc(50%-130px)] pb-7 pt-12 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               style={{ scrollSnapType: "x mandatory" }}
             >
-              {cards.map((card, i) => (
-                <button
-                  key={card.id}
-                  ref={(el) => {
-                    cardEls.current[i] = el;
-                  }}
-                  type="button"
-                  onClick={() => pickTemplate(card.id)}
-                  className="group relative z-0 w-[260px] shrink-0 text-left hover:z-20 focus:outline-none"
-                  style={{ scrollSnapAlign: "center" }}
-                >
-                  {/* Inner card does the lifting (CSS hover) — rises up and
-                      grows out of the grey tray, fully visible. */}
-                  <div className="overflow-hidden rounded-2xl bg-white shadow-[0_2px_2px_rgba(11,18,40,0.04),0_16px_36px_-18px_rgba(11,18,40,0.22)] ring-1 ring-black/[0.04] transition-[transform,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:-translate-y-5 group-hover:scale-[1.045] group-hover:shadow-[0_2px_2px_rgba(11,18,40,0.05),0_38px_64px_-20px_rgba(11,18,40,0.45)]">
-                    {/* Slim accent banner with the graph glyph shrunk to a
-                        small icon in the top-left corner. */}
-                    <div
-                      className="relative h-[76px] w-full"
-                      style={{
-                        // Banner carries the real per-template color again;
-                        // everything else on the card stays ink.
-                        background: `linear-gradient(155deg, ${card.bannerAccent ?? card.accent}26 0%, ${card.bannerAccent ?? card.accent}0d 55%, #ffffff 100%)`,
-                      }}
-                    >
-                      <div
-                        aria-hidden
-                        className="absolute inset-0 opacity-60"
-                        style={{
-                          background:
-                            "radial-gradient(120% 80% at 80% 0%, rgba(255,255,255,0.7), rgba(255,255,255,0) 60%)",
-                        }}
-                      />
-                      {/* Meaning-first mark on a white rounded "icon tile" — a
-                          square app-icon sitting on the colored banner. Tilts on
-                          card hover (the akiboe tile lift). */}
-                      <div className="absolute left-3.5 top-3 flex items-center justify-center rounded-xl bg-white p-2 shadow-[0_2px_8px_-3px_rgba(11,18,40,0.18)] ring-1 ring-black/[0.06] transition-transform duration-300 ease-[cubic-bezier(0.2,0.7,0.2,1)] group-hover:-rotate-[4deg] group-hover:scale-105">
-                        <div className="h-9 w-9">
-                          <CardIcon
-                            templateId={card.id}
-                            accent={card.bannerAccent ?? card.accent}
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="px-4 pb-4 pt-3">
-                      <div
-                        className="text-[14.5px] font-semibold leading-tight"
-                        style={{ color: appleVibe.text.primary }}
-                      >
-                        {card.name}
-                      </div>
-                      <div
-                        className="mt-1.5 line-clamp-2 text-[11.5px] leading-snug"
-                        style={{ color: appleVibe.text.tertiary }}
-                      >
-                        {card.tagline}
-                      </div>
-
-                      {/* Hover reveal: what you can feed in + what it
-                          generates. Hidden until you hover the card, then
-                          it grows in place (items-start keeps siblings from
-                          stretching). */}
-                      <CardDecomposition
-                        templateId={card.id}
-                        accent={card.accent}
-                      />
-
-                      {/* Verified footer — roomier (wider card + bigger gap).
-                          The pill cross-fades to "Use template →" on hover. */}
-                      <div
-                        className="mt-4 flex items-center justify-between gap-3 border-t pt-3"
-                        style={{ borderColor: appleVibe.stroke.hairline }}
-                      >
-                        <div className="flex min-w-0 items-center gap-1.5">
-                          <InterAxisLogo
-                            className="h-[18px] w-[18px] shrink-0"
-                            size={36}
-                            style={{ borderRadius: 5 }}
-                          />
-                          <span
-                            className="whitespace-nowrap text-[11px] font-semibold tracking-[-0.01em]"
-                            style={{ color: appleVibe.text.secondary }}
-                          >
-                            akiboe team
-                          </span>
-                          <VerifiedSeal />
-                        </div>
-
-                        <div className="relative shrink-0">
-                          <span
-                            className="block rounded-full px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] transition-opacity duration-200 group-hover:opacity-0"
+              {cards.map((card, i) => {
+                const banner = card.bannerAccent ?? card.accent;
+                return (
+                  <button
+                    key={card.id}
+                    ref={(el) => {
+                      cardEls.current[i] = el;
+                    }}
+                    type="button"
+                    onClick={() => pickTemplate(card.id)}
+                    className="group relative z-0 w-[260px] shrink-0 text-left hover:z-20 focus:outline-none"
+                    style={{ scrollSnapAlign: "center" }}
+                  >
+                    {/* Lift wrapper — rises out of the grey tray on hover and
+                        provides the 3D perspective for the flip below. The
+                        lift stays separated from the rotate so the two
+                        transforms don't fight inside one matrix. */}
+                    <div className="transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:-translate-y-5 group-hover:scale-[1.045] [perspective:1200px]">
+                      {/* Flip inner — rotates 180° on hover, swapping front for
+                          back. Fixed height so the rail never reflows mid-flip;
+                          both faces fill the same box. */}
+                      <div className="relative h-[332px] transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] [transform-style:preserve-3d] group-hover:[transform:rotateY(180deg)]">
+                        {/* ── Front face — banner + name + tagline + footer ── */}
+                        <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_2px_2px_rgba(11,18,40,0.04),0_16px_36px_-18px_rgba(11,18,40,0.22)] ring-1 ring-black/[0.04] [backface-visibility:hidden] [-webkit-backface-visibility:hidden]">
+                          <div
+                            className="relative h-[76px] w-full shrink-0"
                             style={{
-                              // Colored category pill — tinted by the real
-                              // per-template color (not the monochrome ink).
-                              color: card.bannerAccent ?? card.accent,
-                              background: `${card.bannerAccent ?? card.accent}1a`,
-                              fontFamily: appleVibe.font.display,
+                              background: `linear-gradient(155deg, ${banner}26 0%, ${banner}0d 55%, #ffffff 100%)`,
                             }}
                           >
-                            {card.category}
-                          </span>
-                          <span
-                            className="absolute right-0 top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-semibold tracking-[0.01em] opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-                            style={{ color: card.accent }}
-                          >
-                            Use template →
-                          </span>
+                            <div
+                              aria-hidden
+                              className="absolute inset-0 opacity-60"
+                              style={{
+                                background:
+                                  "radial-gradient(120% 80% at 80% 0%, rgba(255,255,255,0.7), rgba(255,255,255,0) 60%)",
+                              }}
+                            />
+                            <div className="absolute left-3.5 top-3 flex items-center justify-center rounded-xl bg-white p-2 shadow-[0_2px_8px_-3px_rgba(11,18,40,0.18)] ring-1 ring-black/[0.06] transition-transform duration-300 ease-[cubic-bezier(0.2,0.7,0.2,1)] group-hover:-rotate-[4deg] group-hover:scale-105">
+                              <div className="h-9 w-9">
+                                <CardIcon
+                                  templateId={card.id}
+                                  accent={banner}
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-1 flex-col px-4 pb-4 pt-3">
+                            <div
+                              className="text-[14.5px] font-semibold leading-tight"
+                              style={{ color: appleVibe.text.primary }}
+                            >
+                              {card.name}
+                            </div>
+                            <div
+                              className="mt-1.5 line-clamp-2 text-[11.5px] leading-snug"
+                              style={{ color: appleVibe.text.tertiary }}
+                            >
+                              {card.tagline}
+                            </div>
+
+                            {/* Verified footer — pinned to the bottom of the
+                                fixed-height face. The category pill stays put
+                                now: the front-to-back cross-fade is replaced
+                                by the flip itself. */}
+                            <div
+                              className="mt-auto flex items-center justify-between gap-3 border-t pt-3"
+                              style={{ borderColor: appleVibe.stroke.hairline }}
+                            >
+                              <div className="flex min-w-0 items-center gap-1.5">
+                                <InterAxisLogo
+                                  className="h-[18px] w-[18px] shrink-0"
+                                  size={36}
+                                  style={{ borderRadius: 5 }}
+                                />
+                                <span
+                                  className="whitespace-nowrap text-[11px] font-semibold tracking-[-0.01em]"
+                                  style={{ color: appleVibe.text.secondary }}
+                                >
+                                  akiboe team
+                                </span>
+                                <VerifiedSeal />
+                              </div>
+
+                              <span
+                                className="block shrink-0 rounded-full px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.08em]"
+                                style={{
+                                  color: banner,
+                                  background: `${banner}1a`,
+                                  fontFamily: appleVibe.font.display,
+                                }}
+                              >
+                                {card.category}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* ── Back face — what the template eats and produces ── */}
+                        <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_2px_2px_rgba(11,18,40,0.05),0_38px_64px_-20px_rgba(11,18,40,0.45)] ring-1 ring-black/[0.04] [backface-visibility:hidden] [-webkit-backface-visibility:hidden] [transform:rotateY(180deg)]">
+                          {/* Thin accent strip — keeps the per-template color
+                              cue on the back so flipped cards still feel like
+                              the same template, not a generic panel. */}
+                          <div
+                            className="h-[6px] w-full shrink-0"
+                            style={{
+                              background: `linear-gradient(90deg, ${banner} 0%, ${banner}80 100%)`,
+                            }}
+                          />
+
+                          <div className="flex flex-1 flex-col px-4 pb-4 pt-3">
+                            {/* Tiny header so the user knows which template
+                                they're looking at — small name + category. */}
+                            <div className="flex items-center justify-between gap-2">
+                              <div
+                                className="line-clamp-1 text-[12.5px] font-semibold tracking-[-0.01em]"
+                                style={{ color: appleVibe.text.primary }}
+                              >
+                                {card.name}
+                              </div>
+                              <span
+                                className="shrink-0 rounded-full px-1.5 py-[2px] text-[8.5px] font-semibold uppercase tracking-[0.08em]"
+                                style={{
+                                  color: banner,
+                                  background: `${banner}1a`,
+                                  fontFamily: appleVibe.font.display,
+                                }}
+                              >
+                                {card.category}
+                              </span>
+                            </div>
+
+                            {(() => {
+                              const meta = TEMPLATE_META[card.id];
+                              if (!meta) return null;
+                              return (
+                                <>
+                                  {/* Feed in — small caps section header + tight
+                                      chips. Densified vs the original hover-
+                                      reveal so the longest template (5 in /
+                                      4 out) still fits the flip box. */}
+                                  <div
+                                    className="mt-2.5 text-[9.5px] font-semibold uppercase tracking-[0.08em]"
+                                    style={{ color: appleVibe.text.tertiary }}
+                                  >
+                                    Feed in
+                                  </div>
+                                  <div className="mt-1.5 flex flex-wrap gap-1">
+                                    {meta.inputs.map((it) => {
+                                      const Icon = it.icon;
+                                      return (
+                                        <span
+                                          key={it.label}
+                                          className="inline-flex items-center gap-1 rounded-full bg-gradient-to-b from-white/90 to-white/55 px-2 py-[3px] text-[10.5px] font-medium leading-none text-[#0B0B0C] ring-1 ring-black/[0.06] shadow-[0_2px_8px_-4px_rgba(11,18,40,0.18),inset_0_1px_0_rgba(255,255,255,0.7)] backdrop-blur-md"
+                                        >
+                                          <Icon
+                                            className="h-2.5 w-2.5 shrink-0"
+                                            style={{ color: card.accent }}
+                                            strokeWidth={2.2}
+                                          />
+                                          {it.label}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* Generates — 2-column grid so 3–4 outputs
+                                      stack as 2 rows instead of 4, keeping the
+                                      whole back face inside the 332px box. */}
+                                  <div
+                                    className="mt-2.5 text-[9.5px] font-semibold uppercase tracking-[0.08em]"
+                                    style={{ color: appleVibe.text.tertiary }}
+                                  >
+                                    Generates
+                                  </div>
+                                  <div className="mt-1.5 grid grid-cols-2 gap-x-1 gap-y-1 rounded-xl bg-white/45 p-1.5 ring-1 ring-black/[0.04] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] backdrop-blur-sm">
+                                    {meta.outputs.map((it) => {
+                                      const Icon = it.icon;
+                                      return (
+                                        <div
+                                          key={it.label}
+                                          className="flex min-w-0 items-center gap-1 rounded-md px-1 py-[5px] text-[10px] font-medium leading-tight text-[#1A1F2B]"
+                                        >
+                                          <Icon
+                                            className="h-3 w-3 shrink-0"
+                                            style={{ color: card.accent }}
+                                            strokeWidth={2.2}
+                                          />
+                                          <span className="truncate">{it.label}</span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </>
+                              );
+                            })()}
+
+                            <div
+                              className="mt-auto flex items-center justify-between gap-3 border-t pt-2.5"
+                              style={{ borderColor: appleVibe.stroke.hairline }}
+                            >
+                              <div className="flex min-w-0 items-center gap-1.5">
+                                <InterAxisLogo
+                                  className="h-[18px] w-[18px] shrink-0"
+                                  size={36}
+                                  style={{ borderRadius: 5 }}
+                                />
+                                <span
+                                  className="whitespace-nowrap text-[11px] font-semibold tracking-[-0.01em]"
+                                  style={{ color: appleVibe.text.secondary }}
+                                >
+                                  akiboe team
+                                </span>
+                                <VerifiedSeal />
+                              </div>
+                              <span
+                                className="whitespace-nowrap text-[10.5px] font-semibold tracking-[0.01em]"
+                                style={{ color: banner }}
+                              >
+                                Use template →
+                              </span>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

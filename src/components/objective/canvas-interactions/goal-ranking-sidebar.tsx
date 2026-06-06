@@ -61,6 +61,9 @@ interface MicroQ {
   q: string;
   uncertainty: number;
   resolved_at?: string;
+  /** Cards/glossary/ai that TOUCH (not necessarily resolve) this micro — drives
+   *  the amber "being addressed" dot between open (empty) and resolved (green). */
+  addressed_by?: { kind: string; ref: string; at: string }[];
   candidate_readings?: string[];
 }
 interface SalienceAnn {
@@ -515,6 +518,11 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
   if (!open) return null;
 
   const goal = data?.goal;
+  // Heartbeat: prefer the FAST clarity fetch (GET, no LLM) for the headline so
+  // the title shows the moment the fast sharpening pass lands — before the
+  // slower board-ranking call returns.
+  const goalTitle = clarity?.title || goal?.title || "";
+  const goalDesc = clarity?.sharpenedPrompt || goal?.description || "";
   const ranked = data?.ranked ?? [];
   // Group by direction (header once per group) instead of repeating the label
   // on every row; each group sorted by score desc.
@@ -686,10 +694,13 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
         <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: appleVibe.text.faint, marginBottom: 4 }}>
           Ultimate goal
         </div>
-        <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-0.01em", color: appleVibe.text.primary }}>
-          {goal?.title ?? (loading ? "…" : "Your objective")}
+        <div
+          className={goalTitle ? undefined : "animate-pulse"}
+          style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-0.01em", color: goalTitle ? appleVibe.text.primary : appleVibe.text.faint }}
+        >
+          {goalTitle || "Sharpening your objective…"}
         </div>
-        {goal?.description && (
+        {goalDesc && (
           <>
             <div
               style={{
@@ -703,9 +714,9 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
                 overflow: "hidden",
               }}
             >
-              {goal.description}
+              {goalDesc}
             </div>
-            {goal.description.length > 140 && (
+            {goalDesc.length > 140 && (
               <button
                 type="button"
                 onClick={() => setDescOpen((o) => !o)}
@@ -857,18 +868,37 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
                               style={{ display: "inline-flex", gap: 2, flexShrink: 0 }}
                               aria-label={`${s.answered} of ${s.total} sub-questions answered`}
                             >
-                              {a.micro_questions!.map((m, j) => (
-                                <span
-                                  key={m.id ?? j}
-                                  style={{
-                                    width: 5,
-                                    height: 5,
-                                    borderRadius: 999,
-                                    background: m.resolved_at ? "#059669" : appleVibe.surface.chip,
-                                    border: m.resolved_at ? "none" : `1px solid ${appleVibe.text.faint}`,
-                                  }}
-                                />
-                              ))}
+                              {a.micro_questions!.map((m, j) => {
+                                const resolved = !!m.resolved_at;
+                                const addressing =
+                                  !resolved && (m.addressed_by?.length ?? 0) > 0;
+                                return (
+                                  <span
+                                    key={m.id ?? j}
+                                    title={
+                                      resolved
+                                        ? "resolved"
+                                        : addressing
+                                          ? "being addressed"
+                                          : "open"
+                                    }
+                                    style={{
+                                      width: 5,
+                                      height: 5,
+                                      borderRadius: 999,
+                                      background: resolved
+                                        ? "#059669"
+                                        : addressing
+                                          ? "#D97706"
+                                          : appleVibe.surface.chip,
+                                      border:
+                                        resolved || addressing
+                                          ? "none"
+                                          : `1px solid ${appleVibe.text.faint}`,
+                                    }}
+                                  />
+                                );
+                              })}
                             </span>
                           )}
                           {showDots && (

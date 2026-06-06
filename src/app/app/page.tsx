@@ -24,6 +24,19 @@ export default async function StudioPage() {
   const db = supabase as any;
 
   // ── First-sign-in onboarding gate (+ display name) ──
+  // CRITICAL: only gate to /app/welcome on a CONFIRMED incomplete profile
+  // row (row exists AND onboarding_completed_at IS null). A missing row
+  // (brand-new user) or a failed/empty read must NOT redirect.
+  //
+  // Why: /app/welcome does the inverse — it redirects back to /app once
+  // onboarding is complete. If /app also bounced on `!profile` (i.e. on a
+  // read FAILURE, not just a real "incomplete" signal), then any flaky read
+  // here — and the `spaces` query that feeds this page routinely runs
+  // hundreds of ms and times out under load — flips /app → /app/welcome,
+  // welcome reads fine → /app, /app fails again → welcome … an infinite
+  // redirect bounce that shows up as "spam loading" with no screen.
+  // Gating only on a positively-confirmed null makes the two redirects
+  // mutually exclusive on the same data, so the loop is impossible.
   let displayName = user?.email?.split("@")[0] ?? "there";
   if (user) {
     const { data: profile } = await db
@@ -31,10 +44,10 @@ export default async function StudioPage() {
       .select("onboarding_completed_at, display_name")
       .eq("user_id", user.id)
       .maybeSingle();
-    if (!profile || profile.onboarding_completed_at === null) {
+    if (profile && profile.onboarding_completed_at === null) {
       redirect("/app/welcome");
     }
-    if (profile.display_name) displayName = profile.display_name as string;
+    if (profile?.display_name) displayName = profile.display_name as string;
   }
 
   // ── Minimal home (the only surface) ──

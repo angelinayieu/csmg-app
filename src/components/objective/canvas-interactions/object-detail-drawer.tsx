@@ -34,6 +34,8 @@ interface LibObjectFull {
   title: string;
   summary: string | null;
   card_face?: { name?: string; body?: string } | null;
+  /** feature_proposal seed (decompose-cards): how-it-works + confidence. */
+  evaluation?: { kind?: string; mechanism?: string; confidence?: number } | null;
   content_snapshot?: unknown;
   selection_status?: string | null;
   on_whiteboard?: boolean;
@@ -448,6 +450,14 @@ function ObjectDetailDrawer({
   const links = data?.links ?? [];
   const name = obj?.card_face?.name?.trim() || obj?.title || "Object";
   const body = obj?.card_face?.body?.trim() || obj?.summary || "";
+  // feature_proposal rich metadata (Step 4) — surfaced in the expanded sidebar,
+  // never on the board face.
+  const mechanism =
+    typeof obj?.evaluation?.mechanism === "string" ? obj.evaluation.mechanism.trim() : "";
+  const confidencePct =
+    typeof obj?.evaluation?.confidence === "number"
+      ? Math.round(obj.evaluation.confidence * 100)
+      : null;
   // Which of the user's defined terms shaped this card (receipt on the output).
   const tasteHits = obj ? tasteHitsFor(`${name} ${body}`, glossary) : [];
   // This object's OWN concept as a glossary term (by slug) — the target of the
@@ -538,6 +548,20 @@ function ObjectDetailDrawer({
               )}
 
               {body && <p style={{ ...bodyText, marginTop: 10 }}>{body}</p>}
+
+              {/* feature_proposal — how it works + confidence (Step 4). Lives in
+                  the expanded sidebar ONLY; the board face stays title-first. */}
+              {(mechanism || confidencePct !== null) && (
+                <section style={{ marginTop: 14 }}>
+                  <div style={sectionLabel}>How it works</div>
+                  {mechanism && <p style={{ ...bodyText, marginTop: 6 }}>{mechanism}</p>}
+                  {confidencePct !== null && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: appleVibe.text.faint }}>
+                      Confidence {confidencePct}%
+                    </div>
+                  )}
+                </section>
+              )}
 
               {/* Active taste capture — pin what this concept means to YOU. The
                   missing "write" side of define-once: one action makes the term

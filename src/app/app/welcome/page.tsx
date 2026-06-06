@@ -31,9 +31,10 @@ export default async function SynergyWelcomePage() {
     .eq("user_id", user.id)
     .maybeSingle();
 
-  // Already onboarded — skip the welcome
+  // Already onboarded — skip the welcome. The old Synergy surface was
+  // retired (single surface is now /app); never send users to /app/synergy.
   if (profile?.onboarding_completed_at) {
-    redirect("/app/synergy");
+    redirect("/app");
   }
 
   // Suggest a default display_name from the email's local-part so
