@@ -17,7 +17,7 @@
 //     resumes the exact same intake,
 //   • "start" just opens signup.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { stashPendingIntake } from "@/components/landing/pending-intake";
@@ -59,15 +59,42 @@ export interface LandingCard {
 
 const INK = "#0B0B0C"; // cold near-black — landing is monochrome, do NOT warm
 
-// Tiny "it also does this" whispers under the hero CTA — frosted chips in the
-// same glass language as the nav + data-source tiles, each with a soft accent
-// spark (reusing the start-cta teal / product sky / brand terracotta). Quiet
-// enough to sit in the monochrome hero, cute enough to read as an add-on.
+// Capability chips — grouped on a glass "tray" in the bring-data section, each
+// with a soft accent spark (start-cta teal / product sky / brand terracotta).
 const HERO_FEATURES: { label: string; color: string; Icon: LucideIcon }[] = [
   { label: "voice brainstorm", color: "#13A2B0", Icon: Mic },
   { label: "prototype on canvas", color: "#0EA5E9", Icon: AppWindow },
   { label: "team & friends", color: "#C2593B", Icon: Users },
 ];
+
+// The headline's first noun cycles through the messy raw inputs you start with
+// — "from <chaos> to value asap." Kept short + punchy; the rotator sizes to the
+// active word (fluid) so the centred line just re-centres as it changes.
+const HERO_WORDS = [
+  "idea",
+  "a hunch",
+  "messy files",
+  "100 tabs",
+  "a voice note",
+  "tangled thoughts",
+];
+
+/** Fluid word-rotator — swaps + animates the active word in (mount keyframe),
+ *  sizing to that word so the headline breathes instead of reserving a slot. */
+function HeroRotator({ words }: { words: string[] }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI((x) => (x + 1) % words.length), 2400);
+    return () => clearInterval(t);
+  }, [words.length]);
+  return (
+    <span className="relative inline-block align-baseline" style={{ color: INK }} aria-live="polite">
+      <span key={words[i]} className="inline-block" style={{ animation: "heroword 0.55s cubic-bezier(0.22,1,0.36,1)" }}>
+        {words[i]}
+      </span>
+    </span>
+  );
+}
 
 // ── Floating-card anchors ── positions for the 8-card swarm, expressed as
 // percentages of a CENTRED max-width band (not the raw viewport) so the cards
@@ -152,12 +179,34 @@ const SOURCES: Source[] = [
 function ConnectSources() {
   const mid = (SOURCES.length - 1) / 2;
   return (
-    <section className="relative z-10 px-6 pb-20 pt-0">
-      {/* Connector dropping in from the swarm/hero above. */}
-      <div className="mx-auto h-7 w-px" style={{ background: "linear-gradient(to bottom, rgba(15,23,42,0) 0%, rgba(15,23,42,0.18) 100%)" }} />
-      <div className="mx-auto -mt-px mb-5 h-1.5 w-1.5 rounded-full" style={{ background: "rgba(15,23,42,0.45)" }} />
+    <section className="relative z-10 px-6 pb-20 pt-2">
+      {/* Connector dropping in from the hero above, into the capability group. */}
+      <div className="mx-auto h-6 w-px" style={{ background: "linear-gradient(to bottom, rgba(15,23,42,0) 0%, rgba(15,23,42,0.16) 100%)" }} />
 
-      {/* Arc of source tiles, sitting on faint concentric ripples. */}
+      {/* Capability tray — a frosted glass pill GROUPING the three things
+          akiboe does, so the dainty connector + ripples below read as flowing
+          out of this group and down into the data sources. */}
+      <div className="mx-auto w-fit max-w-[calc(100%-1rem)] rounded-full border border-white/70 bg-white/45 p-1.5 backdrop-blur-md shadow-[0_24px_46px_-22px_rgba(11,18,40,0.3),inset_0_1px_0_rgba(255,255,255,0.85)]">
+        <div className="flex flex-wrap items-center justify-center gap-1.5">
+          {HERO_FEATURES.map((f) => (
+            <span
+              key={f.label}
+              className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[11.5px] font-medium ring-1 ring-black/[0.05] shadow-[0_2px_6px_-2px_rgba(11,18,40,0.18)]"
+              style={{ color: appleVibe.text.secondary }}
+            >
+              <f.Icon className="h-3.5 w-3.5 shrink-0" style={{ color: f.color }} strokeWidth={2} />
+              {f.label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Dainty connector from the group down into the source arc. */}
+      <div className="mx-auto h-5 w-px" style={{ background: "rgba(15,23,42,0.16)" }} />
+      <div className="mx-auto -mt-px mb-1 h-1.5 w-1.5 rounded-full" style={{ background: "rgba(15,23,42,0.4)" }} />
+
+      {/* Arc of source tiles, sitting on faint concentric ripples that fan out
+          from just under the capability group. */}
       <div className="relative mx-auto flex h-[150px] max-w-[680px] items-end justify-center">
         {/* Ripple arcs — concentric ellipses whose crests peek behind the fan. */}
         <svg
@@ -445,6 +494,11 @@ export function LandingV2({
               transform: scale(1.05);
             }
             .start-cta:active { transform: scale(0.97); }
+            /* Headline word swap — fades + lifts each new word in. */
+            @keyframes heroword {
+              from { opacity: 0; transform: translateY(0.32em); }
+              to { opacity: 1; transform: translateY(0); }
+            }
             /* Depth card: faded + behind at rest, pops forward on hover. */
             .swarm-depth { opacity: 0.58; transition: opacity 0.3s ease; }
             .swarm-depth:hover { opacity: 1; z-index: 40 !important; }
@@ -515,7 +569,8 @@ export function LandingV2({
             className="text-center text-[clamp(34px,4.8vw,54px)] font-extrabold leading-[1.02]"
             style={{ fontFamily: appleVibe.font.display, letterSpacing: "-0.025em" }}
           >
-            <span style={{ color: appleVibe.text.faint }}>From</span> <span style={{ color: INK }}>idea</span>
+            <span style={{ color: appleVibe.text.faint }}>From</span>{" "}
+            <HeroRotator words={HERO_WORDS} />
           </h1>
 
           {/* Negative margin pulls the headings toward the mark (4:3 box slack). */}
@@ -559,21 +614,6 @@ export function LandingV2({
               <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>tabs</span>{" "}
               <span className="font-normal">and</span>{" "}
               <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>google drive</span>
-            </div>
-
-            {/* Capability whisper — a row of frosted chips surfacing the other
-                things akiboe does, cutely + on-theme. */}
-            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-              {HERO_FEATURES.map((f) => (
-                <span
-                  key={f.label}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.06] bg-white/70 px-3 py-1.5 text-[11.5px] font-medium backdrop-blur-md shadow-[0_6px_18px_-10px_rgba(11,18,40,0.25),inset_0_1px_0_rgba(255,255,255,0.85)]"
-                  style={{ color: appleVibe.text.secondary }}
-                >
-                  <f.Icon className="h-3.5 w-3.5 shrink-0" style={{ color: f.color }} strokeWidth={2} />
-                  {f.label}
-                </span>
-              ))}
             </div>
           </>
         ) : (
