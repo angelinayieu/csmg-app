@@ -35,6 +35,7 @@ import {
 import { Heart } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { useAutoFitHeight } from "@/components/objective/canvas-interactions/use-auto-fit-height";
+import { TasteReceipt } from "@/components/objective/canvas-interactions/taste-receipt";
 
 export type OcCardKind = "feature" | "variable";
 
@@ -306,6 +307,16 @@ function OcCardRenderer({ shape }: { shape: OcCardShape }) {
           </div>
         )}
 
+        {/* Taste receipt — which user-shaped glossary terms the AI honored
+            when writing this card. Self-renders only when there are hits +
+            spaceId resolves from the URL. Click stops propagation so the
+            chip-clicks don't open the card drawer. */}
+        {body && (
+          <div onPointerDown={stopEventPropagation}>
+            <OcCardTasteReceipt text={`${name} ${body}`} />
+          </div>
+        )}
+
         {/* Footer — a quiet "Open" affordance signalling the card opens. The
             whole card opens on a single click (ShapeUtil.onClick); a
             modifier-click (shift / ctrl) stays selection for Connect /
@@ -361,4 +372,17 @@ function OcCardRenderer({ shape }: { shape: OcCardShape }) {
       </div>
     </HTMLContainer>
   );
+}
+
+/** Thin wrapper that resolves spaceId from the URL and renders the
+ *  taste receipt only when the page is a board page. Keeps the shape
+ *  itself decoupled from routing (it's still pure-presentational from
+ *  tldraw's perspective). */
+function OcCardTasteReceipt({ text }: { text: string }) {
+  const spaceId =
+    typeof window !== "undefined"
+      ? window.location.pathname.match(/\/objective\/([^/?#]+)/)?.[1] ?? null
+      : null;
+  if (!spaceId) return null;
+  return <TasteReceipt text={text} spaceId={spaceId} variant="strip" />;
 }

@@ -64,7 +64,20 @@ import {
   folderSeedKey,
   type FolderDragCard,
 } from "./folder-drag";
-import type { GlossaryTerm } from "@/lib/objective-canvas/generate-glossary";
+import type { GlossaryTerm, GlossaryKind } from "@/lib/objective-canvas/generate-glossary";
+import { GLOSSARY_KINDS } from "@/lib/objective-canvas/generate-glossary";
+
+// Display labels for the kind axis — mirrors taste-profile-view's mapping
+// so the rail reads with the same vocabulary as the synthesized profile.
+const GLOSSARY_KIND_LABEL: Record<GlossaryKind, string> = {
+  entity: "Entities",
+  operation: "Operations",
+  quality: "Qualities",
+  pattern: "Patterns",
+  role: "Roles",
+  constraint: "Constraints",
+  outcome: "Outcomes",
+};
 import { slugifyConcept } from "@/lib/objective-canvas/normalize-annotations";
 import { OPEN_CARD_DETAIL_EVENT } from "@/components/objective/canvas-interactions/object-detail-drawer";
 import { openNotebook } from "@/components/objective/board-bus";
@@ -740,6 +753,12 @@ function GlossaryView({
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [flash, setFlash] = useState<string | null>(null);
+  // Grouping axis — "layer" is the legacy domain category
+  // (pain/features/process/...); "kind" is the grammatical category
+  // (entity/operation/quality/...) added with the taxonomy work.
+  // Persisted in this view's local state; the toggle sits inline above
+  // the term list.
+  const [axis, setAxis] = useState<"layer" | "kind">("layer");
 
   const load = useCallback(
     async (regen = false) => {
@@ -804,20 +823,49 @@ function GlossaryView({
         )
       : terms;
     const groups = new Map<string, GlossaryTerm[]>();
+    // Keying depends on the axis. For "kind", un-classified rows
+    // collect into "other" rendered last — same discipline as the
+    // TasteProfile vocabulary block.
+    const keyFor = (t: GlossaryTerm): string => {
+      if (axis === "kind") {
+        const k = t.kind;
+        return k && k.length > 0 ? k : "other";
+      }
+      return t.layer_tag?.trim() || "general";
+    };
     for (const t of filtered) {
-      const key = t.layer_tag?.trim() || "general";
+      const key = keyFor(t);
       const arr = groups.get(key);
       if (arr) arr.push(t);
       else groups.set(key, [t]);
     }
+    // Ordering rules:
+    //   layer axis → typeRank (preserves the existing UX)
+    //   kind axis → canonical GLOSSARY_KINDS order, then "other"
+    const order = (key: string): number => {
+      if (axis === "kind") {
+        if (key === "other") return 999;
+        const i = GLOSSARY_KINDS.indexOf(key as GlossaryKind);
+        return i === -1 ? 998 : i;
+      }
+      return typeRank(key);
+    };
+    const labelFor = (key: string): string => {
+      if (axis === "kind") {
+        if (key === "other") return "Other";
+        const k = key as GlossaryKind;
+        return GLOSSARY_KIND_LABEL[k] ?? titleCase(key);
+      }
+      return key === "general" ? "General" : titleCase(key);
+    };
     return Array.from(groups.entries())
-      .sort((a, b) => typeRank(a[0]) - typeRank(b[0]))
+      .sort((a, b) => order(a[0]) - order(b[0]))
       .map(([key, items]) => ({
         key,
-        label: key === "general" ? "General" : titleCase(key),
+        label: labelFor(key),
         items: items.sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0)),
       }));
-  }, [terms, query]);
+  }, [terms, query, axis]);
 
   function onTermClick(t: GlossaryTerm) {
     if (expanded?.term.term === t.term) {
@@ -868,6 +916,28 @@ function GlossaryView({
         </div>
         <button type="button" title="Regenerate glossary" onClick={() => load(true)} disabled={loading} style={squareBtn(loading)}>
           <RefreshCw className={loading ? "animate-spin" : undefined} style={{ width: 13, height: 13 }} strokeWidth={2.2} />
+        </button>
+      </div>
+
+      {/* Axis toggle — group terms by layer (domain) or kind (grammar).
+          Keeps the rail glossary in sync with how the agent reads it. */}
+      <div style={axisRow}>
+        <span style={axisLabel}>Group by</span>
+        <button
+          type="button"
+          onClick={() => setAxis("layer")}
+          style={axis === "layer" ? axisBtnActive : axisBtn}
+          title="Group by domain layer (pain / features / outcomes / …)"
+        >
+          Layer
+        </button>
+        <button
+          type="button"
+          onClick={() => setAxis("kind")}
+          style={axis === "kind" ? axisBtnActive : axisBtn}
+          title="Group by grammatical category (entity / operation / quality / …)"
+        >
+          Kind
         </button>
       </div>
 
@@ -2157,6 +2227,36 @@ const squareBtn = (loading: boolean): CSSProperties => ({
   color: appleVibe.text.secondary,
 });
 const flashStyle: CSSProperties = { margin: "0 12px 6px", fontSize: 11, fontWeight: 600, color: appleVibe.text.tertiary };
+const axisRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "0 12px 8px",
+};
+const axisLabel: CSSProperties = {
+  fontSize: 10,
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+  fontWeight: 600,
+  color: appleVibe.text.faint,
+};
+const axisBtn: CSSProperties = {
+  padding: "2px 8px",
+  fontSize: 10.5,
+  fontWeight: 600,
+  borderRadius: 999,
+  border: `1px solid ${appleVibe.stroke.soft}`,
+  background: "transparent",
+  color: appleVibe.text.tertiary,
+  cursor: "pointer",
+  fontFamily: appleVibe.font.stack,
+};
+const axisBtnActive: CSSProperties = {
+  ...axisBtn,
+  background: appleVibe.accent.primary,
+  color: appleVibe.text.onAccent,
+  borderColor: appleVibe.accent.primary,
+};
 const shelfLabel: CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: appleVibe.text.secondary };
 const shelfCount: CSSProperties = { fontSize: 10.5, fontWeight: 600, color: appleVibe.text.faint, marginLeft: 4 };
 const termRow: CSSProperties = {

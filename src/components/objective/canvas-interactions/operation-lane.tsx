@@ -18,7 +18,7 @@
 //   for passed, amber for repaired, red for failed, blue for running, faint
 //   gray for not_started.
 
-import { useMemo, useState } from "react";
+import { forwardRef, useMemo, useState } from "react";
 import type { Editor, TLShapeId } from "tldraw";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import {
@@ -32,6 +32,34 @@ import {
 } from "@/lib/objective-canvas/specforge/types";
 import type { EngineLaneStatus, SpecForgeProgress } from "./specforge-runner";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+
+/** Fired when a lane row is clicked: opens the side panel rendered against
+ *  the engine's polished bullets (no shape required). Listened to by
+ *  SpecForgeDetailPanel. The per-engine cards no longer deploy as tldraw
+ *  shapes — this event is now the primary way the user inspects an engine. */
+export const OPEN_SPECFORGE_ENGINE_DETAIL_EVENT =
+  "objective-board:open-specforge-engine-detail";
+
+export interface OpenSpecForgeEngineDetail {
+  engine: SpecForgeEngineId;
+  result: unknown;
+}
+
+/** Lane row click → fire engine-detail event so the side panel can render
+ *  the polished bullets for this engine. Soft-fails when the engine
+ *  hasn't returned a result yet (running/not_started/failed). */
+function openEngineDetail(engine: SpecForgeEngineId, status: EngineLaneStatus | undefined) {
+  if (!status || status.result === undefined) return;
+  try {
+    window.dispatchEvent(
+      new CustomEvent<OpenSpecForgeEngineDetail>(OPEN_SPECFORGE_ENGINE_DETAIL_EVENT, {
+        detail: { engine, result: status.result },
+      }),
+    );
+  } catch {
+    /* defensive: never break the lane on a dispatch error */
+  }
+}
 
 // ── Status color ──
 // Single source of truth so the dot + the row tint always agree.
@@ -102,7 +130,8 @@ interface OperationLaneProps {
   editor: Editor;
 }
 
-export function OperationLane({ progress, editor }: OperationLaneProps) {
+export const OperationLane = forwardRef<HTMLDivElement, OperationLaneProps>(
+  function OperationLane({ progress, editor }, containerRef) {
   const [collapsed, setCollapsed] = useState(false);
 
   // Group engines by act so the lane reads top-to-bottom as the spec's
@@ -161,7 +190,7 @@ export function OperationLane({ progress, editor }: OperationLaneProps) {
 
   if (collapsed) {
     return (
-      <div style={containerStyle}>
+      <div ref={containerRef} style={containerStyle}>
         <button
           type="button"
           onClick={() => setCollapsed(false)}
@@ -191,14 +220,15 @@ export function OperationLane({ progress, editor }: OperationLaneProps) {
           }}
         >
           {SPECFORGE_CHAIN.map((e) => {
-            const status = progress.engineStatuses[e]?.status ?? "not_started";
-            const shapeId = progress.engineStatuses[e]?.shapeId;
+            const laneStatus = progress.engineStatuses[e];
+            const status = laneStatus?.status ?? "not_started";
+            const ready = laneStatus?.result !== undefined;
             return (
               <button
                 type="button"
                 key={e}
-                onClick={() => focusShape(editor, shapeId)}
-                disabled={!shapeId}
+                onClick={() => openEngineDetail(e, laneStatus)}
+                disabled={!ready}
                 title={ENGINE_LABEL[e]}
                 style={{
                   width: 14,
@@ -206,8 +236,8 @@ export function OperationLane({ progress, editor }: OperationLaneProps) {
                   borderRadius: 999,
                   background: statusColor(status),
                   border: "none",
-                  cursor: shapeId ? "pointer" : "default",
-                  opacity: shapeId ? 1 : 0.7,
+                  cursor: ready ? "pointer" : "default",
+                  opacity: ready ? 1 : 0.7,
                   animation:
                     status === "running" ? "pulse 1.4s ease-in-out infinite" : undefined,
                   padding: 0,
@@ -227,7 +257,7 @@ export function OperationLane({ progress, editor }: OperationLaneProps) {
   }
 
   return (
-    <div style={containerStyle}>
+    <div ref={containerRef} style={containerStyle}>
       {/* Header */}
       <div
         style={{
@@ -308,7 +338,8 @@ export function OperationLane({ progress, editor }: OperationLaneProps) {
       `}</style>
     </div>
   );
-}
+  },
+);
 
 // ── Phase block — one of the 5 acts ──
 function PhaseBlock({
@@ -359,13 +390,16 @@ function EngineRow({
   editor: Editor;
 }) {
   const s = status?.status ?? "not_started";
-  const shapeId = status?.shapeId;
-  const clickable = Boolean(shapeId);
+  // Per-engine reasoning cards no longer materialize on the board — the
+  // row is clickable as soon as the engine has produced a result, and
+  // the click opens the side panel (engine-detail mode) instead of
+  // centering on a shape.
+  const clickable = status?.result !== undefined;
   const dotColor = statusColor(s);
   return (
     <button
       type="button"
-      onClick={() => focusShape(editor, shapeId)}
+      onClick={() => openEngineDetail(engine, status)}
       disabled={!clickable}
       style={{
         display: "flex",

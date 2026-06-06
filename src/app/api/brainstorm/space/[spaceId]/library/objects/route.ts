@@ -181,7 +181,13 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
       : objects.filter(
           (o) =>
             o.object_type !== "context_anchor" &&
-            o.object_type !== "context_concept",
+            o.object_type !== "context_concept" &&
+            // taste_profile has its own rail surface; never appears as
+            // a stray card in the generic Objects view.
+            o.object_type !== "taste_profile" &&
+            // image_source rows have the Sources rail surface;
+            // they're already represented on the board as image cards.
+            o.object_type !== "image_source",
         );
   return NextResponse.json({ objects: visible, deferred, layers, rooms });
 }

@@ -1,0 +1,314 @@
+// ── /api/objective/[spaceId]/taste-profile ──────────────────────────
+//
+// The first-class taste profile for an objective. One library_objects
+// row per space (object_type='taste_profile'), content_snapshot
+// carrying the structured profile. See lib/taste-profile.ts.
+//
+//   GET    → persisted snapshot (or null with thin_signal flag)
+//   POST   → regenerate from substrate (preserves pinned sections)
+//   PATCH  → edit a single section + auto-pin OR toggle pinned flag
+//
+// All routes are owner-scoped + soft-fail.
+
+import { NextResponse, type NextRequest } from "next/server";
+import { safeAuth, safeJsonParse } from "@/lib/api-helpers";
+import {
+  getTasteProfile,
+  saveTasteProfile,
+  normalizeSnapshot,
+  synthesizeTasteSections,
+  bucketVocabulary,
+  readSources,
+  type TasteProfileSnapshot,
+  type TasteSection,
+  type TasteVoice,
+} from "@/lib/objective-canvas/taste-profile";
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
+interface Ctx {
+  params: Promise<{ spaceId: string }>;
+}
+
+async function loadSpace(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  spaceId: string,
+  userId: string,
+) {
+  const { data: space } = await db
+    .from("spaces")
+    .select("id, user_id, description, input_text, synthesis_data")
+    .eq("id", spaceId)
+    .maybeSingle();
+  if (!space || space.user_id !== userId) return null;
+  return space;
+}
+
+// ── GET ─────────────────────────────────────────────────────────────
+
+export async function GET(_req: NextRequest, ctx: Ctx) {
+  const { spaceId } = await ctx.params;
+  const auth = await safeAuth();
+  if (auth.error) return auth.error;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = auth.supabase as any;
+
+  const space = await loadSpace(db, spaceId, auth.user.id);
+  if (!space) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+  const found = await getTasteProfile(db, spaceId);
+  if (!found) {
+    return NextResponse.json({ snapshot: null });
+  }
+  return NextResponse.json({ snapshot: found.snapshot, objectId: found.row.id });
+}
+
+// ── POST (regenerate) ───────────────────────────────────────────────
+
+export async function POST(_req: NextRequest, ctx: Ctx) {
+  const { spaceId } = await ctx.params;
+  const auth = await safeAuth();
+  if (auth.error) return auth.error;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = auth.supabase as any;
+
+  const space = await loadSpace(db, spaceId, auth.user.id);
+  if (!space) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+  // ── Substrate reads ──
+  // 1. Objective text (root goal description → title fallback)
+  let objectiveText = "";
+  const { data: rootGoal } = await db
+    .from("improvement_goals")
+    .select("title, description")
+    .eq("space_id", spaceId)
+    .is("parent_goal_id", null)
+    .maybeSingle();
+  objectiveText =
+    (typeof rootGoal?.description === "string" && rootGoal.description.trim()) ||
+    (typeof rootGoal?.title === "string" && rootGoal.title.trim()) ||
+    (typeof space.description === "string" && space.description.trim()) ||
+    (typeof space.input_text === "string" && space.input_text.trim()) ||
+    "";
+
+  // 2. Glossary (synthesis_data)
+  const synth =
+    (space.synthesis_data as Record<string, unknown> | null) ?? {};
+  const glossary = Array.isArray(synth.glossary)
+    ? (synth.glossary as Array<Record<string, unknown>>).map((t) => ({
+        term: typeof t.term === "string" ? t.term : "",
+        source: typeof t.source === "string" ? t.source : undefined,
+        pinned: t.pinned === true,
+        concept_slug:
+          typeof t.concept_slug === "string" ? t.concept_slug : undefined,
+        // Pass kind through so bucketVocabulary can preserve it on each
+        // entry. Validation happens inside via asGlossaryKind.
+        kind: t.kind,
+      }))
+    : [];
+
+  // 3. Analyzed images (the sources)
+  const { data: imageRows } = await db
+    .from("ingested_files")
+    .select("id, source_name, image_url, image_concepts, image_narrative")
+    .eq("space_id", spaceId)
+    .like("mime_type", "image/%")
+    .not("vision_completed_at", "is", null)
+    .order("vision_completed_at", { ascending: false });
+  const images = (imageRows ?? []) as Array<{
+    id: string;
+    source_name: string | null;
+    image_url: string | null;
+    image_concepts: unknown;
+    image_narrative: string | null;
+  }>;
+
+  // 4. User notes (intentions + taste) on the context anchor
+  let intentionNotes: string[] = [];
+  let tasteNotes: string[] = [];
+  try {
+    const { data: anchor } = await db
+      .from("library_objects")
+      .select("id")
+      .eq("space_id", spaceId)
+      .eq("object_type", "context_anchor")
+      .maybeSingle();
+    if (anchor?.id) {
+      const { data: notes } = await db
+        .from("library_object_notes")
+        .select("kind, text")
+        .eq("object_id", anchor.id);
+      for (const n of (notes ?? []) as Array<{ kind: string; text: string }>) {
+        if (typeof n.text !== "string") continue;
+        if (n.kind === "intention") intentionNotes.push(n.text);
+        else if (n.kind === "taste") tasteNotes.push(n.text);
+      }
+    }
+  } catch {
+    /* soft */
+  }
+
+  // ── Deterministic readouts ──
+  // groundedSlugs: any glossary slug that's referenced by an image's
+  // image_concepts list. That's the "grounded by your sources" bucket.
+  const groundedSlugs = new Set<string>();
+  for (const img of images) {
+    if (Array.isArray(img.image_concepts)) {
+      for (const s of img.image_concepts as unknown[]) {
+        if (typeof s === "string") groundedSlugs.add(s);
+      }
+    }
+  }
+  const vocabulary = bucketVocabulary(glossary, groundedSlugs);
+  const sources = readSources(images);
+
+  // ── Pinned-section preservation ──
+  // Reload the existing snapshot so the user's pinned voice / tensions /
+  // no_gos survive regeneration. The deterministic sections
+  // (vocabulary, sources) always refresh.
+  const existing = await getTasteProfile(db, spaceId);
+  const prevSnap = existing?.snapshot ?? null;
+  const prevPinned = prevSnap?.pinned ?? {};
+
+  // ── Synthesis (LLM) ──
+  // Skip the LLM entirely if voice/tensions/no_gos are all pinned —
+  // saves a Sonnet call when the user has finalized their taste.
+  const needSynthesis =
+    !prevPinned.voice || !prevPinned.tensions || !prevPinned.no_gos;
+  const synthesized = needSynthesis
+    ? await synthesizeTasteSections({
+        objectiveText,
+        glossary,
+        imageNarratives: images
+          .map((i) => i.image_narrative ?? "")
+          .filter((s) => s.length > 0),
+        intentionNotes,
+        tasteNotes,
+      })
+    : {
+        voice: prevSnap?.voice ?? { tone: "", style: "" },
+        tensions: prevSnap?.tensions ?? [],
+        no_gos: prevSnap?.no_gos ?? [],
+      };
+
+  // Pinned sections always win.
+  const voice: TasteVoice =
+    prevPinned.voice && prevSnap ? prevSnap.voice : synthesized.voice;
+  const tensions =
+    prevPinned.tensions && prevSnap ? prevSnap.tensions : synthesized.tensions;
+  const no_gos =
+    prevPinned.no_gos && prevSnap ? prevSnap.no_gos : synthesized.no_gos;
+
+  // Thin signal = nothing to anchor on. Surfaced in the UI.
+  const thin_signal =
+    !objectiveText &&
+    glossary.length === 0 &&
+    sources.length === 0 &&
+    intentionNotes.length === 0 &&
+    tasteNotes.length === 0;
+
+  const snapshot: TasteProfileSnapshot = {
+    voice,
+    vocabulary,
+    tensions,
+    sources,
+    no_gos,
+    pinned: prevPinned,
+    generated_at: new Date().toISOString(),
+    thin_signal,
+  };
+
+  const objectId = await saveTasteProfile(db, {
+    spaceId,
+    userId: auth.user.id,
+    snapshot,
+  });
+
+  return NextResponse.json({ snapshot, objectId });
+}
+
+// ── PATCH (edit a section / toggle pin) ─────────────────────────────
+
+interface PatchBody {
+  section?: TasteSection;
+  /** Toggle pinned for the section. */
+  pinned?: boolean;
+  /** Replace the section content. For voice: { tone, style }. For
+   *  tensions/no_gos: string[]. For vocabulary/sources: not editable
+   *  via PATCH (deterministic). */
+  value?: unknown;
+}
+
+export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const { spaceId } = await ctx.params;
+  const auth = await safeAuth();
+  if (auth.error) return auth.error;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = auth.supabase as any;
+
+  const space = await loadSpace(db, spaceId, auth.user.id);
+  if (!space) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+  const { data: body, error: parseErr } = await safeJsonParse<PatchBody>(req);
+  if (parseErr) return parseErr;
+  const section = body?.section;
+  if (!section) {
+    return NextResponse.json({ error: "section required" }, { status: 400 });
+  }
+
+  const found = await getTasteProfile(db, spaceId);
+  const current = found?.snapshot ?? normalizeSnapshot(null);
+  const next: TasteProfileSnapshot = {
+    ...current,
+    pinned: { ...current.pinned },
+  };
+
+  // Apply value change first (so the saved row reflects the user's edit).
+  if (body?.value !== undefined) {
+    if (section === "voice" && body.value && typeof body.value === "object") {
+      const v = body.value as Record<string, unknown>;
+      next.voice = {
+        tone: typeof v.tone === "string" ? v.tone.slice(0, 80) : next.voice.tone,
+        style:
+          typeof v.style === "string"
+            ? v.style.slice(0, 280)
+            : next.voice.style,
+      };
+    } else if (section === "tensions" && Array.isArray(body.value)) {
+      next.tensions = (body.value as unknown[])
+        .filter((s): s is string => typeof s === "string")
+        .map((s) => s.slice(0, 80))
+        .slice(0, 8);
+    } else if (section === "no_gos" && Array.isArray(body.value)) {
+      next.no_gos = (body.value as unknown[])
+        .filter((s): s is string => typeof s === "string")
+        .map((s) => s.slice(0, 120))
+        .slice(0, 8);
+    } else {
+      return NextResponse.json(
+        { error: `section "${section}" is not editable via PATCH` },
+        { status: 400 },
+      );
+    }
+    // Editing a section pins it by default — same discipline as the
+    // glossary PATCH path. The user can explicitly unpin if they want
+    // the next regenerate to overwrite.
+    next.pinned[section] = true;
+  }
+
+  if (typeof body?.pinned === "boolean") {
+    next.pinned[section] = body.pinned;
+  }
+
+  next.generated_at = new Date().toISOString();
+
+  const objectId = await saveTasteProfile(db, {
+    spaceId,
+    userId: auth.user.id,
+    snapshot: next,
+  });
+
+  return NextResponse.json({ snapshot: next, objectId });
+}

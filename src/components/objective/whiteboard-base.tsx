@@ -122,6 +122,7 @@ import { getAiSettings } from "@/lib/objective-canvas/ai-settings";
 import { setPanel } from "@/lib/objective-canvas/board-panel-signal";
 import { BoardTopRightBar } from "./canvas-interactions/board-top-right-bar";
 import { ObjectDetailMount } from "./canvas-interactions/object-detail-drawer";
+import { ConnectorDragLayer } from "./canvas-interactions/connector-drag-layer";
 import { GoalLauncher } from "./canvas-interactions/goal-ranking-sidebar";
 import { BoardHistoryLauncher } from "./canvas-interactions/board-history";
 import { BoardSettingsLauncher } from "./canvas-interactions/board-settings";
@@ -209,7 +210,9 @@ import {
 } from "./canvas-interactions/prompt-sharpening-board";
 import { reflowIntakeStack } from "./canvas-interactions/board-reflow";
 import { SharpeningConnectorsOverlay } from "./canvas-interactions/sharpening-connectors";
+import { ImageWireOverlay } from "./canvas-interactions/image-wire-overlay";
 import { SpecForgeConnectorsOverlay } from "./canvas-interactions/specforge-connectors";
+import { SpecForgeSourceLaneConnector } from "./canvas-interactions/specforge-source-connector";
 import { CommentStrandsOverlay } from "./canvas-interactions/comment-strands";
 import { GroupForkConnectorsOverlay } from "./canvas-interactions/group-fork-connectors";
 import {
@@ -699,6 +702,9 @@ const BOARD_COMPONENTS: TLComponents = {
         <SpecForgeConnectorsOverlay />
         <CommentStrandsOverlay />
         <GroupForkConnectorsOverlay />
+        {/* Image→concept wires (drag-from-image to oc-card). Persisted
+            via /link-objects; rendered in warm terracotta with arrows. */}
+        <ImageWireOverlay />
       </>
     );
   },
@@ -1905,7 +1911,12 @@ export function WhiteboardBase({
       {/* Contextual AI action — only while the board chrome is showing and
           we're NOT unfurling (the selection toolbar is for the normal board). */}
       {editor && showUi && (
-        <BoardOverlay editor={editor} runAiLink={runAiLink} spaceId={spaceId} />
+        <BoardOverlay
+          editor={editor}
+          runAiLink={runAiLink}
+          spaceId={spaceId}
+          restoreSettled={restoreSettled}
+        />
       )}
       {editor && <PrototypeEventBridge editor={editor} spaceId={spaceId} />}
       {editor && <UiPlanEventBridge editor={editor} spaceId={spaceId} />}
@@ -2728,10 +2739,16 @@ function BoardOverlay({
   editor,
   runAiLink,
   spaceId,
+  restoreSettled = false,
 }: {
   editor: Editor;
   runAiLink: AiLinkFn;
   spaceId: string;
+  /** Whether the board has finished hydrating from its persisted
+   *  snapshot. Threaded through to children (e.g. CommentBoardMount)
+   *  so they don't fight the restore. Defaults to false so callers
+   *  that don't pass it (legacy mount points) stay safe. */
+  restoreSettled?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -2746,6 +2763,13 @@ function BoardOverlay({
   // Non-null while the chain runs; drives the floating progress chip + the
   // scanner's "Forge full spec" button busy state.
   const [forging, setForging] = useState<SpecForgeProgress | null>(null);
+  // The tldraw shape id of the source the active forge ran on. Drives the
+  // visual "fork" connector from the source card to the OperationLane —
+  // the lane is the single artifact now (per-engine cards no longer
+  // deploy), so anchoring it to its source keeps it from reading as a
+  // free-floating UI sidebar.
+  const [forgeSourceShapeId, setForgeSourceShapeId] = useState<string | null>(null);
+  const laneRef = useRef<HTMLDivElement | null>(null);
 
   // The Powerups rail's Forge button dispatches FORGE_REQUEST_EVENT — run the
   // SpecForge chain on the current selection (aggregated). handleForge is a
@@ -2809,6 +2833,10 @@ function BoardOverlay({
     if ((forging && forging.phase === "running") || techSpecBusy) return;
     if (!target.text.trim()) return;
     setForgeKind(opts?.autoPrototype ? "prototype" : "spec");
+    // Capture the source shape id up front — the lane's source-connector
+    // overlay reads this to draw the fork from source → lane. Cleared
+    // when the chain ends so the connector disappears with the lane.
+    setForgeSourceShapeId(target.shapeId ?? null);
     // Bootstrap progress state with the real chain length and the first act —
     // the chip then transitions smoothly to the runner's first onProgress call.
     setForging({
@@ -2841,9 +2869,11 @@ function BoardOverlay({
         console.warn("[board] specforge failed:", err);
         setForging(null);
         setForgeKind(null);
+        setForgeSourceShapeId(null);
         return;
       }
       setForging(null);
+      setForgeSourceShapeId(null);
       if (!forge?.createdAny) {
         setForgeKind(null);
         return;
@@ -3242,10 +3272,17 @@ function BoardOverlay({
           OPEN_BOARD_COMMENT (toolbox sphere), body/resolve/delete patches,
           and the "Analyze on board" extension. Hydrates existing rows on
           mount so comments survive a page refresh. */}
-      <CommentBoardMount spaceId={spaceId} editor={editor} />
+      <CommentBoardMount
+        spaceId={spaceId}
+        editor={editor}
+      />
       {/* Object detail drawer — listens for OPEN_CARD_DETAIL_EVENT (oc-card
           double-click + Library clicks) → metadata + object-graph modal. */}
       <ObjectDetailMount spaceId={spaceId} editor={editor} />
+      {/* Drag-to-connect: "+" handle on a hovered card → drag to another card
+          → relation menu → persisted object_link + bound arrow. Group-aware
+          (drags the whole multi-selection when the source is part of it). */}
+      <ConnectorDragLayer spaceId={spaceId} editor={editor} />
       {/* Left-edge Goal & alignment rail: ultimate goal + live ranking of
           convergent/divergent board nodes (rank-nodes endpoint). */}
       <GoalLauncher spaceId={spaceId} editor={editor} />
@@ -3315,12 +3352,24 @@ function BoardOverlay({
           runs, so the user knows the cards are streaming in below the idea. */}
       {forging && <SpecForgeProgressChip progress={forging} editor={editor} />}
 
-      {/* Operation Lane — per-engine status map on the right edge. Lets the
-          user see what passed/failed across the 20-engine chain and jump
-          straight to any reasoning card. Cooperates with the chip:
-          chip = "now/next" overlay, lane = "where am I in the chain" map.
+      {/* Operation Lane — per-engine status map on the left edge. Single
+          artifact now (per-engine cards no longer deploy on the board);
+          row click opens the side panel showing only the engine's
+          polished bullets. Cooperates with the chip: chip = "now/next"
+          overlay, lane = "where am I in the chain" map.
           Per specforge_operation_card_system.md §8 + §21. */}
-      {forging && <OperationLane progress={forging} editor={editor} />}
+      {forging && <OperationLane ref={laneRef} progress={forging} editor={editor} />}
+
+      {/* Source → Lane "fork" connector — a screen-space bezier from the
+          source card's right edge to the lane, so the lane reads as the
+          forked-out operation popup, not a floating sidebar. Only renders
+          while the chain is running and a source shape is known. */}
+      {forging && forgeSourceShapeId && (
+        <SpecForgeSourceLaneConnector
+          sourceShapeId={forgeSourceShapeId}
+          laneRef={laneRef}
+        />
+      )}
 
       {/* SpecForge Side Panel — opens on click of any specforge-card OR
           any lane row. Per specforge_side_panel_interaction_system.md §5.

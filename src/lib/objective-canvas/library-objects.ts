@@ -31,7 +31,17 @@ export type LibraryObjectType =
   // Context-frontier (CONTEXT_FRONTIER_PLAN.md): the per-space intake
   // context anchor + one object per extracted prior-idea/reference concept.
   | "context_anchor"
-  | "context_concept";
+  | "context_concept"
+  // The user's synthesized taste profile for this objective — one per
+  // space. Generated from glossary + sources + notes; per-section
+  // pinnable. Has its own rail surface (TasteProfileView).
+  | "taste_profile"
+  // Analyzed image promoted to a first-class object so object_links
+  // can terminate on it. One row per ingested_files image (idempotent
+  // on source_ref=`img:{ingestedFileId}`). content_snapshot carries
+  // image_url + narrative + description + concept_slugs. Drag-to-link
+  // from an image card writes object_links FROM this row.
+  | "image_source";
 
 export type SelectionStatus = "candidate" | "selected" | "rejected";
 

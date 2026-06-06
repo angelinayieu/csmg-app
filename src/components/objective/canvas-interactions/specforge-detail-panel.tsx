@@ -23,7 +23,7 @@ import {
   type CSSProperties,
 } from "react";
 import type { Editor, TLShapeId } from "tldraw";
-import { X, ArrowRight, ShieldCheck, AlertTriangle, Loader2 } from "lucide-react";
+import { X, ArrowRight, ShieldCheck, AlertTriangle, Loader2, ArrowUpRight } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { SpecForgeCardShape } from "../shapes/specforge-card-shape";
 import {
@@ -42,8 +42,42 @@ import {
   type PanelAction,
   type PanelActionDetail,
 } from "@/lib/objective-canvas/specforge/panel-actions";
+import {
+  polishedBulletsFor,
+  type PolishedBullets,
+} from "@/lib/objective-canvas/specforge/polished-bullets";
+import {
+  OPEN_SPECFORGE_ENGINE_DETAIL_EVENT,
+  type OpenSpecForgeEngineDetail,
+} from "./operation-lane";
 
 const PANEL_WIDTH = 380;
+
+/** Default stage per engine — used in engine-detail mode (no shape) to
+ *  pick the accent color + eyebrow tint. Mirrors the per-engine choices
+ *  that cards.ts already made for the legacy spine cards. */
+const ENGINE_STAGE: Record<SpecForgeEngineId, SpecForgeStage> = {
+  power_up: "input",
+  target_user: "user",
+  problem_tree: "problem",
+  desired_result: "result",
+  cross_analysis: "analysis",
+  question_expansion: "questions",
+  convergence: "convergence",
+  differentiation: "differentiation",
+  solution_families: "families",
+  mvp_variations: "mvp",
+  evaluation: "evaluation",
+  recommendation: "recommendation",
+  complexity_allocation: "budget",
+  feature_cards: "features",
+  feature_mechanisms: "mechanisms",
+  data_points: "data",
+  layer_optimization: "layers",
+  validation: "validation",
+  deepening: "deepening",
+  spec_export: "export",
+};
 
 interface OpenDetail {
   shapeId: string;
@@ -52,6 +86,10 @@ interface OpenDetail {
 interface PanelState {
   shape: SpecForgeCardShape | null;
   engine: SpecForgeEngineId | null;
+  /** Set when the panel was opened via the lane (no shape exists because
+   *  per-engine cards no longer deploy). The render path prefers this
+   *  raw result over the legacy shape props when present. */
+  engineResult?: unknown;
 }
 
 /** Read SpecForge metadata defensively — `meta` is unknown JSON so each
@@ -74,11 +112,28 @@ function readMeta(shape: SpecForgeCardShape): SpecForgeMeta {
   return { engine, gateStatus, gateScore };
 }
 
+/** Per-bullet refinement state. Keyed by bullet index inside the panel's
+ *  current "Final output" list. Resets when the panel re-opens against a
+ *  different engine — refinements are scoped to a single session-open. */
+interface BulletRefinement {
+  busy: boolean;
+  /** Headline + sub-bullets distilled from a question_expansion call on
+   *  this bullet. Rendered as a small indented list directly below it. */
+  bullets: string[];
+  error?: string;
+}
+
 export function SpecForgeDetailPanel({ editor }: { editor: Editor }) {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<PanelState>({ shape: null, engine: null });
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+  // Per-bullet refinement results — keyed by the bullet index in the
+  // currently rendered `polished.bullets` list. The "↗ Refine" hover
+  // affordance on each <li> kicks a question_expansion call scoped to
+  // that single bullet; the polished response renders nested below it.
+  // Resets whenever the panel switches to a different engine.
+  const [refinements, setRefinements] = useState<Record<number, BulletRefinement>>({});
 
   // Open via event — re-reads the shape fresh each time so the panel
   // never shows a stale snapshot if the user navigated between cards.
@@ -100,6 +155,78 @@ export function SpecForgeDetailPanel({ editor }: { editor: Editor }) {
     return () => window.removeEventListener(OPEN_SPECFORGE_DETAIL_EVENT, onOpen);
   }, [editor]);
 
+  // Engine-detail open path: fired by the OperationLane when the user
+  // clicks an engine row. No shape exists (per-engine cards no longer
+  // materialize on the board) — the panel renders polished bullets from
+  // the raw engine result instead.
+  useEffect(() => {
+    function onOpenEngine(e: Event) {
+      const d = (e as CustomEvent<OpenSpecForgeEngineDetail>).detail;
+      if (!d?.engine || d.result === undefined) return;
+      setState({ shape: null, engine: d.engine, engineResult: d.result });
+      setOpen(true);
+      window.setTimeout(() => closeBtnRef.current?.focus(), 40);
+    }
+    window.addEventListener(OPEN_SPECFORGE_ENGINE_DETAIL_EVENT, onOpenEngine);
+    return () =>
+      window.removeEventListener(OPEN_SPECFORGE_ENGINE_DETAIL_EVENT, onOpenEngine);
+  }, []);
+
+  // Reset per-bullet refinements whenever the panel switches engine — a
+  // refinement is conceptually a child of one specific bullet of one
+  // specific engine; carrying it across would be confusing.
+  useEffect(() => {
+    setRefinements({});
+  }, [state.engine, state.engineResult]);
+
+  /** "↗ Refine" — fork a single bullet out for expansion via question_expansion.
+   *  Scope is intentionally narrow: one focused engine call, polished
+   *  bullets back, rendered inline below the source bullet. The full
+   *  SpecForge sub-chain is a follow-up. */
+  const refineBullet = useCallback(
+    async (idx: number, bulletText: string, contextLines: string[]) => {
+      setRefinements((prev) => ({
+        ...prev,
+        [idx]: { busy: true, bullets: prev[idx]?.bullets ?? [] },
+      }));
+      try {
+        const res = await fetch("/api/canvas/specforge", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            engine: "question_expansion",
+            idea: bulletText.slice(0, 1200),
+            context: contextLines.filter(Boolean).slice(0, 8).join("\n").slice(0, 4000),
+          }),
+        });
+        if (!res.ok) throw new Error("refine failed");
+        const json = (await res.json()) as { result?: unknown };
+        const pb = polishedBulletsFor(
+          "question_expansion",
+          json.result,
+          "Expanded questions",
+        );
+        const next: string[] = [];
+        if (pb.headline && pb.headline !== "Expanded questions") next.push(pb.headline);
+        for (const b of pb.bullets) if (next.length < 4) next.push(b);
+        setRefinements((prev) => ({
+          ...prev,
+          [idx]: { busy: false, bullets: next },
+        }));
+      } catch {
+        setRefinements((prev) => ({
+          ...prev,
+          [idx]: {
+            busy: false,
+            bullets: prev[idx]?.bullets ?? [],
+            error: "Couldn't expand — try again",
+          },
+        }));
+      }
+    },
+    [],
+  );
+
   // Esc to close (matches existing drawer / popup conventions on the board).
   useEffect(() => {
     if (!open) return;
@@ -111,6 +238,7 @@ export function SpecForgeDetailPanel({ editor }: { editor: Editor }) {
   }, [open]);
 
   // Close if the selected shape is deleted from the board (board → panel sync).
+  // Engine-detail mode has no shape — skip this poll for that path.
   useEffect(() => {
     if (!open || !state.shape) return;
     const id = state.shape.id;
@@ -143,20 +271,44 @@ export function SpecForgeDetailPanel({ editor }: { editor: Editor }) {
     [state.shape, state.engine],
   );
 
-  if (!open || !state.shape || !state.engine) return null;
+  // The panel opens in one of two modes:
+  //  · shape mode (legacy): a tldraw specforge-card was double-clicked
+  //  · engine-detail mode (current): the lane row was clicked; no shape
+  //    exists because per-engine cards no longer deploy on the board
+  const hasShape = state.shape !== null;
+  const hasEngineResult = state.engineResult !== undefined;
+  if (!open || !state.engine || (!hasShape && !hasEngineResult)) return null;
 
-  const meta = readMeta(state.shape);
-  const stage = state.shape.props.stage as SpecForgeStage;
-  const stageMeta = STAGE_META[stage] ?? STAGE_META.input;
+  const meta = state.shape ? readMeta(state.shape) : { engine: state.engine, gateStatus: null, gateScore: null };
   const phase = PHASE_OF_ENGINE[state.engine];
   const phaseLabel = PHASE_LABEL[phase];
+  const stage: SpecForgeStage = state.shape
+    ? (state.shape.props.stage as SpecForgeStage)
+    : ENGINE_STAGE[state.engine];
+  const stageMeta = STAGE_META[stage] ?? STAGE_META.input;
 
-  const bodyLines = state.shape.props.body
-    ? state.shape.props.body
-        .split("\n")
-        .map((l) => l.replace(/^•\s*/, "").trim())
-        .filter(Boolean)
-    : [];
+  // Single source of truth for the polished view, whichever mode is open.
+  // In engine-detail mode this strips every internal field (counts,
+  // modelJson, repair markers, depth scoring) per the user's directive:
+  // only the downstream-consumable bullets are shown.
+  const polished: PolishedBullets = hasEngineResult
+    ? polishedBulletsFor(state.engine, state.engineResult, ENGINE_LABEL[state.engine])
+    : {
+        headline:
+          state.shape!.props.subtitle ||
+          state.shape!.props.title ||
+          ENGINE_LABEL[state.engine],
+        bullets: state.shape!.props.body
+          ? state.shape!.props.body
+              .split("\n")
+              .map((l) => l.replace(/^•\s*/, "").trim())
+              .filter(Boolean)
+              .slice(0, 4)
+          : [],
+      };
+  const titleText = hasShape
+    ? state.shape!.props.title || polished.headline || "Decision"
+    : polished.headline || ENGINE_LABEL[state.engine];
 
   return (
     <div
@@ -175,7 +327,7 @@ export function SpecForgeDetailPanel({ editor }: { editor: Editor }) {
             <span style={{ ...stageDot, background: stageMeta.color }} />
             <span style={engineEyebrow}>{ENGINE_LABEL[state.engine]}</span>
           </div>
-          <div style={titleStyle}>{state.shape.props.title || "Decision"}</div>
+          <div style={titleStyle}>{titleText}</div>
           <div style={subtitleMeta}>
             <span>{phaseLabel}</span>
             <span style={metaDot} />
@@ -201,41 +353,60 @@ export function SpecForgeDetailPanel({ editor }: { editor: Editor }) {
 
       {/* Scrollable content */}
       <div style={scrollWrap}>
-        {/* Why It Matters — spec §7 */}
-        <Section title="Why this matters">
-          <p style={bodyText}>{WHY_IT_MATTERS[state.engine]}</p>
-        </Section>
-
-        {/* Current content — spec §8 */}
-        {state.shape.props.subtitle && (
-          <Section title="Headline">
-            <p style={{ ...bodyText, color: appleVibe.text.primary, fontWeight: 540 }}>
-              {state.shape.props.subtitle}
-            </p>
+        {/* "Why this matters" only renders in legacy shape mode. In the
+            engine-detail mode (the default now that per-engine cards
+            no longer deploy) the panel is intentionally bullets-only —
+            the user asked for the polished session output, no internals,
+            no pipeline framing. */}
+        {hasShape && (
+          <Section title="Why this matters">
+            <p style={bodyText}>{WHY_IT_MATTERS[state.engine]}</p>
           </Section>
         )}
 
-        {bodyLines.length > 0 && (
-          <Section title="Current content">
+        {/* Polished output — the engine's downstream-consumable bullets
+            ONLY. Per the brief: no counts, no modelJson, no repair
+            markers, no depth-scoring rationale — just the final session
+            output a downstream engine (or a reader) would quote. */}
+        {polished.headline &&
+          polished.headline !== titleText &&
+          polished.headline !== ENGINE_LABEL[state.engine] && (
+            <Section title="Headline">
+              <p style={{ ...bodyText, color: appleVibe.text.primary, fontWeight: 540 }}>
+                {polished.headline}
+              </p>
+            </Section>
+          )}
+
+        {polished.bullets.length > 0 && (
+          <Section title="Final output">
             <ul style={bulletList}>
-              {bodyLines.slice(0, 8).map((line, i) => (
-                <li key={i} style={bulletItem}>
-                  {line}
-                </li>
-              ))}
+              {polished.bullets.map((line, i) => {
+                const ref = refinements[i];
+                return (
+                  <RefinableBullet
+                    key={i}
+                    text={line}
+                    refinement={ref}
+                    onRefine={() => refineBullet(i, line, polished.bullets)}
+                  />
+                );
+              })}
             </ul>
           </Section>
         )}
 
-        {/* Layer context — spec §9 */}
-        <Section title="Layer">
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <ChainSpine engine={state.engine} accent={stageMeta.color} />
-          </div>
-        </Section>
+        {/* Layer context + Actions — legacy shape mode only. Engine-detail
+            mode is bullets-only per the user's directive. */}
+        {hasShape && (
+          <Section title="Layer">
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <ChainSpine engine={state.engine} accent={stageMeta.color} />
+            </div>
+          </Section>
+        )}
 
-        {/* Actions — spec §12–§23. All actions render with a "next" pill
-            until their handler ships; honest UX over false positives. */}
+        {hasShape && (
         <Section title={actions.some((a) => a.enabled) ? "Actions" : "Actions · coming next"}>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {actions.map((a) => (
@@ -271,12 +442,127 @@ export function SpecForgeDetailPanel({ editor }: { editor: Editor }) {
             ))}
           </div>
         </Section>
+        )}
       </div>
     </div>
   );
 }
 
 // ── Subcomponents ─────────────────────────────────────────────────────
+
+// ── RefinableBullet ──────────────────────────────────────────────────
+//
+// One bullet in the panel's "Final output" list, with a hover-reveal
+// "↗ Refine" affordance that forks just this bullet out into a focused
+// question_expansion call. The result renders nested directly below the
+// source bullet — no new lane row, no new card on the board — keeping
+// the refinement and its source in the same visual unit.
+//
+// Why on the bullet itself: the bullet IS the feature. Putting the
+// click target anywhere else (header, lane row) coarsens the scope
+// from "this one thing" to "the whole engine output," which is the
+// opposite of "fork out a feature."
+function RefinableBullet({
+  text,
+  refinement,
+  onRefine,
+}: {
+  text: string;
+  refinement: BulletRefinement | undefined;
+  onRefine: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const busy = refinement?.busy === true;
+  const showButton = hover || busy || (refinement?.bullets?.length ?? 0) > 0;
+  return (
+    <li
+      style={{ ...bulletItem, paddingRight: 24 }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <span>{text}</span>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!busy) onRefine();
+        }}
+        aria-label={busy ? "Expanding…" : "Refine this feature"}
+        title={busy ? "Expanding…" : "Refine this feature"}
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 1,
+          display: showButton ? "inline-flex" : "none",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 18,
+          height: 18,
+          padding: 0,
+          borderRadius: 6,
+          border: "none",
+          background: "rgba(15,23,42,0.06)",
+          color: appleVibe.text.tertiary,
+          cursor: busy ? "default" : "pointer",
+        }}
+      >
+        {busy ? (
+          <Loader2
+            className="animate-spin"
+            style={{ width: 11, height: 11, color: appleVibe.text.faint }}
+          />
+        ) : (
+          <ArrowUpRight style={{ width: 12, height: 12 }} strokeWidth={2.2} />
+        )}
+      </button>
+
+      {/* Nested refinement output — appears directly under the source
+          bullet so the parent → expansion relationship is visually
+          unambiguous. Soft red on error, otherwise indented bullets. */}
+      {(refinement?.bullets.length ?? 0) > 0 && (
+        <ul
+          style={{
+            margin: "6px 0 0",
+            paddingLeft: 14,
+            listStyle: "none",
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            borderLeft: "1.5px solid rgba(15,23,42,0.10)",
+            paddingTop: 2,
+          }}
+        >
+          {refinement!.bullets.map((sub, j) => (
+            <li
+              key={j}
+              style={{
+                fontSize: 12,
+                lineHeight: 1.4,
+                color: appleVibe.text.tertiary,
+                paddingLeft: 10,
+                position: "relative",
+              }}
+            >
+              {sub}
+            </li>
+          ))}
+        </ul>
+      )}
+      {refinement?.error && !busy && (
+        <div
+          style={{
+            marginTop: 4,
+            fontSize: 11,
+            color: "#B91C1C",
+            paddingLeft: 0,
+          }}
+        >
+          {refinement.error}
+        </div>
+      )}
+    </li>
+  );
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (

@@ -70,6 +70,12 @@ export interface EngineLaneStatus {
   /** 1-line output summary from outputSummary() — pre-computed so the
    *  lane stays render-cheap. */
   outputSummary?: string;
+  /** Raw engine result JSON. The side panel reads this to render the
+   *  engine's polished final bullets without needing a deployed card.
+   *  Cards are no longer placed on the board (the chain is consumed
+   *  through the lane + panel only) — this is the substrate.
+   *  Absent on `not_started` / `running` / `failed` entries. */
+  result?: unknown;
 }
 
 export interface SpecForgeProgress {
@@ -448,6 +454,9 @@ export async function runSpecForge(
         issueCount: critic?.issues.length ?? 0,
         confidence,
         outputSummary: outputSummaryFor(engine, response.result),
+        // Stash the raw result so the side panel can render the engine's
+        // polished bullets without a deployed card on the board.
+        result: response.result,
       };
     } else {
       // Engine returned null (timeout / error / soft-fail). Mark failed so
@@ -619,51 +628,26 @@ function placeBatch(
 }
 
 function create(
-  editor: Editor,
-  card: SpecForgeCard,
-  engine: SpecForgeArtifactId,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  stamp: number,
-  i: number,
-  engineRunId: string,
-  gateStatus?: "passed" | "repaired" | "failed",
+  _editor: Editor,
+  _card: SpecForgeCard,
+  _engine: SpecForgeArtifactId,
+  _x: number,
+  _y: number,
+  _w: number,
+  _h: number,
+  _stamp: number,
+  _i: number,
+  _engineRunId: string,
+  _gateStatus?: "passed" | "repaired" | "failed",
 ): TLShapeId | null {
-  try {
-    const id = createShapeId();
-    editor.createShape<SpecForgeCardShape>({
-      id,
-      type: "specforge-card",
-      x,
-      y,
-      props: {
-        w,
-        h,
-        stage: card.stage,
-        eyebrow: card.eyebrow ?? "",
-        title: card.title || "Decision",
-        subtitle: card.subtitle ?? "",
-        body: card.body ?? "",
-        modelJson: card.modelJson ?? "",
-        entityId: `specforge-${engine}-${stamp}-${i}`,
-        engineRunId,
-      },
-      meta: {
-        specforge: true,
-        engine,
-        stage: card.stage,
-        // Surfaces Phase A's critic data on the card itself (no new prop).
-        // Omitted when unknown so the renderer falls back to clean styling.
-        ...(gateStatus ? { gateStatus } : {}),
-      },
-    });
-    return id;
-  } catch {
-    /* best-effort — a single bad card never breaks the chain */
-    return null;
-  }
+  // Per-engine reasoning cards no longer materialize on the board — the
+  // chain is consumed through the OperationLane (forked off the source
+  // SpecForge card via the bezier connector) and its side panel, which
+  // reads each engine's polished output from EngineLaneStatus.result.
+  // Keeping the function signature lets the rest of the runner stay
+  // unchanged; returning null causes placeBatch's `if (id) placed.push`
+  // guard to skip every card naturally.
+  return null;
 }
 
 // ── Connectors — the dependency graph threading the placed cards ──────

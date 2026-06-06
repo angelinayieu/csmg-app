@@ -809,8 +809,9 @@ function PromptSharpeningRenderer({
             <button
               type="button"
               onPointerDown={stopEventPropagation}
-              onClick={toggle}
-              aria-label={expanded ? "Collapse" : "Expand heatmap"}
+              onClick={forkOutHeatmap}
+              aria-label="Fork heatmap out"
+              title="Fork the ambiguity heatmap out as its own card"
               style={{
                 marginLeft: "auto",
                 display: "inline-flex",
@@ -826,30 +827,21 @@ function PromptSharpeningRenderer({
                 fontWeight: 600,
               }}
             >
-              {expanded ? "Less" : "Heatmap"}
-              <ChevronDown
-                style={{
-                  width: 12,
-                  height: 12,
-                  transform: expanded ? "rotate(180deg)" : "none",
-                  transition: "transform 0.18s ease",
-                }}
-                strokeWidth={2.4}
-              />
+              Heatmap
+              <ArrowUpRight style={{ width: 11, height: 11 }} strokeWidth={2.4} />
             </button>
           )}
         </div>
 
-        {/* Distilled title — shown in FULL (no line clamp) so the spawned card
-            never cuts it off. The card auto-fits its height to the title's
-            real length (the distilled title is compact by design). */}
+        {/* Distilled title — title-only render; the sharpened prompt lives in
+            the title attr so it surfaces on hover. Body prose is gone (the
+            title alone has to read clearly). */}
         <div
+          title={!loading && sharpenedPrompt ? sharpenedPrompt : undefined}
           style={{
             marginTop: 9,
             fontSize: 15.5,
             fontWeight: 700,
-            // Roomier line-height + a hair of bottom padding so descenders
-            // (p, g, y) are never clipped.
             lineHeight: 1.32,
             color: appleVibe.text.primary,
             paddingBottom: 1,
@@ -861,24 +853,6 @@ function PromptSharpeningRenderer({
               : "Sharpening your prompt"
             : title || "Untitled objective"}
         </div>
-
-        {/* Sharpened prompt — hidden while generating; the activity view below
-            carries the in-progress state. Shown in FULL (no line clamp): it's a
-            1–2 sentence rewrite, and the card auto-fits its height so the
-            sharpened objective is never clipped on spawn. */}
-        {!loading && (
-          <div
-            style={{
-              marginTop: 6,
-              fontSize: 11.5,
-              fontWeight: 450,
-              lineHeight: 1.42,
-              color: appleVibe.text.secondary,
-            }}
-          >
-            {sharpenedPrompt}
-          </div>
-        )}
 
         {loading &&
           (failed ? (
@@ -1724,7 +1698,14 @@ function ResolvePanel({
         >
           {pending ? "…" : count}
         </span>
-        <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <div
+          title={
+            pending
+              ? "Weighing leverage & pain points"
+              : "Pick fast or careful — both re-sharpen the prompt"
+          }
+          style={{ display: "flex", flexDirection: "column", minWidth: 0 }}
+        >
           <span
             style={{
               fontSize: 11.5,
@@ -1738,18 +1719,6 @@ function ResolvePanel({
               : count === 0
                 ? "No ambiguities to resolve"
                 : `${count} ambiguit${count === 1 ? "y" : "ies"} to resolve`}
-          </span>
-          <span
-            style={{
-              fontSize: 10,
-              color: appleVibe.text.tertiary,
-              lineHeight: 1.2,
-              marginTop: 1,
-            }}
-          >
-            {pending
-              ? "Weighing leverage & pain points"
-              : "Pick fast or careful — both re-sharpen the prompt"}
           </span>
         </div>
       </div>

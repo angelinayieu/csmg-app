@@ -26,6 +26,44 @@ import { slugifyConcept } from "@/lib/objective-canvas/normalize-annotations";
 
 export type GlossarySource = "annotation" | "entity" | "llm" | "user";
 
+// ── Glossary KIND axis ───────────────────────────────────────────────
+//
+// Grammatical category for each term — orthogonal to layer_tag (the
+// domain category) and source (the provenance). Lets the agent use the
+// right term in the right position: entities as nouns, operations as
+// verbs, qualities as adjectives, etc.
+//
+// Source of truth for both:
+//   - the rail Glossary view "Group by Kind" axis
+//   - the TasteProfile vocabulary block
+//   - the coin endpoint's optional `kind` field
+//
+// Canonical order is the order the agent consumes (entities first →
+// outcomes last), which is also the order the rail renders top→bottom.
+
+export const GLOSSARY_KINDS = [
+  "entity",
+  "operation",
+  "quality",
+  "pattern",
+  "role",
+  "constraint",
+  "outcome",
+] as const;
+
+export type GlossaryKind = (typeof GLOSSARY_KINDS)[number];
+
+const GLOSSARY_KIND_SET: ReadonlySet<string> = new Set(GLOSSARY_KINDS);
+
+/** Validator: coerce unknown → GlossaryKind | null. Used by API routes
+ *  that accept a user-supplied kind so an invalid value becomes null
+ *  rather than corrupting the row. */
+export function asGlossaryKind(v: unknown): GlossaryKind | null {
+  return typeof v === "string" && GLOSSARY_KIND_SET.has(v)
+    ? (v as GlossaryKind)
+    : null;
+}
+
 export interface GlossaryTerm {
   /** The canonical term as it reads in the UI. */
   term: string;
@@ -56,6 +94,13 @@ export interface GlossaryTerm {
    *  title drives the "inherited from your <App>" UI tag. */
   cross_space_origin?: string;
   cross_space_origin_title?: string;
+  /** Grammatical category — entity / operation / quality / pattern /
+   *  role / constraint / outcome. Orthogonal to layer_tag (domain
+   *  category) + source (provenance). Optional + back-compat — pre-
+   *  taxonomy rows are simply un-classified and group under "Other".
+   *  Set explicitly when the user coins a term; LLM-generated rows
+   *  default to null until the next regenerate fills them. */
+  kind?: GlossaryKind | null;
   updated_at: string;
 }
 

@@ -23,6 +23,7 @@ import {
 } from "tldraw";
 import { Loader2, Wand2, AlertCircle, SendHorizontal } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { TasteReceipt } from "@/components/objective/canvas-interactions/taste-receipt";
 
 export const PROTOTYPE_REFINE_EVENT = "objective-board:prototype-refine";
 
@@ -169,6 +170,15 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
           )}
         </div>
 
+        {/* Taste receipt — which terms / source images the prototype honors.
+            Scans the title only (the body is sanitized HTML; scanning code
+            would false-match). Self-renders only when there are hits. */}
+        {status === "ready" && (
+          <div onPointerDown={stopEventPropagation} style={{ padding: "0 12px" }}>
+            <PrototypeTasteReceipt text={title} />
+          </div>
+        )}
+
         {/* Body — the live prototype, a skeleton, or an error. */}
         <div style={{ position: "relative", flex: 1, minHeight: 0, background: "#fff" }}>
           {status === "ready" && html ? (
@@ -279,4 +289,15 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
       </div>
     </HTMLContainer>
   );
+}
+
+/** Same wrapper pattern as the oc-card mount — resolves spaceId from
+ *  the board URL; renders the receipt strip and hides off-board. */
+function PrototypeTasteReceipt({ text }: { text: string }) {
+  const spaceId =
+    typeof window !== "undefined"
+      ? window.location.pathname.match(/\/objective\/([^/?#]+)/)?.[1] ?? null
+      : null;
+  if (!spaceId) return null;
+  return <TasteReceipt text={text} spaceId={spaceId} variant="strip" />;
 }
