@@ -2282,7 +2282,10 @@ export function LibraryLauncher({ spaceId, editor }: { spaceId: string; editor: 
 // unified top-right pill bar (BoardTopRightBar at top:16, ~36px tall + chrome).
 // 72px = 16 (bar top) + ~36 (bar) + 20 (visible gap so the pill bar reads as
 // its own object). Bumped from 64 so the pill bar is unambiguously above.
-const RAIL_TOP = 72;
+// Bumped from 72 → 96 after a screenshot showed ~20px clearance still read as
+// "overlapping" — 96 = bar top (16) + bar (~36) + 44px of empty space, so the
+// pill bar visibly sits on its own row above any rail.
+const RAIL_TOP = 96;
 // Side-by-side detail fork rail — sits to the LEFT of the catalog rail. Same
 // height + chrome as railStyle, offset so neither obscures the other and
 // neither covers the top pill bar.

@@ -1178,9 +1178,9 @@ export function ObjectDetailMount({ spaceId, editor }: { spaceId: string; editor
 const rail: CSSProperties = {
   position: "fixed",
   // Clear the unified top-right pill bar (BoardTopRightBar lives at top:16,
-  // ~32-38px tall) so this drawer never paints over the menu pills. Matches
-  // the Library rail's `top: 64` so all floating rails align.
-  top: 64,
+  // ~32-38px tall) plus a visible breathing-room gap so the bar reads as its
+  // own row above this drawer. Matches the Library rail's RAIL_TOP=96.
+  top: 96,
   right: 16,
   bottom: 16,
   zIndex: 90,
