@@ -15,22 +15,38 @@ import { LandingV2Mount } from "@/components/landing/landing-v2-mount";
 import { getTemplate } from "@/lib/use-cases/library";
 import { getAuthUser } from "@/lib/supabase/server";
 
-// Curated swarm — pulls live data from the template library so the cards never
-// drift from the real templates. ORDER MATTERS: the landing maps each id to a
-// fixed floating anchor by index (see FLOATING_ANCHORS in landing-v2), so this
-// order IS the on-screen composition (L-top, R-top, L-mid-back, L-mid-front,
-// R-mid, L-bottom, R-bottom).
-const CAROUSEL_IDS = [
-  "journal_self_discovery", // L · top
-  "startup_strategy",       // R · top
-  "relationship_dynamics",  // L · mid (sits BEHIND research — the depth card)
-  "research_project",       // L · mid (front, overlaps the depth card)
-  "reading_synthesis",      // R · mid
-  "team_retro",             // L · bottom
-  "career_pivot",           // R · bottom
+// Curated swarm. ORDER MATTERS: the landing maps each card to a fixed floating
+// anchor by index (see FLOATING_ANCHORS in landing-v2), so this order IS the
+// on-screen composition. Most entries pull live data from the template library;
+// "product_development" is a SYNTHETIC marketing card (no backing template) —
+// clicking it stashes a free-text "create" intake instead (handled in landing-v2).
+const SWARM_ORDER = [
+  "journal_self_discovery", // 0 · L top
+  "startup_strategy",       // 1 · R top
+  "relationship_dynamics",  // 2 · L mid — BEHIND research (depth card)
+  "research_project",       // 3 · L mid — front, overlaps the depth card
+  "product_development",    // 4 · R mid — BEHIND reading (depth card) · SYNTHETIC
+  "reading_synthesis",      // 5 · R mid — front, overlaps the depth card
+  "team_retro",             // 6 · L bottom
+  "career_pivot",           // 7 · R bottom
 ] as const;
+
 const LABEL_OVERRIDES: Record<string, string> = {
   team_retro: "Team Retrospective",
+};
+
+// Synthetic cards that aren't backed by a template-library entry. Kept here so
+// the swarm can emphasise a use-case (product development) without forcing a
+// full template definition. `id` is matched in landing-v2's click handler.
+const SYNTHETIC_CARDS: Record<string, LandingCard> = {
+  product_development: {
+    id: "product_development",
+    name: "Product Development",
+    tagline: "Take a feature from idea to shipped — map the whole build",
+    category: "professional",
+    accent: "#0B0B0C",
+    bannerAccent: "#0ea5e9", // sky — distinct from the other professional cards
+  },
 };
 
 export default async function LandingPage() {
@@ -39,7 +55,9 @@ export default async function LandingPage() {
     redirect("/app");
   }
 
-  const cards = CAROUSEL_IDS.map((id): LandingCard | null => {
+  const cards = SWARM_ORDER.map((id): LandingCard | null => {
+    const synthetic = SYNTHETIC_CARDS[id];
+    if (synthetic) return synthetic;
     const t = getTemplate(id);
     if (!t) return null;
     return {

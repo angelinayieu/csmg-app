@@ -146,4 +146,18 @@ export const TEMPLATE_META: Record<string, TemplateMeta> = {
       { label: "Action Plan", icon: ClipboardList },
     ],
   },
+  product_development: {
+    inputs: [
+      { label: "Specs", icon: FileText },
+      { label: "Tickets", icon: Ticket },
+      { label: "Notes", icon: NotesIcon },
+      { label: "Links", icon: LinksIcon },
+    ],
+    outputs: [
+      { label: "Build Map", icon: MapIcon },
+      { label: "Spec Brief", icon: FileText },
+      { label: "Milestones", icon: ClipboardList },
+      { label: "Risk List", icon: Grid3x3 },
+    ],
+  },
 };

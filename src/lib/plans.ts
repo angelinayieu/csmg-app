@@ -115,8 +115,15 @@ export interface TopupPack {
   popular?: boolean;
 }
 
+// Volume-discount ladder shown on the pricing page. The picker lets users
+// step up the credit count; the per-credit price drops at each tier so the
+// savings vs. the 10-pack baseline ($0.50/credit) reads cleanly. Pack ids
+// MUST stay in sync with CREDIT_PACKS in stripe.ts (server-validated).
 export const TOPUP_PACKS: TopupPack[] = [
-  { id: "pack_10", name: "Starter", credits: 10, priceLabel: "$5", perCredit: "$0.50" },
-  { id: "pack_30", name: "Explorer", credits: 30, priceLabel: "$12", perCredit: "$0.40", popular: true },
-  { id: "pack_100", name: "Pro", credits: 100, priceLabel: "$35", perCredit: "$0.35" },
+  { id: "pack_10", name: "10 credits", credits: 10, priceLabel: "$5", perCredit: "$0.50" },
+  { id: "pack_25", name: "25 credits", credits: 25, priceLabel: "$11.25", perCredit: "$0.45" },
+  { id: "pack_50", name: "50 credits", credits: 50, priceLabel: "$20", perCredit: "$0.40" },
+  { id: "pack_100", name: "100 credits", credits: 100, priceLabel: "$35", perCredit: "$0.35", popular: true },
+  { id: "pack_250", name: "250 credits", credits: 250, priceLabel: "$75", perCredit: "$0.30" },
+  { id: "pack_500", name: "500 credits", credits: 500, priceLabel: "$125", perCredit: "$0.25" },
 ];

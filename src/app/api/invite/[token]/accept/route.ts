@@ -37,20 +37,24 @@ export async function POST(
   if (new Date(invite.expires_at).getTime() < Date.now())
     return NextResponse.json({ error: "This invite has expired." }, { status: 410 });
 
-  // Email-match gate (anti-forwarding). Owner-invited email must equal the
-  // signed-in account's email.
-  const myEmail = (user.email ?? "").toLowerCase();
-  if (
-    myEmail &&
-    String(invite.invitee_email).toLowerCase() !== myEmail
-  ) {
-    return NextResponse.json(
-      {
-        error:
-          "This invite was sent to a different email. Sign in with the invited address to accept.",
-      },
-      { status: 403 },
-    );
+  // Email-match gate (anti-forwarding) — only enforced for invites that
+  // were sent to a SPECIFIC address. Open-link invites (invitee_email null,
+  // minted by /share-link) deliberately skip this so anyone signed in who
+  // has the link may accept. See [[project_collaborative_whiteboard]].
+  if (invite.invitee_email) {
+    const myEmail = (user.email ?? "").toLowerCase();
+    if (
+      myEmail &&
+      String(invite.invitee_email).toLowerCase() !== myEmail
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "This invite was sent to a different email. Sign in with the invited address to accept.",
+        },
+        { status: 403 },
+      );
+    }
   }
 
   // Owner accepting their own invite is a no-op (they already have access).

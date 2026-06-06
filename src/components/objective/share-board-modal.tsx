@@ -109,6 +109,7 @@ function ShareModal({
   } | null>(null);
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [boardLinkBusy, setBoardLinkBusy] = useState(false);
 
   // The portal target. SSR-safe: we only render once mounted on the client.
   const portalTarget = useMemo(
@@ -201,6 +202,45 @@ function ShareModal({
     void navigator.clipboard?.writeText(url);
     setCopiedKey(key);
     setTimeout(() => setCopiedKey((c) => (c === key ? null : c)), 1500);
+  }
+
+  // "Copy board link" mints (or reuses) an OPEN invite at the current
+  // role and copies the resulting /invite/[token] URL. Copying
+  // window.location.href grants no access — the recipient lands on a
+  // blank board because spaces / objective_boards RLS is member-scoped.
+  // The share-link endpoint is idempotent per (space, role) so the URL
+  // is stable across clicks. See [[project_collaborative_whiteboard]].
+  async function copyBoardLink() {
+    if (boardLinkBusy) return;
+    setBoardLinkBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/objective/${spaceId}/share-link`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        invite_url?: string;
+        error?: string;
+      };
+      if (!res.ok || !json.ok || !json.invite_url) {
+        setNotice({
+          kind: "error",
+          text: json.error ?? `Could not create link (${res.status}).`,
+        });
+        return;
+      }
+      copy("board-link", `${window.location.origin}${json.invite_url}`);
+    } catch (err) {
+      setNotice({
+        kind: "error",
+        text: err instanceof Error ? err.message : "Network error.",
+      });
+    } finally {
+      setBoardLinkBusy(false);
+    }
   }
 
   const memberCount =
@@ -341,7 +381,9 @@ function ShareModal({
             gap: 14,
           }}
         >
-          {isOwner ? (
+          {data === null ? (
+            <InviteFormSkeleton />
+          ) : isOwner ? (
             <form
               onSubmit={invite}
               style={{ display: "flex", flexDirection: "column", gap: 10 }}
@@ -419,12 +461,12 @@ function ShareModal({
                 </button>
               </div>
 
-              {/* Sharable link — always available, second-tier action. */}
+              {/* Sharable link — mints (or reuses) an OPEN-link invite
+                  at the current role so the URL actually grants access. */}
               <CopyLinkRow
-                onCopy={() =>
-                  copy("board-link", window.location.href)
-                }
+                onCopy={copyBoardLink}
                 copied={copiedKey === "board-link"}
+                busy={boardLinkBusy}
               />
             </form>
           ) : (
@@ -559,14 +601,17 @@ function RoleSegmented({
 function CopyLinkRow({
   onCopy,
   copied,
+  busy = false,
 }: {
   onCopy: () => void;
   copied: boolean;
+  busy?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onCopy}
+      disabled={busy}
       style={{
         display: "flex",
         alignItems: "center",
@@ -576,13 +621,14 @@ function CopyLinkRow({
         borderRadius: 12,
         border: `1px solid ${appleVibe.stroke.hairline}`,
         background: "#fff",
-        cursor: "pointer",
+        cursor: busy ? "default" : "pointer",
+        opacity: busy ? 0.65 : 1,
         fontFamily: appleVibe.font.stack,
         textAlign: "left",
         transition: "background 0.15s ease, border-color 0.15s ease",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = appleVibe.surface.chip;
+        if (!busy) e.currentTarget.style.background = appleVibe.surface.chip;
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.background = "#fff";
@@ -640,6 +686,8 @@ function CopyLinkRow({
             <Check className="h-3.5 w-3.5" strokeWidth={2.4} />
             Copied
           </>
+        ) : busy ? (
+          "Preparing…"
         ) : (
           <>
             <Copy className="h-3.5 w-3.5" strokeWidth={2.2} />
@@ -885,6 +933,25 @@ function RosterRow({
         )}
       </div>
     </div>
+  );
+}
+
+function InviteFormSkeleton() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: 6,
+        borderRadius: 14,
+        background: appleVibe.surface.chip,
+        border: `1px solid ${appleVibe.stroke.hairline}`,
+        opacity: 0.55,
+        height: 44,
+      }}
+      aria-hidden="true"
+    />
   );
 }
 

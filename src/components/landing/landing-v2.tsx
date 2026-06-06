@@ -17,6 +17,7 @@
 //     resumes the exact same intake,
 //   • "start" just opens signup.
 
+import { useState } from "react";
 import dynamic from "next/dynamic";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { stashPendingIntake } from "@/components/landing/pending-intake";
@@ -24,7 +25,16 @@ import { AuthModal } from "@/components/auth/auth-modal";
 import { StarburstSVG } from "@/components/landing/starburst-svg";
 import { CardIcon } from "@/components/landing/card-icon";
 import { TEMPLATE_META } from "@/components/landing/template-meta";
-import { InterAxisLogo } from "@/components/brand/interaxis-logo";
+import { LandingHeader } from "@/components/landing/landing-header";
+import {
+  NotesIcon,
+  VoiceIcon,
+  PhotosIcon,
+  PdfIcon,
+  LinksIcon,
+  DatasetsIcon,
+  type LandingIcon,
+} from "@/components/landing/landing-icons";
 
 // 3D hero node — code-split off the initial bundle (three.js is heavy) and
 // client-only. The flat SVG is the instant loading state + the graceful
@@ -46,22 +56,20 @@ export interface LandingCard {
   bannerAccent?: string;
 }
 
-const NAV = ["Plans", "About"];
-
 const INK = "#0B0B0C"; // cold near-black — landing is monochrome, do NOT warm
 
-// ── Floating-card anchors ── positions for the 7-card swarm, expressed as
+// ── Floating-card anchors ── positions for the 8-card swarm, expressed as
 // percentages of a CENTRED max-width band (not the raw viewport) so the cards
 // hug the hero on ultrawide screens instead of flinging to a lonely moat.
 //
-// Index maps 1:1 to the server's CAROUSEL_IDS order. The composition mirrors
-// the reference: lead cards top-left/right, an overlapping pair mid-left (a
-// faded "depth" card BEHIND the research card), and a lower row.
+// Index maps 1:1 to the server's SWARM_ORDER. The composition is a balanced,
+// MIRRORED scatter: lead cards top-L/R, a mid overlap PAIR on each side (a
+// faded "depth" card behind a front card), and a bottom-L/R row.
 //
 // Design rules: every card lives in the LEFT/RIGHT gutter (never the centre
 // column where the hero lives); a per-card base `rot` tilt + slight edge-bleed
-// make it read as dropped-on-a-canvas; one card is `depth` (faded, scaled
-// back, lower z) so the stack has real dimension.
+// make it read as dropped-on-a-canvas; the `depth` cards (faded, scaled back,
+// lower z) give the stacks real dimension.
 type Anchor = {
   top: string;
   left?: string;
@@ -69,17 +77,24 @@ type Anchor = {
   rot: number;
   z: number;
   drift: number;
+  /** Base size multiplier — varies the cards so the swarm isn't uniform.
+   *  Product Development is the largest (it's the emphasised card). */
+  scale?: number;
   /** Faded card that sits behind its neighbour for depth. */
   depth?: boolean;
 };
+// A 3-band scatter (top corners · mid overlap-pairs · a lower row pulled IN
+// toward the centre) so it reads less like two saturated side columns and the
+// space BELOW the hero gets used. Sizes vary; Product Development is biggest.
 const FLOATING_ANCHORS: Anchor[] = [
-  { top: "12%", left: "-1%", rot: -4, z: 2, drift: 1 }, // 0 · L top   — Self-Discovery
-  { top: "13%", right: "-1%", rot: 4, z: 2, drift: 2 }, // 1 · R top   — Startup Strategy
-  { top: "37%", left: "8%", rot: -6, z: 1, drift: 6, depth: true }, // 2 · L mid (BEHIND) — Relationship Dynamics
-  { top: "43%", left: "-1%", rot: 3, z: 3, drift: 3 }, // 3 · L mid (FRONT) — Research Project
-  { top: "40%", right: "0%", rot: -3, z: 2, drift: 4 }, // 4 · R mid   — Reading Notes
-  { top: "69%", left: "2%", rot: 4, z: 2, drift: 5 }, // 5 · L bottom — Team Retrospective
-  { top: "69%", right: "1%", rot: -5, z: 2, drift: 7 }, // 6 · R bottom — Career Pivot
+  { top: "9%", left: "-2%", rot: -4, z: 2, drift: 1, scale: 0.98 }, // 0 · L top — Self-Discovery
+  { top: "8%", right: "-2%", rot: 4, z: 2, drift: 2, scale: 1.0 }, // 1 · R top — Startup Strategy
+  { top: "36%", left: "7%", rot: -6, z: 1, drift: 6, scale: 0.82, depth: true }, // 2 · L mid BEHIND — Relationship Dynamics
+  { top: "43%", left: "-3%", rot: 3, z: 3, drift: 3, scale: 1.0 }, // 3 · L mid FRONT — Research Project
+  { top: "30%", right: "-3%", rot: 5, z: 3, drift: 7, scale: 1.2 }, // 4 · R mid FRONT — Product Development (BIG · emphasised)
+  { top: "41%", right: "9%", rot: -4, z: 1, drift: 4, scale: 0.82, depth: true }, // 5 · R mid BEHIND — Reading Notes (depth)
+  { top: "74%", left: "21%", rot: 4, z: 2, drift: 5, scale: 0.9 }, // 6 · lower-centre-left — Team Retrospective
+  { top: "76%", right: "18%", rot: -5, z: 2, drift: 1, scale: 0.88 }, // 7 · lower-centre-right — Career Pivot
 ];
 
 /** Open the hash-driven AuthModal (mounted below) on signup. */
@@ -87,23 +102,121 @@ function openSignup() {
   if (typeof window !== "undefined") window.location.hash = "signup";
 }
 
-/** Inline panel/sidebar glyph for the glass nav (matches the app toolbar). */
-function PanelIcon() {
+/** Real Google Drive mark — the one live integration the hero touts, so the
+ *  "bring data from anywhere" arc has a recognisable anchor among the
+ *  content-type sources. */
+function GoogleDriveMark() {
   return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="2.2" y="3.2" width="11.6" height="9.6" rx="2.2" stroke="currentColor" strokeWidth="1.3" />
-      <line x1="6.4" y1="3.4" x2="6.4" y2="12.6" stroke="currentColor" strokeWidth="1.3" />
+    <svg width="26" height="26" viewBox="0 0 87.3 78" aria-hidden>
+      <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da" />
+      <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0 -1.2 4.5h27.5z" fill="#00ac47" />
+      <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335" />
+      <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d" />
+      <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc" />
+      <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00" />
     </svg>
   );
 }
 
-/** Inline search glyph for the glass nav. */
-function SearchIcon() {
+// The input vocabulary surfaced in the bottom "bring data from anywhere" arc —
+// the real content types you can feed in + the live Drive integration. Each
+// gets a distinct colour so the fan reads as vivid as the reference (whose
+// punch comes from varied brand logos) while staying honest to OUR inputs.
+type Source =
+  | { label: string; color: string; icon: LandingIcon }
+  | { label: string; drive: true };
+const SOURCES: Source[] = [
+  { label: "Photos", color: "#db2777", icon: PhotosIcon },
+  { label: "Voice", color: "#7c3aed", icon: VoiceIcon },
+  { label: "Web", color: "#0891b2", icon: LinksIcon },
+  { label: "Drive", drive: true }, // centre · real Google Drive logo
+  { label: "PDFs", color: "#dc2626", icon: PdfIcon },
+  { label: "Notes", color: "#d97706", icon: NotesIcon },
+  { label: "Data", color: "#2563eb", icon: DatasetsIcon },
+];
+
+/** Bottom section — a fanned arc of input-source tiles over concentric ripple
+ *  arcs, with a connector dropping from the swarm above. Communicates "feed it
+ *  anything", echoing the reference's "connect data from anywhere" panel. */
+function ConnectSources() {
+  const mid = (SOURCES.length - 1) / 2;
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <circle cx="7" cy="7" r="4.1" stroke="currentColor" strokeWidth="1.4" />
-      <line x1="10.1" y1="10.1" x2="13.5" y2="13.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
+    <section className="relative z-10 px-6 pb-20 pt-0">
+      {/* Connector dropping in from the swarm/hero above. */}
+      <div className="mx-auto h-7 w-px" style={{ background: "linear-gradient(to bottom, rgba(15,23,42,0) 0%, rgba(15,23,42,0.18) 100%)" }} />
+      <div className="mx-auto -mt-px mb-5 h-1.5 w-1.5 rounded-full" style={{ background: "rgba(15,23,42,0.45)" }} />
+
+      {/* Arc of source tiles, sitting on faint concentric ripples. */}
+      <div className="relative mx-auto flex h-[150px] max-w-[680px] items-end justify-center">
+        {/* Ripple arcs — concentric ellipses whose crests peek behind the fan. */}
+        <svg
+          aria-hidden
+          viewBox="0 0 680 320"
+          preserveAspectRatio="xMidYMax meet"
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-[300px] w-full"
+        >
+          {[120, 200, 280, 360].map((r, i) => (
+            <ellipse
+              key={r}
+              cx={340}
+              cy={330}
+              rx={r}
+              ry={r * 0.62}
+              fill="none"
+              stroke="rgba(15,23,42,0.12)"
+              strokeWidth={1.2}
+              style={{ opacity: 0.9 - i * 0.18 }}
+            />
+          ))}
+        </svg>
+
+        {/* The fan — each tile rides a dome (centre highest) + tilts outward. */}
+        <div className="relative flex items-end gap-2.5 sm:gap-4">
+          {SOURCES.map((s, i) => {
+            const t = (i - mid) / mid; // -1 … 1
+            const dome = -40 * (1 - t * t); // px, centre most-lifted
+            const rot = t * 15;
+            const isCentre = i === mid;
+            return (
+              <div
+                key={s.label}
+                className="flex flex-col items-center"
+                style={{ transform: `translateY(${dome}px)` }}
+              >
+                <div
+                  className="flex items-center justify-center rounded-[18px] bg-white ring-1 ring-black/[0.05] shadow-[0_8px_22px_-10px_rgba(11,18,40,0.3),inset_0_1px_0_rgba(255,255,255,0.9)]"
+                  style={{
+                    width: isCentre ? 64 : 56,
+                    height: isCentre ? 64 : 56,
+                    transform: `rotate(${rot}deg)`,
+                  }}
+                >
+                  {"drive" in s ? (
+                    <GoogleDriveMark />
+                  ) : (
+                    <s.icon className="h-7 w-7" style={{ color: s.color }} strokeWidth={2} />
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Copy. */}
+      <div className="relative mx-auto mt-8 max-w-[560px] text-center">
+        <h2
+          className="text-[clamp(24px,3vw,34px)] font-extrabold leading-[1.06]"
+          style={{ color: INK, fontFamily: appleVibe.font.display, letterSpacing: "-0.02em" }}
+        >
+          Bring data from anywhere
+        </h2>
+        <p className="mx-auto mt-2.5 max-w-[460px] text-[14.5px] leading-relaxed" style={{ color: appleVibe.text.tertiary }}>
+          Notes, files, photos, voice, the web, and your Google&nbsp;Drive — drop it in and akiboe weaves it
+          into one living map.
+        </p>
+      </div>
+    </section>
   );
 }
 
@@ -139,7 +252,7 @@ function SwarmCard({
         top: anchor.top,
         left: anchor.left,
         right: anchor.right,
-        transform: `rotate(${anchor.rot}deg)${anchor.depth ? " scale(0.92)" : ""}`,
+        transform: `rotate(${anchor.rot}deg) scale(${anchor.scale ?? 1})`,
         zIndex: anchor.z,
       }}
     >
@@ -253,23 +366,46 @@ export function LandingV2({
   /** "flat" = solid #F7F8FA. "whiteboard" = adds the faint tldraw dot grid. */
   surface?: "flat" | "whiteboard";
 }) {
+  // "start" drops you onto a whiteboard compose bar in place; typing + Enter
+  // stashes a free-text "create" intake and opens signup — after auth /app
+  // resumes it on a real board.
+  const [composing, setComposing] = useState(false);
+  const [prompt, setPrompt] = useState("");
+
   function pickTemplate(id: string) {
-    stashPendingIntake({ kind: "template", templateId: id });
+    if (id === "product_development") {
+      // Synthetic card — no backing template, so seed a free-text intake.
+      stashPendingIntake({
+        kind: "create",
+        prompt:
+          "Help me develop my product: map the build from idea to shipped — discovery, design, engineering, release, and the feedback loops between them.",
+        depth: "standard",
+      });
+    } else {
+      stashPendingIntake({ kind: "template", templateId: id });
+    }
+    openSignup();
+  }
+
+  function submitPrompt() {
+    const text = prompt.trim();
+    if (!text) return;
+    stashPendingIntake({ kind: "create", prompt: text, depth: "standard" });
     openSignup();
   }
 
   return (
     <div
-      className="relative flex min-h-screen flex-col overflow-hidden"
+      className="relative flex min-h-screen flex-col overflow-x-hidden"
       style={{
         background: "#F7F8FA",
-        // Soft white radial glow lifting the centre hero, over a FAINT dot grid
-        // (lightened so the cards + hero are the focus, not the texture).
+        // Faint tldraw dot grid spanning the WHOLE page (the hero glow lives on
+        // the hero stage below so it tracks the hero, not the taller page).
         backgroundImage:
           surface === "whiteboard"
-            ? "radial-gradient(56% 48% at 50% 42%, rgba(255,255,255,0.96) 0%, rgba(255,255,255,0) 72%), radial-gradient(circle, rgba(15,23,42,0.06) 1.1px, transparent 1.5px)"
-            : "radial-gradient(56% 48% at 50% 42%, rgba(255,255,255,0.96) 0%, rgba(255,255,255,0) 72%)",
-        backgroundSize: surface === "whiteboard" ? "100% 100%, 26px 26px" : "100% 100%",
+            ? "radial-gradient(circle, rgba(15,23,42,0.06) 1.1px, transparent 1.5px)"
+            : undefined,
+        backgroundSize: surface === "whiteboard" ? "26px 26px" : undefined,
         fontFamily: appleVibe.font.stack,
       }}
     >
@@ -311,43 +447,29 @@ export function LandingV2({
         }}
       />
 
-      {/* ── Header — centred wordmark + glass pill nav (z-30, above the swarm) ── */}
-      <header className="relative z-30 flex flex-col items-center gap-3 px-6 pt-6">
-        <InterAxisLogo variant="lockup" theme="light" size={24} />
-        <nav className="flex items-center gap-1 rounded-full border border-black/[0.06] bg-white/70 p-1 pl-1.5 shadow-[0_10px_30px_-14px_rgba(11,18,40,0.28),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-xl">
-          <span
-            aria-hidden
-            className="flex h-7 w-7 items-center justify-center rounded-full"
-            style={{ color: appleVibe.text.faint }}
-          >
-            <PanelIcon />
-          </span>
-          {NAV.map((item, i) => {
-            const isPlans = item === "Plans";
-            return (
-              <a
-                key={item}
-                href={isPlans ? "/pricing" : "#"}
-                onClick={isPlans ? undefined : (e) => e.preventDefault()}
-                className="rounded-full px-3.5 py-1.5 text-[13px] font-medium transition-colors hover:bg-black/[0.04]"
-                style={{ color: INK, background: i === 0 ? "rgba(15,23,42,0.05)" : undefined }}
-              >
-                {item}
-              </a>
-            );
-          })}
-          <span
-            aria-hidden
-            className="flex h-7 w-7 items-center justify-center rounded-full"
-            style={{ color: appleVibe.text.faint }}
-          >
-            <SearchIcon />
-          </span>
-        </nav>
-      </header>
+      {/* ── Hero stage ── holds the header + hero + swarm. Scoped (not the whole
+          page) so the swarm's `inset-0` covers only this screen and the glow
+          tracks the hero. Slightly under one viewport (88vh) so the "bring data"
+          section peeks up sooner instead of sitting a full screen down. */}
+      <div
+        className="relative flex min-h-[88vh] flex-col overflow-hidden"
+        style={{
+          backgroundImage:
+            "radial-gradient(56% 48% at 50% 42%, rgba(255,255,255,0.96) 0%, rgba(255,255,255,0) 72%)",
+        }}
+      >
+      <LandingHeader
+        active="Home"
+        subtitle="#1 AI whiteboard space to improve quality of thought"
+      />
 
-      {/* ── Hero (z-10, protected centre column) ── */}
-      <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pb-2">
+      {/* ── Hero (centre column). Rises ABOVE the swarm while composing so the
+          whiteboard input is never occluded by the floating cards. ── */}
+      <main
+        className={`relative flex flex-1 flex-col items-center justify-center px-6 pb-2 ${
+          composing ? "z-40" : "z-10"
+        }`}
+      >
         <h1
           className="text-center text-[clamp(34px,4.8vw,54px)] font-extrabold leading-[1.02]"
           style={{ fontFamily: appleVibe.font.display, letterSpacing: "-0.025em" }}
@@ -364,27 +486,89 @@ export function LandingV2({
           className="text-center text-[clamp(34px,4.8vw,54px)] font-extrabold leading-[1.02]"
           style={{ color: INK, fontFamily: appleVibe.font.display, letterSpacing: "-0.025em" }}
         >
-          <span style={{ color: appleVibe.text.faint }}>to</span> <span style={{ color: INK }}>value asap</span>
+          <span style={{ color: appleVibe.text.faint }}>to</span>{" "}
+          <span style={{ color: INK }}>
+            value{" "}
+            <span
+              className="underline decoration-[3px] underline-offset-[7px]"
+              style={{ textDecorationColor: "#C2593B" }}
+            >
+              asap
+            </span>
+          </span>
           <span style={{ color: "#C2593B" }}>.</span>
         </h1>
 
-        <button
-          type="button"
-          onClick={openSignup}
-          className="start-cta mt-7 inline-flex items-center gap-2.5 rounded-full px-10 py-3 text-[16px] font-semibold text-white"
-        >
-          start
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-            <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
+        {!composing ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setComposing(true)}
+              className="start-cta mt-7 inline-flex items-center gap-2.5 rounded-full px-10 py-3 text-[16px] font-semibold text-white"
+            >
+              start
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+                <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
 
-        <div className="mt-3.5 text-[12.5px] tracking-[0.06em]" style={{ color: appleVibe.text.faint }}>
-          <span className="font-normal">sync</span>{" "}
-          <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>tabs</span>{" "}
-          <span className="font-normal">and</span>{" "}
-          <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>google drive</span>
-        </div>
+            <div className="mt-3.5 text-[12.5px] tracking-[0.06em]" style={{ color: appleVibe.text.faint }}>
+              <span className="font-normal">sync</span>{" "}
+              <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>tabs</span>{" "}
+              <span className="font-normal">and</span>{" "}
+              <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>google drive</span>
+            </div>
+          </>
+        ) : (
+          // Whiteboard compose bar — typing here + Enter stashes the idea and
+          // opens signup (you "save your board" by signing in).
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitPrompt();
+            }}
+            className="mt-7 w-full max-w-[520px]"
+          >
+            <div className="flex items-center gap-2 rounded-full border border-black/[0.07] bg-white px-2.5 py-2 shadow-[0_22px_50px_-24px_rgba(11,18,40,0.45),inset_0_1px_0_rgba(255,255,255,0.9)]">
+              <span
+                aria-hidden
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full"
+                style={{ color: appleVibe.text.faint }}
+              >
+                <svg width="17" height="17" viewBox="0 0 20 20" fill="none">
+                  <path
+                    d="M14.5 6.5 8.7 12.3a2 2 0 0 0 2.8 2.8l5.3-5.3a3.6 3.6 0 0 0-5-5l-6 6a5.2 5.2 0 0 0 7.4 7.4l4.3-4.3"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </span>
+              <input
+                autoFocus
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Type an idea, question, or research goal…"
+                className="min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-slate-400"
+                style={{ color: INK }}
+              />
+              <button
+                type="submit"
+                aria-label="Start"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-transform hover:scale-105 active:scale-95"
+                style={{ background: INK }}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+                  <path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="mt-3 text-center text-[12px]" style={{ color: appleVibe.text.faint }}>
+              press <span className="font-semibold" style={{ color: appleVibe.text.tertiary }}>enter</span> — you&apos;ll sign in to save your board
+            </div>
+          </form>
+        )}
       </main>
 
       {/* ── Floating template swarm ──
@@ -393,7 +577,11 @@ export function LandingV2({
           cards opt back in, so the centred CTA stays clickable straight through.
           Cards live inside a centred max-width band so they hug the hero on
           wide monitors instead of drifting to the edges. */}
-      <div className="pointer-events-none absolute inset-0 z-20 flex justify-center px-4">
+      <div
+        className={`pointer-events-none absolute inset-0 z-20 flex justify-center px-4 transition-opacity duration-500 ${
+          composing ? "opacity-20" : "opacity-100"
+        }`}
+      >
         <div className="relative h-full w-full max-w-[1200px]">
           {cards.map((card, i) => (
             <SwarmCard
@@ -405,6 +593,11 @@ export function LandingV2({
           ))}
         </div>
       </div>
+      </div>
+      {/* ── End hero stage ── */}
+
+      {/* ── Bottom: bring data from anywhere (input sources) ── */}
+      <ConnectSources />
 
       {/* Hash-driven signup/login popover — #signup / #signin open it. */}
       <AuthModal />

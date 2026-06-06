@@ -15,8 +15,17 @@
 // overlaps when one opens. Shared open state (board-panel-signal) lights up
 // each trigger while its panel is live and routes the panel's own close ✕.
 
-import { type CSSProperties, useEffect, useRef, useState } from "react";
-import { Sparkle, Library as LibraryIcon, Palette, Users } from "lucide-react";
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+import {
+  Sparkle,
+  Library as LibraryIcon,
+  Palette,
+  Trophy,
+  Sparkles as IdeasIcon,
+  Star,
+  Zap,
+} from "lucide-react";
+import type { LeaderboardResponse } from "@/app/api/objective/[spaceId]/leaderboard/route";
 import type { Editor } from "tldraw";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type { BoardSaveStatus } from "@/components/objective/use-objective-board-persistence";
@@ -28,7 +37,11 @@ import { AiSettingsBar } from "./ai-settings-bar";
 import { PowerupRail } from "./powerup-rail";
 import { LibraryLauncher } from "./library-rail";
 import { ShareBoardLauncher } from "../share-board-modal";
-import { usePanel, togglePanel } from "@/lib/objective-canvas/board-panel-signal";
+import {
+  usePanel,
+  togglePanel,
+  setPanel,
+} from "@/lib/objective-canvas/board-panel-signal";
 
 function saveColor(s: BoardSaveStatus): string {
   return s === "error" ? "#DC2626" : s === "saving" ? "#F59E0B" : "#16A34A";
@@ -58,10 +71,12 @@ export function BoardTopRightBar({
     <>
       <div onPointerDown={(e) => e.stopPropagation()} style={bar}>
         {/* Live collaborators — who else is on the board now. Avatar stack
-            doubles as a Miro-style people button: click to see the roster. */}
+            doubles as a Miro-style people button: click to see the roster +
+            a contributions leaderboard. */}
         {selfIdentity && (
           <>
             <PeoplePopover
+              spaceId={spaceId}
               collaborators={collaborators}
               selfIdentity={selfIdentity}
             />
@@ -141,20 +156,52 @@ export function BoardTopRightBar({
 
 // ── People popover ────────────────────────────────────────────────
 //
-// Miro-style avatar stack + click-to-open roster. Shows You first, then
-// every other live participant with their cursor color, name, and role.
-// Closes on outside-click + Esc. Anchored below the bar, like the AI
-// settings popover, so it never overlaps the row.
+// Miro-style avatar stack + click-to-open roster. The stack ALWAYS leads
+// with YOU (accent-ringed self avatar) so identity reads even when you're
+// solo; peers fan in to the right (-7px overlap, max 3 visible + "+N"
+// chip). Each peer carries a soft breathing green live-dot — the
+// "they're really here" signal that matches the cursor's bob/pulse on
+// the canvas. Two views inside: Roster (the list) ↔ Contributions
+// (leaderboard over library_objects via /api/objective/[id]/leaderboard).
+// See [[project_contributor_leaderboard]] + [[project_collaborative_whiteboard]].
 
 function PeoplePopover({
+  spaceId,
   collaborators,
   selfIdentity,
 }: {
+  spaceId: string;
   collaborators: BoardCollaborator[];
   selfIdentity: BoardIdentity;
 }) {
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState<"roster" | "leaderboard">("roster");
+  const [leaderboard, setLeaderboard] = useState<LeaderboardResponse | null>(
+    null,
+  );
+  const [loading, setLoading] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+
+  // Pull the leaderboard lazily — only when the user actually flips to it,
+  // and re-fetch each open so the rates stay fresh after a converge/publish.
+  const loadLeaderboard = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/objective/${spaceId}/leaderboard`, {
+        cache: "no-store",
+      });
+      if (res.ok) setLeaderboard((await res.json()) as LeaderboardResponse);
+    } catch {
+      /* soft-fail — empty state renders */
+    } finally {
+      setLoading(false);
+    }
+  }, [spaceId]);
+
+  useEffect(() => {
+    if (!open || view !== "leaderboard") return;
+    void loadLeaderboard();
+  }, [open, view, loadLeaderboard]);
 
   useEffect(() => {
     if (!open) return;
@@ -172,19 +219,22 @@ function PeoplePopover({
     };
   }, [open]);
 
-  const visible = collaborators.slice(0, 4);
-  const overflow = Math.max(0, collaborators.length - visible.length);
-  const total = collaborators.length + 1; // include self
+  // Up to 3 peer avatars (4 chips total with self); rest collapse to "+N".
+  const visiblePeers = collaborators.slice(0, 3);
+  const overflow = Math.max(0, collaborators.length - visiblePeers.length);
+  const total = collaborators.length + 1;
+  const title =
+    collaborators.length === 0
+      ? "Just you on this board"
+      : collaborators.length === 1
+        ? "1 other person here · click to see who"
+        : `${collaborators.length} others here · click to see who`;
 
   return (
     <div ref={wrapRef} style={{ position: "relative", display: "inline-flex" }}>
       <button
         type="button"
-        title={
-          collaborators.length === 0
-            ? "Just you on this board"
-            : `${total} people on this board`
-        }
+        title={title}
         aria-label="People on this board"
         aria-pressed={open}
         onClick={() => setOpen((v) => !v)}
@@ -192,58 +242,153 @@ function PeoplePopover({
         onMouseEnter={(e) => hoverIn(e, open)}
         onMouseLeave={(e) => hoverOut(e, open)}
       >
-        {collaborators.length === 0 ? (
-          <Users style={{ width: 14, height: 14 }} strokeWidth={2.2} />
-        ) : (
-          <span style={{ display: "inline-flex", alignItems: "center" }}>
-            {visible.map((c, i) => (
-              <span
-                key={c.clientId}
-                style={{ ...avatar, marginLeft: i === 0 ? 0 : -7, background: c.color }}
-              >
-                {(c.name || "?").trim().charAt(0)}
-              </span>
-            ))}
-            {overflow > 0 && (
-              <span
-                style={{
-                  ...avatar,
-                  marginLeft: -7,
-                  background: "var(--glass-float-bg)",
-                  color: appleVibe.text.secondary,
-                  border: "2px solid var(--glass-border)",
-                }}
-              >
-                +{overflow}
-              </span>
-            )}
-          </span>
-        )}
+        <span style={{ display: "inline-flex", alignItems: "center" }}>
+          {/* Self ALWAYS first — accent ring so "You" reads at a glance. */}
+          <AvatarChip
+            color={selfIdentity.color}
+            initial={(selfIdentity.name || "?").trim().charAt(0)}
+            self
+          />
+          {visiblePeers.map((c) => (
+            <AvatarChip
+              key={c.clientId}
+              color={c.color}
+              initial={(c.name || "?").trim().charAt(0)}
+              live
+            />
+          ))}
+          {overflow > 0 && (
+            <span
+              style={{
+                ...avatar,
+                marginLeft: -7,
+                background: "var(--glass-float-bg)",
+                color: appleVibe.text.secondary,
+                border: "2px solid var(--glass-border)",
+              }}
+            >
+              +{overflow}
+            </span>
+          )}
+        </span>
       </button>
 
       {open && (
         <div style={popover} onPointerDown={(e) => e.stopPropagation()}>
           <div style={popoverHeader}>
-            {collaborators.length === 0
-              ? "Just you on this board"
-              : `${total} on this board`}
+            <span style={liveDotInline} />
+            <span style={{ flex: 1 }}>
+              {collaborators.length === 0
+                ? "Just you here"
+                : `${total} on this board`}
+            </span>
           </div>
-          <PersonRow
-            color={selfIdentity.color}
-            name={`${selfIdentity.name} (You)`}
-            role={selfIdentity.role}
-          />
-          {collaborators.map((c) => (
-            <PersonRow
-              key={c.clientId}
-              color={c.color}
-              name={c.name || "Guest"}
-              role={c.role}
+
+          {/* Segmented toggle — Roster vs Contributions. */}
+          <div style={segmented}>
+            <button
+              type="button"
+              onClick={() => setView("roster")}
+              style={segBtn(view === "roster")}
+            >
+              Roster
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("leaderboard")}
+              style={segBtn(view === "leaderboard")}
+            >
+              <Trophy
+                style={{ width: 11, height: 11, marginRight: 4 }}
+                strokeWidth={2.4}
+              />
+              Contributions
+            </button>
+          </div>
+
+          {view === "roster" ? (
+            <>
+              <PersonRow
+                color={selfIdentity.color}
+                name={`${selfIdentity.name} (You)`}
+                role={selfIdentity.role}
+                self
+              />
+              {collaborators.map((c) => (
+                <PersonRow
+                  key={c.clientId}
+                  color={c.color}
+                  name={c.name || "Guest"}
+                  role={c.role}
+                />
+              ))}
+            </>
+          ) : (
+            <LeaderboardView
+              data={leaderboard}
+              loading={loading}
+              meUserId={selfIdentity.userId}
             />
-          ))}
+          )}
         </div>
       )}
+
+      {/* Scoped keyframes — the live-dot breathing pulse echoes the
+          cursor's bob/pulse so the bar + canvas read as one system. */}
+      <style>{`
+        @keyframes board-people-pulse {
+          0%, 100% { transform: scale(1);   opacity: 1; }
+          50%      { transform: scale(1.25); opacity: 0.65; }
+        }
+      `}</style>
     </div>
+  );
+}
+
+// Single avatar chip. `self` gets an accent ring; `live` gets a small
+// breathing green dot pinned to the bottom-right.
+function AvatarChip({
+  color,
+  initial,
+  self = false,
+  live = false,
+}: {
+  color: string;
+  initial: string;
+  self?: boolean;
+  live?: boolean;
+}) {
+  return (
+    <span
+      style={{
+        ...avatar,
+        marginLeft: self ? 0 : -7,
+        background: color,
+        position: "relative",
+        boxShadow: self
+          ? `0 0 0 2px var(--glass-float-bg), 0 0 0 3.5px ${appleVibe.accent.primary}`
+          : `0 0 0 2px var(--glass-float-bg)`,
+      }}
+    >
+      {initial}
+      {live && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            right: -1,
+            bottom: -1,
+            width: 7,
+            height: 7,
+            borderRadius: 999,
+            background: "#22C55E",
+            border: "1.5px solid var(--glass-float-bg)",
+            animation: "board-people-pulse 1.8s ease-in-out infinite",
+            transformOrigin: "center",
+          }}
+        />
+      )}
+    </span>
   );
 }
 
@@ -251,19 +396,191 @@ function PersonRow({
   color,
   name,
   role,
+  self = false,
 }: {
   color: string;
   name: string;
   role: BoardIdentity["role"];
+  self?: boolean;
 }) {
   return (
     <div style={personRow}>
-      <span style={{ ...avatar, width: 22, height: 22, background: color }}>
-        {name.trim().charAt(0)}
-      </span>
+      <AvatarChip
+        color={color}
+        initial={name.trim().charAt(0)}
+        self={self}
+        live={!self}
+      />
       <span style={personName}>{name}</span>
       <span style={roleBadge(role)}>{role}</span>
     </div>
+  );
+}
+
+// ── Leaderboard view ──────────────────────────────────────────────
+//
+// Per-contributor rollup over library_objects (the finalized idea layer).
+// Each row's stacked bar: outer width = activity share within the room,
+// inner accent fill = finalized rate. Stats line: finalized/total ·
+// on-board · quality stars. Top strip = signal-vs-noise totals; footer
+// "Browse Library" opens the Library rail so the user can SEE the
+// finalized vs noise corpus directly. See [[project_contributor_leaderboard]].
+function LeaderboardView({
+  data,
+  loading,
+  meUserId,
+}: {
+  data: LeaderboardResponse | null;
+  loading: boolean;
+  meUserId: string;
+}) {
+  if (loading && !data) return <div style={emptyState}>Loading contributions…</div>;
+  if (!data) return <div style={emptyState}>Could not load leaderboard.</div>;
+  const { rows, totals } = data;
+  if (rows.length === 0 || totals.inLibrary === 0) {
+    return (
+      <div style={emptyState}>
+        No published ideas yet. Run Converge → Publish on a selection to
+        seed contributions.
+      </div>
+    );
+  }
+  const maxIdeas = Math.max(1, ...rows.map((r) => r.totalIdeas));
+  return (
+    <>
+      <div style={statStrip}>
+        <Stat label="Finalized" value={totals.finalized} accent />
+        <span style={statDivider} />
+        <Stat label="Noise" value={totals.noise} muted />
+        <span style={statDivider} />
+        <Stat label="On board" value={totals.onBoard} />
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {rows.map((r, idx) => (
+          <LeaderRow
+            key={r.userId}
+            rank={idx + 1}
+            row={r}
+            maxIdeas={maxIdeas}
+            isYou={r.userId === meUserId}
+          />
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={() => setPanel("library", true)}
+        style={browseLibraryBtn}
+      >
+        <LibraryIcon style={{ width: 12, height: 12 }} strokeWidth={2.4} />
+        Browse Library
+      </button>
+    </>
+  );
+}
+
+function LeaderRow({
+  rank,
+  row,
+  maxIdeas,
+  isYou,
+}: {
+  rank: number;
+  row: LeaderboardResponse["rows"][number];
+  maxIdeas: number;
+  isYou: boolean;
+}) {
+  const ideasPct = Math.min(100, (row.totalIdeas / maxIdeas) * 100);
+  const finalPct = Math.min(100, row.finalizedRate * 100);
+  const qualityStars =
+    row.avgQuality == null
+      ? null
+      : Math.max(0, Math.min(5, Math.round(row.avgQuality)));
+  return (
+    <div
+      style={{
+        ...leaderRowOuter,
+        background: isYou ? appleVibe.surface.chip : "transparent",
+      }}
+    >
+      <span style={rankNum}>{rank}</span>
+      <AvatarChip
+        color={row.color}
+        initial={(row.name || "?").trim().charAt(0)}
+        self={isYou}
+        live={!isYou}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={leaderTopLine}>
+          <span style={leaderName}>
+            {row.name}
+            {isYou && <span style={youTag}>You</span>}
+            {row.isOwner && <span style={ownerTag}>Owner</span>}
+          </span>
+          {row.recent24h > 0 && (
+            <span style={zapTag} title={`${row.recent24h} new in last 24h`}>
+              <Zap style={{ width: 9, height: 9 }} strokeWidth={2.8} />
+              {row.recent24h}
+            </span>
+          )}
+        </div>
+        <div style={barOuter}>
+          <div style={{ ...barTotal, width: `${ideasPct}%` }}>
+            <div style={{ ...barFinal, width: `${finalPct}%` }} />
+          </div>
+        </div>
+        <div style={leaderBottomLine}>
+          <span style={leaderStat}>
+            <IdeasIcon style={{ width: 9, height: 9 }} strokeWidth={2.4} />
+            {row.finalized}/{row.totalIdeas} finalized
+          </span>
+          {row.onBoard > 0 && (
+            <span style={leaderStat}>on board · {row.onBoard}</span>
+          )}
+          {qualityStars != null && (
+            <span
+              style={leaderStat}
+              title={`Avg quality ${row.avgQuality?.toFixed(2)}`}
+            >
+              <Star
+                style={{ width: 9, height: 9, fill: "#f59e0b", color: "#f59e0b" }}
+                strokeWidth={2}
+              />
+              {qualityStars}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  accent = false,
+  muted = false,
+}: {
+  label: string;
+  value: number;
+  accent?: boolean;
+  muted?: boolean;
+}) {
+  return (
+    <span style={statCol}>
+      <span
+        style={{
+          ...statVal,
+          color: accent
+            ? appleVibe.accent.primary
+            : muted
+              ? appleVibe.text.tertiary
+              : appleVibe.text.primary,
+        }}
+      >
+        {value}
+      </span>
+      <span style={statLabel}>{label}</span>
+    </span>
   );
 }
 
@@ -382,12 +699,23 @@ const popover: CSSProperties = {
   zIndex: 80,
 };
 const popoverHeader: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
   padding: "6px 10px 8px",
   fontSize: 11,
   fontWeight: 700,
   letterSpacing: "-0.01em",
   color: appleVibe.text.secondary,
   textTransform: "uppercase",
+};
+const liveDotInline: CSSProperties = {
+  width: 6,
+  height: 6,
+  borderRadius: 999,
+  background: "#22C55E",
+  flexShrink: 0,
+  animation: "board-people-pulse 1.8s ease-in-out infinite",
 };
 const personRow: CSSProperties = {
   display: "flex",
@@ -431,4 +759,197 @@ const avatar: CSSProperties = {
   border: "2px solid var(--glass-float-bg)",
   textTransform: "uppercase",
   fontFamily: appleVibe.font.stack,
+};
+
+// ── Leaderboard styles ──
+const segmented: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 2,
+  margin: "4px 6px 8px",
+  padding: 2,
+  borderRadius: 999,
+  background: appleVibe.surface.chip,
+};
+const segBtn = (active: boolean): CSSProperties => ({
+  flex: 1,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 4,
+  padding: "5px 9px",
+  borderRadius: 999,
+  border: "none",
+  cursor: "pointer",
+  fontFamily: appleVibe.font.stack,
+  fontSize: 10.5,
+  fontWeight: 700,
+  letterSpacing: "0.01em",
+  textTransform: "uppercase",
+  color: active ? appleVibe.text.onAccent : appleVibe.text.secondary,
+  background: active ? appleVibe.accent.primary : "transparent",
+  boxShadow: active ? "0 4px 12px -6px rgba(11,18,40,0.4)" : "none",
+  transition: "background 0.15s ease, color 0.15s ease",
+});
+const emptyState: CSSProperties = {
+  padding: "16px 10px",
+  fontSize: 11.5,
+  lineHeight: 1.45,
+  color: appleVibe.text.tertiary,
+  textAlign: "center",
+  fontFamily: appleVibe.font.stack,
+};
+const statStrip: CSSProperties = {
+  display: "flex",
+  alignItems: "stretch",
+  gap: 6,
+  margin: "0 6px 8px",
+  padding: "8px 10px",
+  borderRadius: 12,
+  background: appleVibe.surface.chip,
+  border: `1px solid ${appleVibe.stroke.hairline}`,
+};
+const statCol: CSSProperties = {
+  flex: 1,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 1,
+};
+const statVal: CSSProperties = {
+  fontSize: 16,
+  fontWeight: 750,
+  letterSpacing: "-0.02em",
+  fontFamily: appleVibe.font.stack,
+};
+const statLabel: CSSProperties = {
+  fontSize: 9.5,
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+  color: appleVibe.text.tertiary,
+  textTransform: "uppercase",
+};
+const statDivider: CSSProperties = {
+  width: 1,
+  alignSelf: "stretch",
+  background: appleVibe.stroke.hairline,
+  borderRadius: 1,
+};
+const leaderRowOuter: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "6px 8px",
+  borderRadius: 10,
+  fontFamily: appleVibe.font.stack,
+};
+const rankNum: CSSProperties = {
+  width: 14,
+  textAlign: "center",
+  fontSize: 11,
+  fontWeight: 700,
+  color: appleVibe.text.tertiary,
+  flexShrink: 0,
+};
+const leaderTopLine: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+};
+const leaderName: CSSProperties = {
+  flex: 1,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  minWidth: 0,
+  fontSize: 12,
+  fontWeight: 650,
+  letterSpacing: "-0.01em",
+  color: appleVibe.text.primary,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+const youTag: CSSProperties = {
+  padding: "0 5px",
+  fontSize: 9,
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  borderRadius: 999,
+  color: appleVibe.text.onAccent,
+  background: appleVibe.accent.primary,
+};
+const ownerTag: CSSProperties = {
+  padding: "0 5px",
+  fontSize: 9,
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  borderRadius: 999,
+  color: appleVibe.text.secondary,
+  background: "var(--glass-border)",
+};
+const zapTag: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 2,
+  padding: "1px 6px 1px 4px",
+  fontSize: 9.5,
+  fontWeight: 700,
+  borderRadius: 999,
+  color: "#92400E",
+  background: "#FEF3C7",
+};
+const barOuter: CSSProperties = {
+  width: "100%",
+  height: 5,
+  marginTop: 4,
+  borderRadius: 999,
+  background: "var(--glass-border)",
+  overflow: "hidden",
+};
+const barTotal: CSSProperties = {
+  height: "100%",
+  borderRadius: 999,
+  background: "rgba(15,23,42,0.18)",
+  position: "relative",
+};
+const barFinal: CSSProperties = {
+  height: "100%",
+  borderRadius: 999,
+  background: appleVibe.accent.primary,
+};
+const leaderBottomLine: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  marginTop: 4,
+};
+const leaderStat: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 3,
+  fontSize: 10,
+  fontWeight: 600,
+  color: appleVibe.text.tertiary,
+  letterSpacing: "0.01em",
+};
+const browseLibraryBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 5,
+  width: "calc(100% - 12px)",
+  margin: "8px 6px 4px",
+  padding: "7px 10px",
+  borderRadius: 10,
+  border: `1px solid ${appleVibe.stroke.hairline}`,
+  background: "var(--glass-float-bg)",
+  color: appleVibe.text.primary,
+  fontFamily: appleVibe.font.stack,
+  fontSize: 11.5,
+  fontWeight: 650,
+  letterSpacing: "-0.01em",
+  cursor: "pointer",
 };

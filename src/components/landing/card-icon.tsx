@@ -111,6 +111,19 @@ function marks(acc: string): Record<string, ReactNode> {
         <circle cx="24" cy="24" r="2.8" fill={acc} />
       </>
     ),
+
+    // Product development · blocks assembling into a product; the accent is the
+    // keystone increment being shipped on top.
+    product_development: (
+      <>
+        <g {...ink}>
+          <rect x="10" y="26" width="11" height="11" rx="2.5" />
+          <rect x="27" y="26" width="11" height="11" rx="2.5" />
+          <rect x="18.5" y="11.5" width="11" height="11" rx="2.5" />
+        </g>
+        <circle cx="24" cy="17" r="2.6" fill={acc} />
+      </>
+    ),
   };
 }
 

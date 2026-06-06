@@ -17,12 +17,14 @@
 //   • KnowledgeGraphPanel — the dockable right-edge panel that fetches the
 //     space's graph from /api/objective/[spaceId]/kg and renders the canvas.
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import cytoscape from "cytoscape";
 import fcose from "cytoscape-fcose";
-import { Network, X, Loader2 } from "lucide-react";
+import type { Editor } from "tldraw";
+import { Network, X, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { OPEN_BOARD_KG_EVENT } from "@/components/objective/board-bus";
+import { ObjectDetailDrawer } from "./object-detail-drawer";
 
 export interface KgNode {
   id: string;
@@ -256,16 +258,76 @@ export function KnowledgeGraphCanvas({
 
 // ── Dockable panel ───────────────────────────────────────────────────────────
 
+// User-resizable dimensions. The panel width and the graph/details split
+// fraction persist per-browser so the layout you set is the layout you get
+// back. Clamped so the panel can't be shrunk past readability or grown past
+// the board.
+const WIDTH_LS_KEY = "kg-panel-width-v1";
+const SPLIT_LS_KEY = "kg-panel-split-v1"; // fraction of total height given to the GRAPH (0..1)
+const MIN_WIDTH = 360;
+const MAX_WIDTH = 880;
+const DEFAULT_WIDTH = 420;
+const MIN_SPLIT = 0.25; // details can grow until graph is 25% of split area
+const MAX_SPLIT = 0.85; // graph can grow until details is 15% of split area
+const DEFAULT_SPLIT = 0.55;
+
+function readNumber(key: string, fallback: number): number {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) ? n : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function writeNumber(key: string, n: number) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, String(n));
+  } catch {
+    /* quota / privacy mode → ignore */
+  }
+}
+
 export function KnowledgeGraphPanel({
   spaceId,
+  editor,
   onClose,
 }: {
   spaceId: string;
+  /** Optional — when provided, tapping a node opens the embedded object detail
+   *  drawer in the bottom row (so it can pan-to-shape / focus the canvas). */
+  editor?: Editor | null;
   onClose: () => void;
 }) {
   const [nodes, setNodes] = useState<KgNode[]>([]);
   const [edges, setEdges] = useState<KgEdge[]>([]);
   const [loading, setLoading] = useState(true);
+  // The tapped node → opens the inline detail row.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Resolved object title (notified by the embedded drawer) so we can show a
+  // proper detail-row header without re-fetching the object up here.
+  const [detailTitle, setDetailTitle] = useState<string>("");
+  // Hide-but-keep-the-selection: collapsing folds the row to a tiny stub
+  // instead of clearing it, so the chevron can re-open the SAME object.
+  const [detailCollapsed, setDetailCollapsed] = useState(false);
+
+  // Persisted layout — restored on mount, NOT during SSR (localStorage guard).
+  const [width, setWidth] = useState<number>(DEFAULT_WIDTH);
+  const [splitFrac, setSplitFrac] = useState<number>(DEFAULT_SPLIT);
+  useEffect(() => {
+    setWidth(clamp(readNumber(WIDTH_LS_KEY, DEFAULT_WIDTH), MIN_WIDTH, MAX_WIDTH));
+    setSplitFrac(clamp(readNumber(SPLIT_LS_KEY, DEFAULT_SPLIT), MIN_SPLIT, MAX_SPLIT));
+  }, []);
+  // Persist (debounced via the natural setState cadence — these fire on
+  // drag move, but localStorage writes are cheap and bounded).
+  useEffect(() => {
+    writeNumber(WIDTH_LS_KEY, width);
+  }, [width]);
+  useEffect(() => {
+    writeNumber(SPLIT_LS_KEY, splitFrac);
+  }, [splitFrac]);
 
   useEffect(() => {
     let cancelled = false;
@@ -302,8 +364,92 @@ export function KnowledgeGraphPanel({
     (t) => TYPE_LABEL[t] || TYPE_COLOR[t],
   );
 
+  // ── Drag handlers ──
+  // Left-edge handle stretches the panel; live-updates width during drag. We
+  // listen on window so leaving the handle mid-drag doesn't strand the state.
+  const startWidthDrag = useCallback(
+    (ev: React.PointerEvent<HTMLDivElement>) => {
+      ev.preventDefault();
+      const startX = ev.clientX;
+      const startWidth = width;
+      const onMove = (e: PointerEvent) => {
+        // Panel is anchored to the RIGHT edge → dragging left grows it.
+        const next = clamp(startWidth + (startX - e.clientX), MIN_WIDTH, MAX_WIDTH);
+        setWidth(next);
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+      };
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "ew-resize";
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [width],
+  );
+
+  // The split handle between graph and details. Drag fraction is computed
+  // against the parent's measured height so it stays correct as the panel
+  // itself is resized.
+  const splitTrackRef = useRef<HTMLDivElement | null>(null);
+  const startSplitDrag = useCallback(
+    (ev: React.PointerEvent<HTMLDivElement>) => {
+      ev.preventDefault();
+      const track = splitTrackRef.current;
+      if (!track) return;
+      const onMove = (e: PointerEvent) => {
+        const rect = track.getBoundingClientRect();
+        if (rect.height <= 0) return;
+        const f = (e.clientY - rect.top) / rect.height;
+        setSplitFrac(clamp(f, MIN_SPLIT, MAX_SPLIT));
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+      };
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "ns-resize";
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [],
+  );
+
+  // When a freshly-tapped node arrives, make sure the row is expanded — the
+  // user is asking to *see* the detail, so an old "collapsed" state shouldn't
+  // suppress it.
+  const handleNodeClick = useCallback((id: string) => {
+    setSelectedId(id);
+    setDetailCollapsed(false);
+  }, []);
+
+  const detailOpen = !!selectedId;
+  // Express the split as a flexBasis only while the detail row is OPEN and
+  // EXPANDED; otherwise the graph takes the whole content area.
+  const graphFlexBasis =
+    detailOpen && !detailCollapsed ? `${splitFrac * 100}%` : "100%";
+
   return (
-    <div style={panel} onPointerDown={(e) => e.stopPropagation()}>
+    <div
+      style={{ ...panel, width }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {/* Left-edge width handle. Sits over the rounded corner; cursor and a
+          subtle accent on hover make it discoverable. */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize panel width"
+        title="Drag to resize"
+        onPointerDown={startWidthDrag}
+        style={widthHandle}
+      />
+
       <div style={header}>
         <Network
           style={{ width: 15, height: 15, color: appleVibe.text.secondary }}
@@ -341,28 +487,109 @@ export function KnowledgeGraphPanel({
         </button>
       </div>
 
-      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
-        {loading ? (
-          <div style={center}>
-            <Loader2
-              className="animate-spin"
-              style={{ width: 16, height: 16 }}
+      <div ref={splitTrackRef} style={splitTrack}>
+        {/* ── Row 1: graph ── */}
+        <div style={{ ...splitPane, flexBasis: graphFlexBasis }}>
+          {loading ? (
+            <div style={center}>
+              <Loader2
+                className="animate-spin"
+                style={{ width: 16, height: 16 }}
+              />
+              <span style={{ marginTop: 8 }}>Mapping the graph…</span>
+            </div>
+          ) : nodes.length === 0 ? (
+            <div style={{ ...center, padding: "0 28px", textAlign: "center" }}>
+              <Network
+                style={{ width: 22, height: 22, opacity: 0.4 }}
+                strokeWidth={1.8}
+              />
+              <span style={{ marginTop: 10, lineHeight: 1.45 }}>
+                No concepts yet. As the AI resolves your objective, the variables,
+                features and how they connect will appear here.
+              </span>
+            </div>
+          ) : (
+            <KnowledgeGraphCanvas
+              nodes={nodes}
+              edges={edges}
+              onNodeClick={handleNodeClick}
             />
-            <span style={{ marginTop: 8 }}>Mapping the graph…</span>
+          )}
+        </div>
+
+        {/* ── Drag handle (only between rows when row 2 is open & expanded) ── */}
+        {detailOpen && !detailCollapsed && (
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize graph / detail split"
+            title="Drag to resize"
+            onPointerDown={startSplitDrag}
+            style={splitHandle}
+          >
+            <span style={splitHandleGrip} />
           </div>
-        ) : nodes.length === 0 ? (
-          <div style={{ ...center, padding: "0 28px", textAlign: "center" }}>
-            <Network
-              style={{ width: 22, height: 22, opacity: 0.4 }}
-              strokeWidth={1.8}
-            />
-            <span style={{ marginTop: 10, lineHeight: 1.45 }}>
-              No concepts yet. As the AI resolves your objective, the variables,
-              features and how they connect will appear here.
-            </span>
+        )}
+
+        {/* ── Row 2: detail (when a node is selected) ── */}
+        {detailOpen && (
+          <div style={{ ...splitPane, ...(detailCollapsed ? splitPaneCollapsed : {}) }}>
+            <div style={detailHeader}>
+              <button
+                type="button"
+                title={detailCollapsed ? "Expand details" : "Collapse details"}
+                onClick={() => setDetailCollapsed((c) => !c)}
+                style={iconBtnSmall}
+              >
+                {detailCollapsed ? (
+                  <ChevronUp style={{ width: 13, height: 13 }} strokeWidth={2.4} />
+                ) : (
+                  <ChevronDown style={{ width: 13, height: 13 }} strokeWidth={2.4} />
+                )}
+              </button>
+              <span style={detailTitleStyle} title={detailTitle || "Object"}>
+                {detailTitle || "Object"}
+              </span>
+              <button
+                type="button"
+                title="Close details"
+                onClick={() => {
+                  setSelectedId(null);
+                  setDetailTitle("");
+                  setDetailCollapsed(false);
+                }}
+                style={{ marginLeft: "auto", ...iconBtnSmall }}
+              >
+                <X style={{ width: 13, height: 13 }} strokeWidth={2.4} />
+              </button>
+            </div>
+            {!detailCollapsed && editor && (
+              <div style={detailBody}>
+                <ObjectDetailDrawer
+                  key={selectedId!}
+                  spaceId={spaceId}
+                  objectId={selectedId!}
+                  editor={editor}
+                  embedded
+                  onTitleChange={setDetailTitle}
+                  onNavigate={(id) => {
+                    setSelectedId(id);
+                    setDetailTitle("");
+                  }}
+                  onClose={() => {
+                    setSelectedId(null);
+                    setDetailTitle("");
+                  }}
+                />
+              </div>
+            )}
+            {!detailCollapsed && !editor && (
+              <div style={{ padding: "12px 14px", fontSize: 12, color: appleVibe.text.tertiary }}>
+                Detail view unavailable in this context.
+              </div>
+            )}
           </div>
-        ) : (
-          <KnowledgeGraphCanvas nodes={nodes} edges={edges} />
         )}
       </div>
 
@@ -392,8 +619,14 @@ export function KnowledgeGraphPanel({
 
 /** Self-managing launcher: renders nothing until the nav bar fires the open
  *  event, then toggles the panel. Mirrors GoalLauncher so whiteboard-base just
- *  drops in <KnowledgeGraphLauncher spaceId=… />. */
-export function KnowledgeGraphLauncher({ spaceId }: { spaceId: string }) {
+ *  drops in <KnowledgeGraphLauncher spaceId=… editor=… />. */
+export function KnowledgeGraphLauncher({
+  spaceId,
+  editor,
+}: {
+  spaceId: string;
+  editor?: Editor | null;
+}) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     const toggle = () => setOpen((o) => !o);
@@ -401,16 +634,28 @@ export function KnowledgeGraphLauncher({ spaceId }: { spaceId: string }) {
     return () => window.removeEventListener(OPEN_BOARD_KG_EVENT, toggle);
   }, []);
   if (!open) return null;
-  return <KnowledgeGraphPanel spaceId={spaceId} onClose={() => setOpen(false)} />;
+  return (
+    <KnowledgeGraphPanel
+      spaceId={spaceId}
+      editor={editor}
+      onClose={() => setOpen(false)}
+    />
+  );
+}
+
+function clamp(n: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, n));
 }
 
 // ── styles ──
+// `width` is intentionally OMITTED here — the panel sets it inline from state
+// so it can be drag-resized. Top/bottom/right anchor + flex column drive the
+// row split underneath.
 const panel: CSSProperties = {
   position: "absolute",
   top: 64,
   bottom: 12,
   right: 12,
-  width: 420,
   zIndex: 92,
   display: "flex",
   flexDirection: "column",
@@ -424,6 +669,18 @@ const panel: CSSProperties = {
     "inset 0 1px 0 var(--glass-highlight), 0 28px 60px -24px rgba(11,18,40,0.38)",
   fontFamily: appleVibe.font.stack,
   overflow: "hidden",
+};
+const widthHandle: CSSProperties = {
+  position: "absolute",
+  top: 0,
+  bottom: 0,
+  left: 0,
+  width: 6,
+  cursor: "ew-resize",
+  zIndex: 5,
+  // No fill — a hairline accent on hover keeps it discoverable without adding
+  // visible chrome to the resting state of the panel.
+  background: "transparent",
 };
 const header: CSSProperties = {
   display: "flex",
@@ -439,6 +696,18 @@ const iconBtn: CSSProperties = {
   justifyContent: "center",
   width: 28,
   height: 28,
+  borderRadius: appleVibe.radius.sm,
+  border: "none",
+  background: "transparent",
+  cursor: "pointer",
+  color: appleVibe.text.tertiary,
+};
+const iconBtnSmall: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 22,
+  height: 22,
   borderRadius: appleVibe.radius.sm,
   border: "none",
   background: "transparent",
@@ -470,4 +739,76 @@ const legendItem: CSSProperties = {
   fontSize: 10.5,
   fontWeight: 600,
   color: appleVibe.text.tertiary,
+};
+
+// Split row container — flex column so panes share the available height per
+// their flexBasis. `minHeight: 0` is the critical bit that lets overflowing
+// children scroll inside their own pane instead of pushing the panel.
+const splitTrack: CSSProperties = {
+  position: "relative",
+  flex: 1,
+  minHeight: 0,
+  display: "flex",
+  flexDirection: "column",
+};
+const splitPane: CSSProperties = {
+  position: "relative",
+  flexGrow: 0,
+  flexShrink: 1,
+  flexBasis: "100%",
+  minHeight: 0,
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+};
+const splitPaneCollapsed: CSSProperties = {
+  flexBasis: 32, // header strip only
+  flexGrow: 0,
+  flexShrink: 0,
+};
+const splitHandle: CSSProperties = {
+  position: "relative",
+  height: 6,
+  cursor: "ns-resize",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  borderTop: "1px solid var(--glass-border)",
+  borderBottom: "1px solid var(--glass-border)",
+  background: "var(--glass-float-bg)",
+  flexShrink: 0,
+};
+const splitHandleGrip: CSSProperties = {
+  display: "block",
+  width: 28,
+  height: 2,
+  borderRadius: 999,
+  background: "rgba(100,116,139,0.45)",
+};
+const detailHeader: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "5px 8px",
+  borderBottom: "1px solid var(--glass-border)",
+  flexShrink: 0,
+  background: "var(--glass-float-bg)",
+};
+const detailTitleStyle: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 600,
+  letterSpacing: "-0.01em",
+  color: appleVibe.text.primary,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  flex: 1,
+  minWidth: 0,
+};
+const detailBody: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: "auto",
+  overflowX: "hidden",
+  padding: "8px 10px 12px",
 };

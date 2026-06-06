@@ -3523,7 +3523,7 @@ function BoardOverlay({
       {/* Right-edge live Knowledge Graph: the space's library_objects (nodes) +
           object_links (edges), force-directed (fcose), color/icon dots with
           hover-to-expand names. Opened from the nav bar's Network icon. */}
-      <KnowledgeGraphLauncher spaceId={spaceId} />
+      <KnowledgeGraphLauncher spaceId={spaceId} editor={editor} />
       {/* Version history — left-edge pill → timestamped snapshots + restore;
           auto-captures every few minutes while the board changes. */}
       <BoardHistoryLauncher spaceId={spaceId} editor={editor} />

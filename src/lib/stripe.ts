@@ -19,29 +19,65 @@ export function getStripe(): Stripe | null {
 /** @deprecated Use getStripe() instead — this throws if key is missing */
 export const stripe = null as unknown as Stripe;
 
+// Volume tiers — per-credit price drops as the bundle grows. Pack ids stay
+// stable: pack_10/30/100 are referenced by the in-app credits dashboard,
+// strategy-lab, and intake-bootstrap surfaces; the new tiers extend the
+// ladder so the pricing page can offer a richer pick without forking ids.
 export const CREDIT_PACKS = [
   {
     id: "pack_10",
-    name: "Starter",
+    name: "10 credits",
     credits: 10,
-    price: 500, // cents
+    price: 500, // cents — $0.50/credit
     priceLabel: "$5",
     popular: false,
   },
   {
+    id: "pack_25",
+    name: "25 credits",
+    credits: 25,
+    price: 1125, // $0.45/credit (10% off)
+    priceLabel: "$11.25",
+    popular: false,
+  },
+  {
     id: "pack_30",
-    name: "Explorer",
+    name: "30 credits",
     credits: 30,
-    price: 1200,
+    price: 1200, // $0.40/credit
     priceLabel: "$12",
-    popular: true,
+    popular: false,
+  },
+  {
+    id: "pack_50",
+    name: "50 credits",
+    credits: 50,
+    price: 2000, // $0.40/credit (20% off)
+    priceLabel: "$20",
+    popular: false,
   },
   {
     id: "pack_100",
-    name: "Pro",
+    name: "100 credits",
     credits: 100,
-    price: 3500,
+    price: 3500, // $0.35/credit (30% off)
     priceLabel: "$35",
+    popular: true,
+  },
+  {
+    id: "pack_250",
+    name: "250 credits",
+    credits: 250,
+    price: 7500, // $0.30/credit (40% off)
+    priceLabel: "$75",
+    popular: false,
+  },
+  {
+    id: "pack_500",
+    name: "500 credits",
+    credits: 500,
+    price: 12500, // $0.25/credit (50% off)
+    priceLabel: "$125",
     popular: false,
   },
 ] as const;

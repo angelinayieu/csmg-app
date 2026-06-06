@@ -270,7 +270,8 @@ function OcCardRenderer({ shape }: { shape: OcCardShape }) {
           </button>
         </div>
 
-        {/* Name — the bold near-black focal line. */}
+        {/* Name — the bold near-black focal line. Wraps naturally; the card
+            auto-grows (useAutoFitHeight) so the full name is visible. */}
         <div
           style={{
             marginTop: 9,
@@ -279,16 +280,14 @@ function OcCardRenderer({ shape }: { shape: OcCardShape }) {
             lineHeight: 1.25,
             letterSpacing: "-0.01em",
             color: appleVibe.text.primary,
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
+            wordBreak: "break-word",
           }}
         >
           {name || "Untitled"}
         </div>
 
-        {/* Body — description / definition: smaller + lighter. */}
+        {/* Body — description / definition: smaller + lighter. Wraps naturally;
+            the card auto-grows so nothing is clipped. */}
         {body && (
           <div
             style={{
@@ -297,10 +296,7 @@ function OcCardRenderer({ shape }: { shape: OcCardShape }) {
               fontWeight: 400,
               lineHeight: 1.45,
               color: appleVibe.text.secondary,
-              display: "-webkit-box",
-              WebkitLineClamp: 3,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
+              wordBreak: "break-word",
             }}
           >
             {body}
