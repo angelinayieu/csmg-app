@@ -66,12 +66,38 @@ function FlowConnectorRenderer({
 }) {
   const editor = util.editor;
   // Read both endpoints reactively → re-render the wire as the cards move.
+  // Also look up each endpoint's parent sys-frame (if any). When BOTH endpoints
+  // live in DIFFERENT subsystem frames, we route the bezier OUT through the
+  // source frame's nearest edge and IN through the target frame's nearest edge
+  // — so cross-subsystem wires don't cut across unrelated lane card faces (the
+  // bezier spaghetti the original screenshot showed).
   const ends = useValue(
     "flow-connector-ends",
     () => {
       const a = editor.getShapePageBounds(shape.props.fromId as TLShapeId);
       const b = editor.getShapePageBounds(shape.props.toId as TLShapeId);
       if (!a || !b) return null;
+
+      // Card → parent fork-group frame lookup (O(frames) scan).
+      let frameABounds: ReturnType<typeof editor.getShapePageBounds> | null = null;
+      let frameBBounds: ReturnType<typeof editor.getShapePageBounds> | null = null;
+      let frameAId: TLShapeId | null = null;
+      let frameBId: TLShapeId | null = null;
+      for (const s of editor.getCurrentPageShapes()) {
+        if (s.type !== "sys-frame") continue;
+        const meta = s.meta as { forkGroup?: boolean; memberIds?: unknown };
+        if (!meta?.forkGroup || !Array.isArray(meta.memberIds)) continue;
+        const members = meta.memberIds as string[];
+        if (!frameAId && members.includes(shape.props.fromId)) frameAId = s.id;
+        if (!frameBId && members.includes(shape.props.toId)) frameBId = s.id;
+        if (frameAId && frameBId) break;
+      }
+      const crossFrame = !!frameAId && !!frameBId && frameAId !== frameBId;
+      if (crossFrame) {
+        frameABounds = editor.getShapePageBounds(frameAId as TLShapeId) ?? null;
+        frameBBounds = editor.getShapePageBounds(frameBId as TLShapeId) ?? null;
+      }
+
       // Pick the ports by the DOMINANT axis so the wire flows cleanly: a card
       // stacked BELOW its source connects bottom→top (vertical), side-by-side
       // connects right→left. Never the weird side-to-side loop when stacked.
@@ -102,15 +128,53 @@ function FlowConnectorRenderer({
         bx: pbx - shape.x,
         by: pby - shape.y,
         vertical,
+        // Direction of the dominant axis so we know which frame edge to exit.
+        forwardY: dyc >= 0,
+        forwardX: dxc >= 0,
+        crossFrame: crossFrame && !!frameABounds && !!frameBBounds,
+        frameAExitY: frameABounds
+          ? (dyc >= 0 ? frameABounds.maxY : frameABounds.minY) - shape.y
+          : 0,
+        frameBEntryY: frameBBounds
+          ? (dyc >= 0 ? frameBBounds.minY : frameBBounds.maxY) - shape.y
+          : 0,
+        frameAExitX: frameABounds
+          ? (dxc >= 0 ? frameABounds.maxX : frameABounds.minX) - shape.x
+          : 0,
+        frameBEntryX: frameBBounds
+          ? (dxc >= 0 ? frameBBounds.minX : frameBBounds.maxX) - shape.x
+          : 0,
       };
     },
     [editor, shape.props.fromId, shape.props.toId, shape.x, shape.y],
   );
   if (!ends) return null;
-  const { ax, ay, bx, by, vertical } = ends;
-  const d = vertical
-    ? `M ${ax} ${ay} C ${ax} ${ay + Math.max(40, Math.abs(by - ay) * 0.5)}, ${bx} ${by - Math.max(40, Math.abs(by - ay) * 0.5)}, ${bx} ${by}`
-    : `M ${ax} ${ay} C ${ax + Math.max(40, Math.abs(bx - ax) * 0.5)} ${ay}, ${bx - Math.max(40, Math.abs(bx - ax) * 0.5)} ${by}, ${bx} ${by}`;
+  const {
+    ax, ay, bx, by, vertical,
+    forwardY, forwardX, crossFrame,
+    frameAExitY, frameBEntryY, frameAExitX, frameBEntryX,
+  } = ends;
+  // Inter-frame ports: pull C1 to the source frame's exit edge (in the
+  // dominant-axis direction) and C2 to the target frame's entry edge — so the
+  // bezier exits cleanly through frame borders and runs through the gap
+  // between frames instead of carving through unrelated lane card faces.
+  const FRAME_CLEARANCE = 24;
+  let d: string;
+  if (crossFrame) {
+    if (vertical) {
+      const c1y = forwardY ? frameAExitY + FRAME_CLEARANCE : frameAExitY - FRAME_CLEARANCE;
+      const c2y = forwardY ? frameBEntryY - FRAME_CLEARANCE : frameBEntryY + FRAME_CLEARANCE;
+      d = `M ${ax} ${ay} C ${ax} ${c1y}, ${bx} ${c2y}, ${bx} ${by}`;
+    } else {
+      const c1x = forwardX ? frameAExitX + FRAME_CLEARANCE : frameAExitX - FRAME_CLEARANCE;
+      const c2x = forwardX ? frameBEntryX - FRAME_CLEARANCE : frameBEntryX + FRAME_CLEARANCE;
+      d = `M ${ax} ${ay} C ${c1x} ${ay}, ${c2x} ${by}, ${bx} ${by}`;
+    }
+  } else {
+    d = vertical
+      ? `M ${ax} ${ay} C ${ax} ${ay + Math.max(40, Math.abs(by - ay) * 0.5)}, ${bx} ${by - Math.max(40, Math.abs(by - ay) * 0.5)}, ${bx} ${by}`
+      : `M ${ax} ${ay} C ${ax + Math.max(40, Math.abs(bx - ax) * 0.5)} ${ay}, ${bx - Math.max(40, Math.abs(bx - ax) * 0.5)} ${by}, ${bx} ${by}`;
+  }
   const gid = `fcg-${shape.id.replace(/[^a-zA-Z0-9]/g, "")}`;
   return (
     <HTMLContainer

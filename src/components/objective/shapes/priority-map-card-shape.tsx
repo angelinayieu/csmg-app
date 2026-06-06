@@ -26,6 +26,18 @@ import { SHARPEN_COLOR } from "./prompt-sharpening-card-shape";
 const CARD_W = 340;
 const CARD_H = 340; // square — mirrors the ambiguity heatmap card
 
+// Matches the ambiguity-heatmap card entrance — the pair forks in together,
+// so they should share the same down-unfurl animation.
+const FORK_CARD_ENTRANCE_CSS = `
+@keyframes objective-fork-card-enter {
+  from { opacity: 0; transform: translate3d(0, -10px, 0) scale(0.96); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+.objective-fork-card-enter {
+  animation: objective-fork-card-enter 360ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+`;
+
 // Distinct, contrast-on-white kind colors (the old palette collided pain+limit
 // on the same orange and used a near-invisible pale yellow for goal).
 const KIND_STYLE: Record<string, { color: string; label: string }> = {
@@ -156,7 +168,9 @@ function PriorityMapRenderer({ shape }: { shape: PriorityMapCardShape }) {
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
     >
+      <style>{FORK_CARD_ENTRANCE_CSS}</style>
       <div
+        className="objective-fork-card-enter"
         style={{
           width: "100%",
           height: "100%",
@@ -169,6 +183,7 @@ function PriorityMapRenderer({ shape }: { shape: PriorityMapCardShape }) {
           flexDirection: "column",
           overflow: "hidden",
           fontFamily: appleVibe.font.stack,
+          transformOrigin: "50% 0%",
         }}
       >
         {/* header */}

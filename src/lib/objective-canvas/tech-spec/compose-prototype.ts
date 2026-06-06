@@ -1,23 +1,34 @@
-// ── compose-prototype — Opus + UI agent skill → interactive HTML ─────
+// ── compose-prototype — Opus + skill stack → interactive HTML ─────
 //
-// Server-only. Turns a TechSpec into a self-contained, INTERACTIVE HTML/CSS
-// prototype (no JavaScript), and refines it from user feedback. Reuses
-// getAnthropicClient (Opus), loadUiSkillSystem() (the UI agent skill), and
-// sanitizeHtml (the same sanitizer the variation mockups use — strips
-// <script>, event handlers, dangerous tags). The client renders the result
-// in an iframe with sandbox="" — belt + suspenders.
+// Server-only. Turns a TechSpec into a self-contained, INTERACTIVE HTML/CSS+JS
+// prototype, and refines it from user feedback. Skill stack (low → high
+// precedence in the system message):
+//   1. UI agent skill (cognitive principles / app-type playbooks)
+//   2. frontend-design skill (Anthropic anti-slop quality floor)
+//   3. shadcn vocabulary primer (canonical 56 primitives)
+//   4. project SYSTEM (BASE_RULES + TASTE_RULE)
+// And in the user message (per-call): tailwind.config.ts brand tokens +
+// DESIGN.md space taste contract, both pre-pended above the SPEC.
+//
+// T1 SAFETY: iframe is rendered with sandbox="allow-scripts" (no
+// allow-same-origin) → null origin. Output goes through sanitizeHtmlT1
+// (DOMPurify v3.4.8 + url filter + CSP meta injection), which strips
+// external refs, blocks remote loads, and wedges a deny-all CSP at the
+// top of <head>. Three independent layers: sanitizer + sandbox + CSP.
 
 import { getAnthropicClient } from "@/lib/anthropic";
 import { BEST_CLAUDE_MODEL } from "@/lib/llm";
 import { loadUiSkillSystem } from "@/lib/objective-canvas/ui-skill-system";
-import { sanitizeHtml } from "@/lib/objective-canvas/generate-mockup";
+import { loadFrontendDesignSkill } from "./frontend-design-skill";
+import { loadShadcnSkill } from "./shadcn-skill";
+import { sanitizeHtmlT1 } from "./sanitize-prototype-t1";
 import type { TasteDesignContext } from "./taste-design-block";
 import type { TechSpec } from "./types";
 
 const OPUS_MODEL = BEST_CLAUDE_MODEL;
 
 const BASE_RULES =
-  "Hard rules: ONE self-contained <!DOCTYPE html> document with a single inline <style> block. NO JavaScript, NO <script>, NO external resources (no CDN, web fonts, or image URLs) — system fonts + CSS only. Make it feel REAL: concrete copy and realistic placeholder data (never lorem ipsum), the key components from the UI plan, and CSS-only interactivity (hover/focus states, label-driven :checked tabs/toggles, <details>). Honor the design language (glass tier, density, motion intent, accent, hero pattern) and surface at least one non-happy-path state (empty/loading) somewhere. Return ONLY the HTML document — no prose, no markdown fence.";
+  "Hard rules: ONE self-contained <!DOCTYPE html> document with inline <style> and (optional) inline <script>. INLINE JavaScript is now PERMITTED — use it to wire interactivity via addEventListener (never inline on* attributes; they will be stripped). NO external resources of any kind — no CDN, no remote scripts, no web fonts, no image URLs (data: URLs are fine for SVG). The runtime CSP blocks all network access; remote refs will silently fail. Make it feel REAL: concrete copy and realistic placeholder data (never lorem ipsum), the key components from the UI plan, and rich interactivity (real state, animations, keyboard nav). Honor the design language (glass tier, density, motion intent, accent, hero pattern) and surface at least one non-happy-path state (empty/loading) somewhere. Return ONLY the HTML document — no prose, no markdown fence.";
 
 const TASTE_RULE =
   "When a DESIGN.md and/or tailwind.config.ts block is provided below, treat them as the project-level taste contract. The user's vocabulary terms (marked \"yours\") must appear verbatim where natural; their anti-patterns must not appear at all; the brand color/radius/shadow tokens in tailwind.config.ts must shape the inline <style> block (use the same hex values, no purple/Inter clichés unless the contract explicitly calls for them).";
@@ -64,13 +75,23 @@ function extractHtml(text: string): string {
 }
 
 async function opusHtml(system: string, user: string): Promise<string> {
-  const uiSkillPrefix = await loadUiSkillSystem();
+  // Load skills in parallel — all cached on first hit. Order in the system
+  // message goes lowest precedence → highest:
+  //   UI skill (cognitive)  ←  frontend-design (anti-slop)  ←  shadcn primer
+  //   (vocab)  ←  project SYSTEM (TASTE_RULE + BASE_RULES)
+  const [uiSkillPrefix, frontendDesignPrefix, shadcnPrefix] = await Promise.all([
+    loadUiSkillSystem(),
+    loadFrontendDesignSkill(),
+    loadShadcnSkill(),
+  ]);
   const anthropic = getAnthropicClient();
   const resp = await anthropic.messages.create(
     {
       model: OPUS_MODEL,
       max_tokens: 8000,
-      system: uiSkillPrefix + "\n\n" + system,
+      system: [uiSkillPrefix, frontendDesignPrefix, shadcnPrefix, system]
+        .filter(Boolean)
+        .join("\n\n"),
       messages: [{ role: "user", content: user }],
     },
     { timeout: 5 * 60 * 1000 },
@@ -79,7 +100,7 @@ async function opusHtml(system: string, user: string): Promise<string> {
     .filter((b) => b.type === "text")
     .map((b) => (b as { text: string }).text)
     .join("\n");
-  return sanitizeHtml(extractHtml(text));
+  return sanitizeHtmlT1(extractHtml(text));
 }
 
 /** Generate the first interactive prototype from a TechSpec. Optional taste
@@ -96,19 +117,24 @@ export function composePrototypeHtml(
   );
 }
 
-/** Regenerate the prototype with the user's feedback applied. */
+/** Regenerate the prototype with the user's feedback applied. `linkedContext`
+ *  is the markdown block emitted by hydrateRefineContext (empty when nothing
+ *  was wired). */
 export function refinePrototypeHtml(
   currentHtml: string,
   feedback: string,
   spec: TechSpec | null,
   taste?: TasteDesignContext | null,
+  linkedContext?: string,
 ): Promise<string> {
   const existingPrototype = currentHtml.trim()
     ? `CURRENT PROTOTYPE HTML:\n${currentHtml.slice(0, 24000)}\n\n`
     : "CURRENT PROTOTYPE HTML:\nNone available. Treat this as a retry after a failed first build; generate the full prototype from the product context and user feedback.\n\n";
+  const linked = linkedContext && linkedContext.trim() ? `${linkedContext.trim()}\n\n` : "";
   return opusHtml(
     REFINE_SYSTEM,
     tasteContextBlock(taste) +
+      linked +
       existingPrototype +
       (spec ? `PRODUCT CONTEXT:\n${specBrief(spec)}\n\n` : "") +
       `USER FEEDBACK:\n${feedback}\n\nReturn the full revised HTML document.`,

@@ -15,16 +15,23 @@ import { LandingV2Mount } from "@/components/landing/landing-v2-mount";
 import { getTemplate } from "@/lib/use-cases/library";
 import { getAuthUser } from "@/lib/supabase/server";
 
-// Curated carousel — pulls live data from the template library so the cards
-// never drift from the real templates. `team_retro` shows as "Retrospective".
+// Curated swarm — pulls live data from the template library so the cards never
+// drift from the real templates. ORDER MATTERS: the landing maps each id to a
+// fixed floating anchor by index (see FLOATING_ANCHORS in landing-v2), so this
+// order IS the on-screen composition (L-top, R-top, L-mid-back, L-mid-front,
+// R-mid, L-bottom, R-bottom).
 const CAROUSEL_IDS = [
-  "journal_self_discovery",
-  "reading_synthesis",
-  "research_project",
-  "team_retro",
-  "career_pivot",
+  "journal_self_discovery", // L · top
+  "startup_strategy",       // R · top
+  "relationship_dynamics",  // L · mid (sits BEHIND research — the depth card)
+  "research_project",       // L · mid (front, overlaps the depth card)
+  "reading_synthesis",      // R · mid
+  "team_retro",             // L · bottom
+  "career_pivot",           // R · bottom
 ] as const;
-const LABEL_OVERRIDES: Record<string, string> = { team_retro: "Retrospective" };
+const LABEL_OVERRIDES: Record<string, string> = {
+  team_retro: "Team Retrospective",
+};
 
 export default async function LandingPage() {
   const user = await getAuthUser();

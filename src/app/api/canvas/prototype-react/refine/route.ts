@@ -1,15 +1,15 @@
-// ── POST /api/canvas/prototype/refine ─────────────────────────────
+// ── POST /api/canvas/prototype-react/refine ───────────────────────
 //
-// The prototype feedback loop: regenerate the interactive HTML with the
-// user's feedback applied (Opus + the UI agent skill), grounded in the
-// current HTML + TechSpec context. Sanitized server-side. Telemetry via
-// instrumentedLLMCall.
+// T2 sibling of /api/canvas/prototype/refine. Regenerates the React-tier
+// prototype with the user's feedback applied. Reuses the same multi-input
+// hydration as T1 (linkedObjectIds → image_narrative / concept_slugs /
+// siblings) — drag-wired context flows into Opus the same way.
 
 import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
 import { BEST_CLAUDE_MODEL } from "@/lib/llm";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
-import { refinePrototypeHtml } from "@/lib/objective-canvas/tech-spec/compose-prototype";
+import { refinePrototypeReact } from "@/lib/objective-canvas/tech-spec/compose-prototype-react";
 import { buildTasteDesignContext } from "@/lib/objective-canvas/tech-spec/taste-design-block";
 import { hydrateRefineContext } from "@/lib/objective-canvas/tech-spec/hydrate-refine-context";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
@@ -19,13 +19,13 @@ export const maxDuration = 300;
 
 interface Body {
   spaceId?: string;
-  currentHtml?: string;
+  /** Current files snapshot (the shape sends what Sandpack is showing). */
+  currentFiles?: Record<string, string> | null;
   feedback?: string;
   spec?: TechSpec | null;
-  /** library_objects ids the user drag-wired onto the prototype — refine
-   *  pass incorporates them (image_narratives, concept_slugs, sibling cards). */
+  /** Same shape as T1: library_objects ids the user drag-wired. */
   linkedObjectIds?: string[];
-  /** The current artifact id — used to exclude self from sibling list. */
+  /** Current artifact id, to exclude self from sibling list. */
   artifactId?: string | null;
 }
 
@@ -44,12 +44,15 @@ export async function POST(req: Request) {
   if (!spaceId) {
     return NextResponse.json({ error: "Missing spaceId" }, { status: 400 });
   }
-  const currentHtml = typeof body.currentHtml === "string" ? body.currentHtml : "";
   const feedback = typeof body.feedback === "string" ? body.feedback.trim() : "";
   const hasSpec = !!body.spec && typeof body.spec.title === "string";
-  if (!feedback || (!currentHtml.trim() && !hasSpec)) {
+  const currentFiles =
+    body.currentFiles && typeof body.currentFiles === "object"
+      ? body.currentFiles
+      : {};
+  if (!feedback || (!Object.keys(currentFiles).length && !hasSpec)) {
     return NextResponse.json(
-      { error: "feedback and currentHtml or spec required" },
+      { error: "feedback and currentFiles or spec required" },
       { status: 400 },
     );
   }
@@ -68,7 +71,6 @@ export async function POST(req: Request) {
     : [];
   const artifactId = typeof body.artifactId === "string" ? body.artifactId : null;
 
-  // Parallelize taste fetch and link hydration — both independent reads.
   const [taste, linked] = await Promise.all([
     buildTasteDesignContext(auth.supabase, spaceId),
     hydrateRefineContext({
@@ -80,26 +82,38 @@ export async function POST(req: Request) {
   ]);
 
   try {
-    const html = await instrumentedLLMCall(
+    const result = await instrumentedLLMCall(
       {
         db: auth.supabase,
         userId: auth.user.id,
         spaceId,
-        callSite: "objective:prototype_refine",
+        callSite: "objective:prototype_react_refine",
         modelHint: BEST_CLAUDE_MODEL,
         metadata: {
-          mode: "refine",
+          mode: "refine_react",
           taste_applied: taste.hasContent,
           linked_objects: linked.counts.objects,
           linked_images: linked.counts.images,
           siblings: linked.counts.siblings,
         },
       },
-      () => refinePrototypeHtml(currentHtml, feedback, body.spec ?? null, taste, linked.block),
+      () =>
+        refinePrototypeReact(
+          currentFiles,
+          feedback,
+          body.spec ?? null,
+          taste,
+          linked.block,
+        ),
     );
-    return NextResponse.json({ html });
+    return NextResponse.json({
+      entry: result.prototype.entry,
+      files: result.prototype.files,
+      sanitizerOk: result.sanitizer.ok,
+      sanitizerReason: result.sanitizer.reason,
+    });
   } catch (err) {
-    console.error("[prototype/refine] generation failed:", err);
+    console.error("[prototype-react/refine] generation failed:", err);
     return NextResponse.json({ error: "Generation failed" }, { status: 502 });
   }
 }

@@ -2,9 +2,12 @@
 
 // ── PrototypeCardShape ──
 //
-// The interactive Claude prototype on the board: a self-contained HTML/CSS
-// UI (no JS — sanitized server-side) rendered LIVE in a sandboxed iframe
-// (sandbox="" denies all capability; belt + suspenders with sanitizeHtml).
+// The interactive Claude prototype on the board: a self-contained HTML/CSS+JS
+// UI (DOMPurify v3.4.8 sanitized server-side) rendered LIVE in a T1
+// sandboxed iframe (sandbox="allow-scripts" — null-origin; can't read parent,
+// can't fetch APIs, can't unset its own sandbox). Inline scripts are PERMITTED
+// for real interactivity; external resources blocked at three layers:
+// sanitizer + sandbox + injected CSP meta.
 // Built from a TechSpec via "Build prototype", then iterated in place
 // through the feedback box (PROTOTYPE_REFINE_EVENT → refine route). The
 // header is the drag handle; the iframe + feedback box stop propagation so
@@ -117,52 +120,47 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
           display: "flex",
           flexDirection: "column",
           background: "#ffffff",
-          border: `1px solid ${accent}33`,
-          boxShadow: `0 1px 2px rgba(11,18,40,0.05), 0 20px 50px -18px ${accent}55, 0 8px 22px -10px rgba(11,18,40,0.16)`,
+          border: `1px solid ${appleVibe.stroke.soft}`,
+          boxShadow:
+            "0 1px 2px rgba(11,18,40,0.04), 0 14px 38px -22px rgba(11,18,40,0.18)",
           fontFamily: appleVibe.font.stack,
         }}
       >
-        {/* Header — the drag handle (no stopPropagation). */}
+        {/* Header — minimal: just the title + version. The iframe IS the
+            prototype; subtitle labels are noise. Drag handle. */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 7,
-            padding: "9px 12px",
-            borderBottom: `1px solid ${appleVibe.stroke.soft}`,
-            background: "rgba(248,250,252,0.9)",
+            gap: 8,
+            padding: "10px 14px",
+            borderBottom: `1px solid ${appleVibe.stroke.hairline}`,
+            background: "#fff",
             flexShrink: 0,
           }}
         >
-          <Wand2 style={{ width: 13, height: 13, color: accent }} strokeWidth={2.3} />
+          <Wand2 style={{ width: 12, height: 12, color: appleVibe.text.tertiary }} strokeWidth={2} />
           <span
             style={{
-              fontSize: 12,
-              fontWeight: 700,
+              fontSize: 12.5,
+              fontWeight: 600,
               color: appleVibe.text.primary,
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
+              letterSpacing: -0.1,
             }}
           >
             {title}
-          </span>
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 600,
-              color: appleVibe.text.tertiary,
-            }}
-          >
-            Prototype
           </span>
           {version > 0 && status === "ready" && (
             <span
               style={{
                 marginLeft: "auto",
                 fontSize: 10,
-                fontWeight: 600,
-                color: appleVibe.text.tertiary,
+                fontWeight: 500,
+                color: appleVibe.text.faint,
+                fontVariantNumeric: "tabular-nums",
               }}
             >
               v{version}
@@ -185,7 +183,11 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
             <iframe
               title={`${title} prototype`}
               srcDoc={html}
-              sandbox=""
+              // T1: allow inline scripts but NOT same-origin — the doc loads
+              // at a null origin, can't read parent cookies, can't fetch our
+              // APIs, can't escape the sandbox. sanitizeHtmlT1 also wedges a
+              // deny-all CSP meta at the top of <head> as the second layer.
+              sandbox="allow-scripts"
               onPointerDown={stopEventPropagation}
               onWheelCapture={(e) => e.stopPropagation()}
               style={{ width: "100%", height: "100%", border: "none", display: "block" }}
@@ -231,16 +233,16 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
           )}
         </div>
 
-        {/* Feedback box — the iteration loop. */}
+        {/* Feedback box — the iteration loop. Flat hairline, no glass. */}
         <div
           onPointerDown={stopEventPropagation}
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 7,
+            gap: 6,
             padding: "8px 10px",
-            borderTop: `1px solid ${appleVibe.stroke.soft}`,
-            background: "rgba(248,250,252,0.9)",
+            borderTop: `1px solid ${appleVibe.stroke.hairline}`,
+            background: "#fff",
             flexShrink: 0,
           }}
         >
@@ -250,14 +252,14 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
             onKeyDown={(e) => {
               if (e.key === "Enter") sendFeedback();
             }}
-            placeholder="Tell Claude what to change…"
+            placeholder="What should change?"
             disabled={status === "generating"}
             style={{
               flex: 1,
-              border: `1px solid ${appleVibe.stroke.medium}`,
-              borderRadius: 999,
-              padding: "7px 13px",
-              fontSize: 12,
+              border: `1px solid ${appleVibe.stroke.soft}`,
+              borderRadius: 10,
+              padding: "7px 12px",
+              fontSize: 12.5,
               outline: "none",
               background: "#fff",
               color: appleVibe.text.primary,
@@ -272,18 +274,18 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
             style={{
               display: "inline-grid",
               placeItems: "center",
-              width: 32,
-              height: 32,
-              borderRadius: 999,
+              width: 30,
+              height: 30,
+              borderRadius: 10,
               border: "none",
-              background: accent,
-              color: "white",
+              background: feedback.trim() ? accent : "rgba(15,23,42,0.06)",
+              color: feedback.trim() ? "white" : appleVibe.text.faint,
               cursor: status === "generating" || !feedback.trim() ? "default" : "pointer",
-              opacity: status === "generating" || !feedback.trim() ? 0.5 : 1,
+              transition: "background 120ms ease-out",
               flexShrink: 0,
             }}
           >
-            <SendHorizontal style={{ width: 15, height: 15 }} strokeWidth={2.3} />
+            <SendHorizontal style={{ width: 14, height: 14 }} strokeWidth={2.2} />
           </button>
         </div>
       </div>

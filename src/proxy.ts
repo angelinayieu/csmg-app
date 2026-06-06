@@ -6,39 +6,58 @@ import { updateSession } from "@/lib/supabase/middleware";
 // This is the SINGLE request-interceptor Next runs (this version renamed
 // `middleware` → `proxy`). It does two jobs:
 //
-//   1. Route compaction. The new build is ONLY the home + the objective
-//      canvas. Per the "retire the old build" direction (see
-//      project_old_build_deprecation), every other /app/* surface — synergy,
+//   1. Route compaction. Per the "retire the old build" direction (see
+//      project_old_build_deprecation), legacy /app/* surfaces — synergy,
 //      lab, whiteboard, strategy, crci, distill, explore, patterns,
-//      intake-proposal, use-cases, workspace, connect, space, analytics,
-//      objectives, the OLD settings + library pages, … — is legacy (stale
-//      design + wrong routing). Rather than delete them (this is reversible),
-//      we redirect them all to the home so nothing routes into the old build.
-//      Library + settings now live ON the objective board (the rail + the
-//      minimalist BoardSettingsLauncher), not as separate pages.
+//      intake-proposal, use-cases, space, analytics, objectives, the OLD
+//      /app/library + /app/settings, … — are redirected to the home so
+//      nothing routes back into them. Real new-build surfaces are
+//      explicitly allowlisted (bouncing them would visibly break the UI —
+//      the profile dropdown's Profile/Credits links and the onboarding
+//      gate are the recurring footguns).
 //
-//        • /app                       → home (untouched, falls through)
+//      Allowlist (kept live):
+//        • /app                       → home
 //        • /app/objective[/<id>]      → the objective canvas (the product)
-//        • /app/objective/<id>/sub/*  → OLD room views → back to the board
-//        • everything else /app/*     → home
+//        • /app/profile               → the new minimal profile page
+//        • /app/credits[/...]         → credits dashboard + Stripe success/cancel
+//        • /app/welcome               → first-sign-in onboarding gate
+//        • /app/connect[/...]         → integration setup (tab-sync, Drive)
+//
+//      Special case: /app/objective/<id>/sub/* are retired room views;
+//      bounce them back to the board itself.
+//
+//      Everything else /app/* → /app.
 //
 //   2. Supabase auth-cookie refresh (updateSession) for every other request —
 //      the original behaviour, preserved unchanged.
+
+const NEW_BUILD_PREFIXES = [
+  "/app/objective",
+  "/app/profile",
+  "/app/credits",
+  "/app/welcome",
+  "/app/connect",
+];
+
+function isNewBuildRoute(pathname: string): boolean {
+  return NEW_BUILD_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`),
+  );
+}
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (pathname.startsWith("/app/")) {
-    // Match the exact segment so the OLD plural /app/objectives route is NOT
-    // mistaken for the (singular) objective canvas.
-    const isObjective =
-      pathname === "/app/objective" || pathname.startsWith("/app/objective/");
-
-    if (isObjective) {
-      // The objective canvas is the new build. Its OLD downstream room views
-      // (/sub/...) are retired — bounce them back to the board itself.
+    if (isNewBuildRoute(pathname)) {
+      // The objective canvas's OLD downstream room views (/sub/...) are
+      // retired — bounce them back to the board itself.
       const subIdx = pathname.indexOf("/sub/");
-      if (subIdx !== -1) {
+      if (
+        subIdx !== -1 &&
+        (pathname === "/app/objective" || pathname.startsWith("/app/objective/"))
+      ) {
         const url = request.nextUrl.clone();
         url.pathname = pathname.slice(0, subIdx); // → /app/objective/<id>
         url.search = "";
@@ -54,7 +73,7 @@ export async function proxy(request: NextRequest) {
     }
   }
 
-  // Everything else (/, /auth, /api, /app, /app/objective, …) → session refresh.
+  // Everything else (/, /auth, /api, /app, allowlisted /app/*, …) → session refresh.
   return await updateSession(request);
 }
 

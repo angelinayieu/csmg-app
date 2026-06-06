@@ -51,6 +51,16 @@ export async function runDeepResolve(
      *  multi-round run. `fresh` is how many NEW emergent questions that round
      *  surfaced to chase next. Soft — a throwing callback never breaks the loop. */
     onRound?: (info: { round: number; fresh: number }) => void;
+    /** Fired for each round the planner says shouldDecompose — the caller
+     *  dispatches its decompose event from here, scoped to `seed` so rounds 2+
+     *  narrow to the emergent concept instead of re-decomposing the whole
+     *  objective. Round 1 fires with `seed: null` (decompose the re-framed
+     *  prompt as a whole). Soft — a throwing callback never breaks the loop. */
+    onDecompose?: (info: {
+      round: number;
+      sharpenedPrompt: string | undefined;
+      seed: { phrase: string; slug: string; why?: string } | null;
+    }) => void;
   },
 ): Promise<DeepResolveResult | null> {
   if (!spaceId || seed.length === 0) return null;
@@ -62,6 +72,10 @@ export async function runDeepResolve(
   let sharpenedPrompt: string | undefined;
   let shouldDecompose = false;
   let rounds = 0;
+  // The emergent concept that drove the CURRENT round. Round 1 = null (full
+  // objective). Each subsequent round inherits the first fresh emergent of the
+  // round before it — that's the cluster a follow-up decompose narrows to.
+  let currentSeed: { phrase: string; slug: string; why?: string } | null = null;
 
   while (rounds < maxRounds && toResolve.length > 0) {
     const res = await runAiResolve(spaceId, toResolve);
@@ -69,6 +83,21 @@ export async function runDeepResolve(
     if (res.sharpenedPrompt) sharpenedPrompt = res.sharpenedPrompt;
     shouldDecompose = shouldDecompose || res.shouldDecompose;
     rounds += 1;
+
+    // Per-round decompose hook — fan a new sibling cluster off the action node
+    // each round the planner says decompose, so the board grows into a flow
+    // chart of sub-decompositions instead of one terminal Decomposition blob.
+    if (res.shouldDecompose) {
+      try {
+        opts?.onDecompose?.({
+          round: rounds,
+          sharpenedPrompt,
+          seed: currentSeed,
+        });
+      } catch {
+        /* a bad callback never stops resolution */
+      }
+    }
 
     // Self-question: did resolving (+ decomposing) surface NEW ambiguities?
     let emergent: EmergentAnn[] = [];
@@ -109,6 +138,17 @@ export async function runDeepResolve(
         concept_slug: a.concept_slug,
       }))
       .filter((c) => c.phrase.length > 0);
+
+    // The first emergent of THIS round becomes next round's narrow-decompose
+    // seed (the cluster the upcoming sub-frame will sit on top of).
+    const head = toResolve[0];
+    currentSeed = head
+      ? {
+          phrase: head.phrase,
+          slug: head.concept_slug || slugify(head.phrase),
+          why: head.why,
+        }
+      : null;
 
     // Progressive UI hook: this round committed + we know how many fresh
     // questions it opened. Let the caller repaint (soft — never breaks the loop).

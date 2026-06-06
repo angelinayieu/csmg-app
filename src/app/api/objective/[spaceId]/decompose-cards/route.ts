@@ -132,10 +132,31 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   // Objective text: explicit override, else the shared space context (which
   // prefers the RE-FRAMED sharpened prompt — the user's resolved objective).
+  // `subsystem_seed` narrows the run to ONE emergent concept (rounds 2+ of the
+  // deep resolver) so we don't re-decompose the whole objective every round.
   let objective = "";
+  let seed: { phrase?: string; slug?: string; why?: string } | null = null;
   try {
-    const b = (await req.json()) as { objective?: unknown };
+    const b = (await req.json()) as {
+      objective?: unknown;
+      subsystem_seed?: {
+        phrase?: unknown;
+        slug?: unknown;
+        why?: unknown;
+      } | null;
+    };
     if (typeof b?.objective === "string") objective = b.objective.trim();
+    if (b?.subsystem_seed && typeof b.subsystem_seed === "object") {
+      const s = b.subsystem_seed;
+      const phrase = typeof s.phrase === "string" ? s.phrase.trim() : "";
+      if (phrase) {
+        seed = {
+          phrase,
+          slug: typeof s.slug === "string" ? s.slug.trim() : undefined,
+          why: typeof s.why === "string" ? s.why.trim() : undefined,
+        };
+      }
+    }
   } catch {
     /* no body — fall back to the space context */
   }
@@ -147,13 +168,19 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "No objective to decompose." }, { status: 400 });
   }
 
+  // When a seed is supplied, narrow the prompt to ONLY that concept's branch
+  // (a handful of cards) instead of re-decomposing the whole objective.
+  const userPrompt = seed
+    ? `${spaceCtx.preamble ? spaceCtx.preamble + "\n\n---\n\n" : ""}The full objective (kept here for context only):\n${objective.slice(0, 1500)}\n\nNow decompose ONLY this emergent concept — its features + variables, no more than 3-4 cards in total, one or two cohesive subsystems max. Stay strictly inside this branch; do NOT re-decompose unrelated parts of the objective.\n\nEmergent concept: "${seed.phrase}"${seed.why ? `\nWhy it matters: ${seed.why}` : ""}`
+    : spaceCtx.preamble
+      ? `${spaceCtx.preamble}\n\n---\n\nDecompose THIS objective into Feature/Variable cards:\n${objective.slice(0, 4000)}`
+      : objective.slice(0, 4000);
+
   let result: { features?: RawCard[]; variables?: RawCard[]; links?: RawLink[] };
   try {
     result = await llmJSON({
       system: SYSTEM,
-      user: spaceCtx.preamble
-        ? `${spaceCtx.preamble}\n\n---\n\nDecompose THIS objective into Feature/Variable cards:\n${objective.slice(0, 4000)}`
-        : objective.slice(0, 4000),
+      user: userPrompt,
       model: "gpt-4o",
       maxTokens: 2000,
       temperature: 0.4,

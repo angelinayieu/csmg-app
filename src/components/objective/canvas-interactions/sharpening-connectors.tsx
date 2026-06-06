@@ -61,6 +61,42 @@ function sideToSideCurve(
   };
 }
 
+/** Smooth vertical-S from bottom-center of source to top-center of child.
+ *  Used when the child card sits BELOW the source — the heatmap + priority
+ *  fork off the sharpening card downward, so the connector should exit the
+ *  source's bottom edge straight down (NOT side-out then twist). */
+function topDownForkCurve(
+  ab: { x: number; y: number; w: number; h: number },
+  bb: { x: number; y: number; w: number; h: number },
+): { from: { x: number; y: number }; to: { x: number; y: number }; d: string } {
+  const from = { x: ab.x + ab.w / 2, y: ab.y + ab.h };
+  const to = { x: bb.x + bb.w / 2, y: bb.y };
+  // Strong vertical commitment in the control points so the curve leaves the
+  // source pointing DOWN, then arcs toward the child — no sideways lobe.
+  const dy = Math.max(48, (to.y - from.y) * 0.6);
+  return {
+    from,
+    to,
+    d: `M ${from.x} ${from.y} C ${from.x} ${from.y + dy}, ${to.x} ${to.y - dy}, ${to.x} ${to.y}`,
+  };
+}
+
+/** Pick the right curve. If the child sits clearly below the source (vertical
+ *  gap dominates horizontal offset), fork downward; otherwise side-to-side. */
+function pickCurve(
+  ab: { x: number; y: number; w: number; h: number },
+  bb: { x: number; y: number; w: number; h: number },
+) {
+  const verticalGap = bb.y - (ab.y + ab.h);
+  const horizontalOverlap =
+    Math.min(ab.x + ab.w, bb.x + bb.w) - Math.max(ab.x, bb.x);
+  // Below + at least partial horizontal overlap (or close to it) → down-fork.
+  if (verticalGap > -ab.h * 0.2 && horizontalOverlap > -Math.max(ab.w, bb.w) * 0.6) {
+    return topDownForkCurve(ab, bb);
+  }
+  return sideToSideCurve(ab, bb);
+}
+
 function computeSegments(editor: Editor): Seg[] {
   const shapes = editor.getCurrentPageShapes();
   const sharp = shapes.find((s) => s.type === "prompt-sharpening");
@@ -93,13 +129,13 @@ function computeSegments(editor: Editor): Seg[] {
       if ((s as AmbiguityHeatmapCardShape).props.sourceId !== sharp.id) continue;
       const hb = bounds(s.id);
       if (!hb) continue;
-      const c = sideToSideCurve(sbBox, hb);
+      const c = pickCurve(sbBox, hb);
       segs.push({ id: `sharp-heatmap-${s.id}`, ...c });
     } else if (s.type === "priority-map-card") {
       if ((s as PriorityMapCardShape).props.sourceId !== sharp.id) continue;
       const pb = bounds(s.id);
       if (!pb) continue;
-      const c = sideToSideCurve(sbBox, pb);
+      const c = pickCurve(sbBox, pb);
       segs.push({ id: `sharp-priority-${s.id}`, ...c });
     }
   }
@@ -118,7 +154,7 @@ function computeSegments(editor: Editor): Seg[] {
     // to the sharpening card (e.g. user deleted the heatmap card).
     let srcBox = bounds(forkSourceId);
     if (!srcBox) srcBox = sbBox;
-    const c = sideToSideCurve(srcBox, fb);
+    const c = pickCurve(srcBox, fb);
     segs.push({ id: `fork-${f.id}`, ...c });
   }
 
@@ -152,16 +188,46 @@ export function SharpeningConnectorsOverlay() {
         pointerEvents: "none",
       }}
     >
+      <defs>
+        <style>{`
+          @keyframes sharp-fork-draw {
+            from { stroke-dashoffset: 1; }
+            to   { stroke-dashoffset: 0; }
+          }
+          @keyframes sharp-fork-pop {
+            from { opacity: 0; transform: scale(0.4); }
+            to   { opacity: 1; transform: scale(1); }
+          }
+          .sharp-fork-path {
+            stroke-dasharray: 1;
+            stroke-dashoffset: 0;
+            animation: sharp-fork-draw 520ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+          }
+          .sharp-fork-handle-from {
+            transform-box: fill-box;
+            transform-origin: center;
+            animation: sharp-fork-pop 220ms ease-out both;
+          }
+          .sharp-fork-handle-to {
+            transform-box: fill-box;
+            transform-origin: center;
+            animation: sharp-fork-pop 260ms ease-out 380ms both;
+          }
+        `}</style>
+      </defs>
       {segs.map((s) => (
         <g key={s.id}>
           <path
+            className="sharp-fork-path"
             d={s.d}
+            pathLength={1}
             fill="none"
             stroke={STROKE}
             strokeWidth={1.75 / scale}
             strokeLinecap="round"
           />
           <circle
+            className="sharp-fork-handle-from"
             cx={s.from.x}
             cy={s.from.y}
             r={3.5 / scale}
@@ -170,6 +236,7 @@ export function SharpeningConnectorsOverlay() {
             strokeWidth={1.5 / scale}
           />
           <circle
+            className="sharp-fork-handle-to"
             cx={s.to.x}
             cy={s.to.y}
             r={3.5 / scale}

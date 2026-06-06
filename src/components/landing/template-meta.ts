@@ -119,4 +119,31 @@ export const TEMPLATE_META: Record<string, TemplateMeta> = {
       { label: "Milestones", icon: ClipboardList },
     ],
   },
+  startup_strategy: {
+    inputs: [
+      { label: "Notes", icon: NotesIcon },
+      { label: "Docs", icon: FileText },
+      { label: "Market Data", icon: DatasetsIcon },
+      { label: "Links", icon: LinksIcon },
+    ],
+    outputs: [
+      { label: "Strategy Map", icon: MapIcon },
+      { label: "Roadmap", icon: ClipboardList },
+      { label: "Risk Matrix", icon: Grid3x3 },
+      { label: "Pitch Brief", icon: FileText },
+    ],
+  },
+  relationship_dynamics: {
+    inputs: [
+      { label: "Notes", icon: NotesIcon },
+      { label: "Voice", icon: VoiceIcon },
+      { label: "Highlights", icon: Highlighter },
+      { label: "Links", icon: LinksIcon },
+    ],
+    outputs: [
+      { label: "Pattern Map", icon: PatternMapIcon },
+      { label: "Dynamics Brief", icon: FileText },
+      { label: "Action Plan", icon: ClipboardList },
+    ],
+  },
 };

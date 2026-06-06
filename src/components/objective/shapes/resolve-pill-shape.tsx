@@ -231,6 +231,28 @@ function ResolvePillRenderer({
                 : `Round ${round} · converging…`,
             );
           },
+          // Per-round fan-out: every round the planner says to decompose, drop a
+          // NEW sibling cluster forked off THIS pill (sourceShapeId = shape.id)
+          // so the board grows into a flow chart of sub-decompositions — one
+          // per emergent cluster — instead of one terminal Decomposition blob.
+          // Whiteboard-base serialises these into a Promise queue so concurrent
+          // dispatches don't drop. `subsystemSeed` lets the route narrow rounds
+          // 2+ to ONE concept instead of re-decomposing the whole objective.
+          onDecompose: ({ sharpenedPrompt: sp, seed }) => {
+            try {
+              window.dispatchEvent(
+                new CustomEvent(DECOMPOSE_INTO_CARDS_EVENT, {
+                  detail: {
+                    objective: sp,
+                    sourceShapeId: String(shape.id),
+                    subsystemSeed: seed ?? undefined,
+                  },
+                }),
+              );
+            } catch {
+              /* SSR / no-window */
+            }
+          },
         });
       } catch {
         /* soft-fail — show idle again below */
@@ -244,15 +266,6 @@ function ResolvePillRenderer({
         ok: !!res,
       });
       refreshSharpening(spaceId);
-      if (res?.shouldDecompose) {
-        window.dispatchEvent(
-          new CustomEvent(DECOMPOSE_INTO_CARDS_EVENT, {
-            detail: res.sharpenedPrompt
-              ? { objective: res.sharpenedPrompt }
-              : undefined,
-          }),
-        );
-      }
 
       inFlight.delete(spaceId);
       if (res) {

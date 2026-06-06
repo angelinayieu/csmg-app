@@ -1076,6 +1076,22 @@ declare module "@tldraw/tlschema" {
       version: number;
       specJson: string;
     };
+    // T2 — multi-file React prototype rendered in Sandpack (claude-artifact-
+    // runner template). Distinct from prototype-card (T0/T1, HTML) because the
+    // runtime + sanitizer + state shape (files map vs html string) all differ.
+    // See sandpack-template.ts for boot files; sanitize-react-t2.ts for the
+    // import allowlist + banned-API rules.
+    "prototype-react": {
+      w: number;
+      h: number;
+      title: string;
+      entry: string;
+      files: Record<string, string>;
+      status: "generating" | "ready" | "error";
+      errorReason: string | null;
+      version: number;
+      specJson: string | null;
+    };
     // Objective board — Prompt Sharpening Card (the first intake
     // intelligence object). Collapsed: distilled title + sharpened prompt +
     // top ambiguity chips. Expanded: the 10-zone ambiguity heatmap +

@@ -26,6 +26,19 @@ import { ZONE_LABEL, SHARPEN_COLOR } from "./prompt-sharpening-card-shape";
 
 const CARD_SIZE = 340; // square
 
+// One-shot entrance animation when the card mounts (forks in from the
+// sharpening card). Fades up + rises from the connector entry point so the
+// fork reads as a downward unfurl, not a snap-in.
+const FORK_CARD_ENTRANCE_CSS = `
+@keyframes objective-fork-card-enter {
+  from { opacity: 0; transform: translate3d(0, -10px, 0) scale(0.96); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+.objective-fork-card-enter {
+  animation: objective-fork-card-enter 360ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+`;
+
 const SEV_COLOR: Record<string, string> = {
   high: "#EF4444",
   medium: "#F59E0B",
@@ -123,7 +136,9 @@ function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape 
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
     >
+      <style>{FORK_CARD_ENTRANCE_CSS}</style>
       <div
+        className="objective-fork-card-enter"
         style={{
           width: "100%",
           height: "100%",
@@ -136,6 +151,7 @@ function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape 
           flexDirection: "column",
           overflow: "hidden",
           fontFamily: appleVibe.font.stack,
+          transformOrigin: "50% 0%",
         }}
       >
         <div

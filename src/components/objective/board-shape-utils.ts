@@ -16,6 +16,7 @@ import { SpecForgeCardShapeUtil } from "./shapes/specforge-card-shape";
 import { TechSpecCardShapeUtil } from "./shapes/tech-spec-card-shape";
 import { SpecFeedbackCardShapeUtil } from "./shapes/spec-feedback-card-shape";
 import { PrototypeCardShapeUtil } from "./shapes/prototype-card-shape";
+import { PrototypeReactShapeUtil } from "./shapes/prototype-react-shape";
 import { UiPlanCardShapeUtil } from "./shapes/ui-plan-card-shape";
 import { PromptSharpeningCardShapeUtil } from "./shapes/prompt-sharpening-card-shape";
 import { AmbiguityHeatmapCardShapeUtil } from "./shapes/ambiguity-heatmap-card-shape";
@@ -47,6 +48,9 @@ export const CUSTOM_SHAPE_UTILS = [
   SpecFeedbackCardShapeUtil,
   UiPlanCardShapeUtil,
   PrototypeCardShapeUtil,
+  // T2 — Sandpack-backed multi-file React prototype shape. Distinct from
+  // PrototypeCardShape (T0/T1, HTML).
+  PrototypeReactShapeUtil,
   PromptSharpeningCardShapeUtil,
   AmbiguityHeatmapCardShapeUtil,
   PriorityMapCardShapeUtil,

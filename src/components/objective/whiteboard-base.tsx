@@ -1242,42 +1242,62 @@ export function WhiteboardBase({
   // A trigger (the Decompose button / command) fires
   // DECOMPOSE_INTO_CARDS_EVENT; we POST the objective to /decompose-cards and
   // lay the returned cards + their connections out on the board. Isolated
-  // from the heavy rooms pipeline. Single-flight via the ref.
-  const decomposingRef = useRef(false);
+  // from the heavy rooms pipeline. SERIALISED via a Promise chain (not a
+  // boolean guard) so runDeepResolve can fire ONE dispatch per round and have
+  // every round actually land — the prior boolean guard silently dropped them.
+  const decomposeChainRef = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     async function onDecompose(e: Event) {
       const ed = editorRef.current;
-      if (!ed || decomposingRef.current) return;
-      decomposingRef.current = true;
+      if (!ed) return;
       // Optional objective override (e.g. the re-framed objective after the
       // Resolution Studio applies answers); bare triggers decompose space text.
-      const objective = (e as CustomEvent<{ objective?: string }>)?.detail
-        ?.objective;
-      try {
-        const res = await fetch(`/api/objective/${spaceId}/decompose-cards`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(objective ? { objective } : {}),
-        });
-        if (res.ok) {
-          const json = (await res.json()) as {
-            cards?: DeployCard[];
-            links?: DeployLink[];
-          };
-          if (Array.isArray(json.cards) && json.cards.length > 0) {
-            deployOcCards(ed, json.cards, json.links ?? []);
+      // `sourceShapeId` lets the trigger tether the fork bezier to ITSELF (the
+      // resolve-pill the user pressed) instead of the default objective head.
+      // `subsystemSeed` narrows the decompose to a single emergent cluster so
+      // runDeepResolve can fan multiple sibling frames out per round.
+      const detail = (e as CustomEvent<{
+        objective?: string;
+        sourceShapeId?: string;
+        subsystemSeed?: { phrase: string; slug?: string; why?: string };
+      }>)?.detail;
+      const objective = detail?.objective;
+      const sourceShapeId = detail?.sourceShapeId ?? null;
+      const subsystemSeed = detail?.subsystemSeed;
+      // Append THIS dispatch to the chain — the previous round's decompose
+      // finishes before this one starts, so rounds 1..N each get their own
+      // sibling frame on the board.
+      decomposeChainRef.current = decomposeChainRef.current.then(async () => {
+        try {
+          const body: Record<string, unknown> = {};
+          if (objective) body.objective = objective;
+          if (subsystemSeed) body.subsystem_seed = subsystemSeed;
+          const res = await fetch(`/api/objective/${spaceId}/decompose-cards`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (res.ok) {
+            const json = (await res.json()) as {
+              cards?: DeployCard[];
+              links?: DeployLink[];
+            };
+            if (Array.isArray(json.cards) && json.cards.length > 0) {
+              deployOcCards(ed, json.cards, json.links ?? [], {
+                sourceShapeId,
+              });
+            }
+          }
+        } catch {
+          /* soft-fail — the board stays as-is */
+        } finally {
+          try {
+            window.dispatchEvent(new CustomEvent(DECOMPOSE_DONE_EVENT));
+          } catch {
+            /* SSR / no-window */
           }
         }
-      } catch {
-        /* soft-fail — the board stays as-is */
-      } finally {
-        decomposingRef.current = false;
-        try {
-          window.dispatchEvent(new CustomEvent(DECOMPOSE_DONE_EVENT));
-        } catch {
-          /* SSR / no-window */
-        }
-      }
+      });
     }
     window.addEventListener(DECOMPOSE_INTO_CARDS_EVENT, onDecompose);
     return () => window.removeEventListener(DECOMPOSE_INTO_CARDS_EVENT, onDecompose);
@@ -2791,6 +2811,18 @@ function UiPlanEventBridge({
           variants: Array<{ label: string; plan: unknown }>;
         };
         const variants = json.variants || [];
+        // Read the source shape's objectId once (if it carries one) so each
+        // promoted plan can be linked derived_from the source in the
+        // object cluster graph.
+        const sourceShape = d.sourceShapeId
+          ? editor.getShape(d.sourceShapeId as TLShapeId)
+          : null;
+        const sourceObjectId =
+          sourceShape &&
+          typeof (sourceShape.props as { objectId?: unknown }).objectId === "string"
+            ? ((sourceShape.props as { objectId: string }).objectId as string)
+            : "";
+
         for (let i = 0; i < cardIds.length; i++) {
           const v = variants[i];
           const id = cardIds[i];
@@ -2803,17 +2835,61 @@ function UiPlanEventBridge({
             });
             continue;
           }
+          const finalTitle = json.title || d.sourceLabel || "UI plan";
+          const finalOverview = json.overview || "";
+          const finalVariantLabel = v.label || `Variant ${i + 1}`;
+          const finalPlanJson = JSON.stringify(v.plan);
           editor.updateShape<UiPlanCardShape>({
             id,
             type: "ui-plan-card",
             props: {
               status: "ready",
-              title: json.title || d.sourceLabel || "UI plan",
-              overview: json.overview || "",
-              variantLabel: v.label || `Variant ${i + 1}`,
-              uiPlanJson: JSON.stringify(v.plan),
+              title: finalTitle,
+              overview: finalOverview,
+              variantLabel: finalVariantLabel,
+              uiPlanJson: finalPlanJson,
             },
           });
+
+          // Promote to library_objects in the background. The route is
+          // idempotent on source_ref=ui-plan:<shapeId>; the response's
+          // objectId is stamped onto the shape so onClick opens the
+          // detail rail and drag-connector reads it. Soft-fail.
+          (async (shapeId: TLShapeId) => {
+            try {
+              const promoteRes = await fetch(
+                `/api/objective/${spaceId}/ui-plan/promote`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    shapeId,
+                    title: finalTitle,
+                    variantLabel: finalVariantLabel,
+                    overview: finalOverview,
+                    sourceText: d.sourceText,
+                    uiPlanJson: finalPlanJson,
+                    sourceShapeId: d.sourceShapeId ?? "",
+                    sourceObjectId: sourceObjectId || "",
+                  }),
+                },
+              );
+              if (!promoteRes.ok) return;
+              const promoteJson = (await promoteRes.json()) as {
+                objectId?: string;
+              };
+              const objectId = promoteJson?.objectId;
+              if (!objectId) return;
+              if (!editor.getShape(shapeId)) return;
+              editor.updateShape<UiPlanCardShape>({
+                id: shapeId,
+                type: "ui-plan-card",
+                props: { objectId },
+              });
+            } catch (err) {
+              console.warn("[board] ui-plan promote failed (soft):", err);
+            }
+          })(id);
         }
       } catch (err) {
         console.warn("[board] ui-plan build failed:", err);
