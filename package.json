@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.81.0",
+    "@codesandbox/sandpack-react": "^2.20.0",
     "@dagrejs/dagre": "^3.0.0",
     "@mozilla/readability": "^0.6.0",
     "@supabase/ssr": "^0.10.0",
@@ -32,6 +33,7 @@
     "framer-motion": "^12.38.0",
     "googleapis": "^173.0.0",
     "inngest": "^4.2.4",
+    "isomorphic-dompurify": "^3.16.0",
     "jsdom": "^29.0.2",
     "lucide-react": "^1.7.0",
     "mammoth": "^1.12.0",
