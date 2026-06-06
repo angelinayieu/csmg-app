@@ -41,9 +41,8 @@ interface AskAnswer {
 }
 
 export function AskSpaceView() {
-  const { data } = useSpaceData();
+  const { space, entities } = useSpaceData();
   const router = useRouter();
-  const { space, entities } = data;
 
   const question = space.input_text ?? "";
   const askPayload = readAskAnswer(space.synthesis_data);
