@@ -17,6 +17,7 @@ import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { labelFor, panToShape } from "../favorites-sidebar";
 import { ObjectClusterGraph } from "./object-cluster-graph";
 import { slugifyConcept } from "@/lib/objective-canvas/normalize-annotations";
+import { usePanel, setPanel } from "@/lib/objective-canvas/board-panel-signal";
 
 export const OPEN_CARD_DETAIL_EVENT = "objective-board:open-card-detail";
 
@@ -1126,18 +1127,37 @@ function ObjectiveNode({
 
 /** Mount once at the board level. Listens for OPEN_CARD_DETAIL_EVENT and opens
  *  the object drawer; navigating a link remounts it for the new object. The
- *  marker id "__obj" opens the board-sourced ObjectiveNode instead. */
+ *  marker id "__obj" opens the board-sourced ObjectiveNode instead.
+ *
+ *  Mutual exclusion with the board-panel rails (Actions/Library/Style): this
+ *  floating drawer occupies the SAME top-right slot, so opening it closes any
+ *  open panel, and opening any panel closes this drawer. Otherwise two side
+ *  panels stack and the user sees both at once. */
 export function ObjectDetailMount({ spaceId, editor }: { spaceId: string; editor: Editor }) {
   const [objectId, setObjectId] = useState<string | null>(null);
+  const powerupsOpen = usePanel("powerups");
+  const libraryOpen = usePanel("library");
+  const styleOpen = usePanel("style");
 
   useEffect(() => {
     function onOpen(e: Event) {
       const id = (e as CustomEvent<{ objectId?: string }>).detail?.objectId;
-      if (id) setObjectId(String(id));
+      if (!id) return;
+      // Close every top-right panel so this drawer is the only thing in the slot.
+      setPanel("powerups", false);
+      setPanel("library", false);
+      setPanel("style", false);
+      setObjectId(String(id));
     }
     window.addEventListener(OPEN_CARD_DETAIL_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_CARD_DETAIL_EVENT, onOpen);
   }, []);
+
+  // If any board panel opens while the drawer is up, the drawer yields the slot.
+  useEffect(() => {
+    if (!objectId) return;
+    if (powerupsOpen || libraryOpen || styleOpen) setObjectId(null);
+  }, [objectId, powerupsOpen, libraryOpen, styleOpen]);
 
   // Esc closes the rail (there's no backdrop to click — it's non-occluding).
   useEffect(() => {
