@@ -30,6 +30,7 @@ import {
   Check,
 } from "lucide-react";
 import { shapeToScanTarget } from "./shape-node-adapter";
+import { DECOMPOSE_DONE_EVENT } from "./deploy-oc-cards";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import {
   openResolutionStudio,
@@ -101,6 +102,10 @@ interface ClarityData {
   sharpenedPrompt: string;
   anns: SalienceAnn[];
   resolvedSlugs: Set<string>;
+  /** concept_slug → resolution confidence (0..1). User-pinned = 1; AI = its own
+   *  calibrated score. Lets the clarity meter weight by confidence so a shaky
+   *  first-guess pass fills the bar honestly instead of jumping to "done". */
+  resolvedConfidence: Map<string, number>;
   aiActivity: AiActivityItem[];
 }
 // Mirrors the slugify in prompt-sharpening-prompt.ts + the card, so a salience
@@ -150,8 +155,20 @@ async function fetchClarity(spaceId: string): Promise<ClarityData | null> {
     const annsRaw = a.salience?.annotations;
     const anns = Array.isArray(annsRaw) ? (annsRaw as SalienceAnn[]) : [];
     const resolvedSlugs = new Set<string>();
+    const resolvedConfidence = new Map<string, number>();
     for (const r of a.resolutions ?? []) {
-      if (r?.concept_slug) resolvedSlugs.add(r.concept_slug);
+      if (!r?.concept_slug) continue;
+      resolvedSlugs.add(r.concept_slug);
+      // User-pinned answers are authoritative (1). AI answers carry their own
+      // calibrated confidence; a legacy AI row without one is treated as a
+      // borderline 0.7 so it neither inflates nor unfairly tanks the meter.
+      const c =
+        typeof r.confidence === "number" && isFinite(r.confidence)
+          ? Math.max(0, Math.min(1, r.confidence))
+          : r.source === "ai"
+            ? 0.7
+            : 1;
+      resolvedConfidence.set(r.concept_slug, c);
     }
     // AI-activity strip: prefer the durable append-only audit log (full history)
     // and fall back to deriving from resolutions[] (last-write-wins) for legacy
@@ -190,6 +207,7 @@ async function fetchClarity(spaceId: string): Promise<ClarityData | null> {
       sharpenedPrompt: a.sharpened_prompt ?? "",
       anns,
       resolvedSlugs,
+      resolvedConfidence,
       aiActivity: aiActivity.slice(0, 5),
     };
   } catch {
@@ -530,6 +548,26 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
     };
   }, [open, spaceId]);
 
+  // Re-rank when a decomposition lands. The board alignment list reads tldraw
+  // shapes, so it sits on its empty/stale state until the new Feature/Variable
+  // cards actually deploy — DECOMPOSE_DONE fires right after they do. Without
+  // this, "AI resolve" creates cards but the alignment list never reflects them
+  // ("No nodes to rank yet" even though cards exist).
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    const onDecomposeDone = () => {
+      fetchRanking(editor, spaceId).then((d) => {
+        if (alive && d) setData(d);
+      });
+    };
+    window.addEventListener(DECOMPOSE_DONE_EVENT, onDecomposeDone);
+    return () => {
+      alive = false;
+      window.removeEventListener(DECOMPOSE_DONE_EVENT, onDecomposeDone);
+    };
+  }, [open, spaceId, editor]);
+
   // Live-breathe: when the user edits the board (adds a card, types into a
   // sticky), debounce 2.5s and re-run the addressing pass. The dots fill in
   // without a manual refresh. Listener is only attached while the rail is
@@ -606,7 +644,7 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
     .map((dir) => ({
       dir,
       label: dir === "convergent" ? "Converging" : "Diverging",
-      accent: dir === "convergent" ? "#059669" : "#D97706",
+      accent: dir === "convergent" ? appleVibe.text.secondary : "#D97706",
       items: ranked
         .filter((r) => r.direction === dir)
         .sort((a, b) => b.score - a.score),
@@ -620,41 +658,65 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
   // (the implicit "1 micro = the macro" model).
   const anns = clarity?.anns ?? [];
   const resolvedSet = clarity?.resolvedSlugs ?? new Set<string>();
-  const microStats = (a: SalienceAnn): { answered: number; total: number } => {
+  const resolvedConf = clarity?.resolvedConfidence ?? new Map<string, number>();
+  // Honest meter: a 0.68-confidence AI guess credits 0.68 of a "done", not a
+  // full one — so the bar settles where the AI actually is, not at a fake 100%.
+  // User-pinned / unknown = full weight.
+  const confWeight = (a: SalienceAnn): number => {
+    const c = resolvedConf.get(slugifyPhrase(a.phrase));
+    return typeof c === "number" ? c : 1;
+  };
+  // A concept is genuinely closed only if resolved AND confident (>=0.7). A
+  // low-confidence AI call still "needs you" — so the rail never claims
+  // everything is resolved off a single shaky pass.
+  const wellResolved = (a: SalienceAnn): boolean => {
+    if (!resolvedSet.has(slugifyPhrase(a.phrase))) return false;
+    const c = resolvedConf.get(slugifyPhrase(a.phrase));
+    return typeof c === "number" ? c >= 0.7 : true;
+  };
+  const microStats = (
+    a: SalienceAnn,
+  ): { answered: number; weighted: number; total: number } => {
     const m = a.micro_questions;
-    if (!m || m.length === 0) {
-      const isResolved = resolvedSet.has(slugifyPhrase(a.phrase));
-      return { answered: isResolved ? 1 : 0, total: 1 };
-    }
-    // A macro-level resolution short-circuits all micros (the user answered
-    // the whole concept in the Studio). Otherwise count micro-level resolves.
+    const w = confWeight(a);
     const macroResolved = resolvedSet.has(slugifyPhrase(a.phrase));
-    return {
-      answered: macroResolved
-        ? m.length
-        : m.filter((q) => q.resolved_at).length,
-      total: m.length,
-    };
+    if (!m || m.length === 0) {
+      return {
+        answered: macroResolved ? 1 : 0,
+        weighted: macroResolved ? w : 0,
+        total: 1,
+      };
+    }
+    // A macro-level resolution short-circuits all micros (the user/AI answered
+    // the whole concept). Otherwise count micro-level resolves. Micros closed
+    // without a macro commit carry no confidence score → full credit.
+    const answered = macroResolved
+      ? m.length
+      : m.filter((q) => q.resolved_at).length;
+    const weighted = macroResolved ? m.length * w : answered;
+    return { answered, weighted, total: m.length };
   };
   const totals = anns.reduce(
     (acc, a) => {
       const s = microStats(a);
       acc.answered += s.answered;
+      acc.weighted += s.weighted;
       acc.total += s.total;
       return acc;
     },
-    { answered: 0, total: 0 },
+    { answered: 0, weighted: 0, total: 0 },
   );
+  // Confidence-weighted — the bar reflects how SETTLED the answers are, not just
+  // how many slots are filled (the old answered/total would hit 100% off guesses).
   const clarityPct =
-    totals.total > 0 ? Math.round((totals.answered / totals.total) * 100) : 0;
-  // The "concepts resolved" count (macro-level) stays useful as a secondary
-  // signal — readable shorthand for "how many top-level ambiguities are fully
-  // closed". Shown alongside the micro count below.
+    totals.total > 0 ? Math.round((totals.weighted / totals.total) * 100) : 0;
   const resolvedConcepts = anns.filter((a) =>
     resolvedSet.has(slugifyPhrase(a.phrase)),
   ).length;
+  // "Open" includes low-confidence AI calls — they still want your eyes, so the
+  // rail never shows "all resolved" off a shaky pass.
   const openQuestions = anns
-    .filter((a) => !resolvedSet.has(slugifyPhrase(a.phrase)))
+    .filter((a) => !wellResolved(a))
     .sort((a, b) => annPriority(b) - annPriority(a))
     .slice(0, 3);
 
@@ -843,9 +905,6 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
                 strokeWidth={2.2}
               />
             </button>
-            <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "#059669", fontVariantNumeric: "tabular-nums" }}>
-              {clarityPct}%
-            </span>
           </div>
           {/* Re-scan toast — short-lived, never persistent. Colored by outcome
               (success / no-op / fail) so a glance tells you what happened. */}
@@ -875,30 +934,28 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
             </div>
           )}
 
-          {/* clarity meter — climbs as ambiguities get resolved */}
-          <div style={{ marginTop: 8, height: 4, borderRadius: 999, background: appleVibe.surface.chip, overflow: "hidden" }}>
-            <span style={{ display: "block", height: "100%", borderRadius: 999, width: `${clarityPct}%`, background: "#059669", transition: "width 0.4s ease" }} />
-          </div>
-          <div style={{ marginTop: 5, fontSize: 11.5, color: appleVibe.text.tertiary }}>
-            {totals.answered} of {totals.total} questions answered
+          {/* clarity meter — fills as the AI resolves ambiguities. Visual only,
+              no % number: the user shouldn't have to track a score, just see it
+              settle toward clear. */}
+          <div style={{ marginTop: 9, height: 4, borderRadius: 999, background: appleVibe.surface.chip, overflow: "hidden" }}>
+            <span style={{ display: "block", height: "100%", borderRadius: 999, width: `${clarityPct}%`, background: appleVibe.text.secondary, transition: "width 0.4s ease" }} />
           </div>
 
           {priOpen && (
             <>
               {openQuestions.length > 0 ? (
                 <div style={{ marginTop: 9 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 6 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: appleVibe.text.faint }}>
-                      Needs you
-                    </span>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: appleVibe.text.faint }}>
-                      {openQuestions.length}
-                    </span>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: appleVibe.text.faint, marginBottom: 6 }}>
+                    Still resolving
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                     {openQuestions.map((a, i) => {
-                      const s = microStats(a);
-                      const showDots = (a.micro_questions?.length ?? 0) > 0;
+                      // One calm status, no counts — the AI handles the detail.
+                      // Amber pulse = actively being addressed, faint = queued.
+                      // The user reads the CONCEPT, not a 0/2 score.
+                      const addressing = (a.micro_questions ?? []).some(
+                        (m) => !m.resolved_at && (m.addressed_by?.length ?? 0) > 0,
+                      );
                       return (
                         <button
                           key={i}
@@ -906,8 +963,8 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
                           onClick={openResolve}
                           title={
                             a.emerged_at
-                              ? `Newly surfaced from board work · ${a.why || "Resolve this"}`
-                              : a.why || "Resolve this"
+                              ? `Newly surfaced from board work · ${a.why || "The AI is resolving this — click to steer it"}`
+                              : a.why || "The AI is resolving this — click to steer it"
                           }
                           style={openQRow}
                           onMouseEnter={(e) => (e.currentTarget.style.background = appleVibe.surface.chipHover)}
@@ -936,58 +993,32 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
                               new
                             </span>
                           )}
-                          {showDots && (
-                            <span
-                              style={{ display: "inline-flex", gap: 2, flexShrink: 0 }}
-                              aria-label={`${s.answered} of ${s.total} sub-questions answered`}
-                            >
-                              {a.micro_questions!.map((m, j) => {
-                                const resolved = !!m.resolved_at;
-                                const addressing =
-                                  !resolved && (m.addressed_by?.length ?? 0) > 0;
-                                return (
-                                  <span
-                                    key={m.id ?? j}
-                                    title={
-                                      resolved
-                                        ? "resolved"
-                                        : addressing
-                                          ? "being addressed"
-                                          : "open"
-                                    }
-                                    style={{
-                                      width: 5,
-                                      height: 5,
-                                      borderRadius: 999,
-                                      background: resolved
-                                        ? "#059669"
-                                        : addressing
-                                          ? "#D97706"
-                                          : appleVibe.surface.chip,
-                                      border:
-                                        resolved || addressing
-                                          ? "none"
-                                          : `1px solid ${appleVibe.text.faint}`,
-                                    }}
-                                  />
-                                );
-                              })}
-                            </span>
-                          )}
+                          <span
+                            className={addressing ? "animate-pulse" : undefined}
+                            title={addressing ? "being resolved" : "queued"}
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: 999,
+                              flexShrink: 0,
+                              background: addressing ? "#D97706" : appleVibe.surface.chip,
+                              border: addressing ? "none" : `1px solid ${appleVibe.text.faint}`,
+                            }}
+                          />
                         </button>
                       );
                     })}
                   </div>
                 </div>
               ) : (
-                <div style={{ marginTop: 9, fontSize: 12, color: "#059669", fontWeight: 600 }}>
-                  All ambiguities resolved ✓
+                <div style={{ marginTop: 10, fontSize: 12, color: appleVibe.text.secondary, fontWeight: 600 }}>
+                  All concepts resolved
                 </div>
               )}
 
               {openQuestions.length > 0 && (
                 <button type="button" onClick={openResolve} style={resolveCta}>
-                  Resolve open questions
+                  Let AI resolve these
                   <ArrowRight style={{ width: 13, height: 13 }} strokeWidth={2.4} />
                 </button>
               )}
@@ -1016,15 +1047,11 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: appleVibe.text.faint }}>
               AI resolved
             </span>
-            {aiBusy ? (
-              <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, color: "#7C3AED", fontVariantNumeric: "tabular-nums" }}>
-                resolving {aiBusy.conceptCount}…
+            {aiBusy && (
+              <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, color: "#7C3AED" }}>
+                Resolving…
               </span>
-            ) : clarity && clarity.aiActivity.length > 0 ? (
-              <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, color: appleVibe.text.faint }}>
-                {clarity.aiActivity.length}
-              </span>
-            ) : null}
+            )}
           </div>
           {clarity && clarity.aiActivity.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -1055,7 +1082,7 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
                       />
                     ) : (
                       <Check
-                        style={{ width: 12, height: 12, color: "#059669", flexShrink: 0 }}
+                        style={{ width: 12, height: 12, color: appleVibe.text.secondary, flexShrink: 0 }}
                         strokeWidth={2.6}
                       />
                     )}
@@ -1103,20 +1130,64 @@ export function GoalLauncher({ spaceId, editor }: { spaceId: string; editor: Edi
         </div>
       )}
 
-      {/* ranking */}
+      {/* board alignment — ranks the cards ON the board by how they pull
+          toward / away from the goal. Distinct from the Priority Map (which
+          ranks the objective's ambiguities). On-demand, not auto-live, but it
+          re-ranks itself when a decomposition lands (see the effect above). */}
       <div style={{ padding: "9px 12px 4px", display: "flex", alignItems: "center", gap: 6 }}>
         <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: appleVibe.text.faint }}>
-          Live ranking
+          Board alignment
         </span>
         {ranked.length > 0 && <span style={{ fontSize: 10.5, fontWeight: 600, color: appleVibe.text.faint }}>{ranked.length}</span>}
+        <button
+          type="button"
+          onClick={refresh}
+          disabled={refreshing}
+          title="Rank the cards on the board against your goal"
+          style={{ ...iconBtn, marginLeft: "auto", width: 24, height: 24 }}
+        >
+          <RefreshCw
+            className={refreshing ? "animate-spin" : undefined}
+            style={{ width: 12, height: 12 }}
+            strokeWidth={2.2}
+          />
+        </button>
       </div>
 
       <div style={scrollArea}>
         {loading ? (
           <div style={emptyRow}><Loader2 className="animate-spin" style={{ width: 14, height: 14 }} /> Ranking the board…</div>
         ) : ranked.length === 0 ? (
-          <div style={{ padding: "12px 4px", fontSize: 12.5, lineHeight: 1.4, color: appleVibe.text.tertiary }}>
-            No nodes to rank yet — add cards/notes, then re-rank.
+          <div style={{ padding: "10px 4px", display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+            <span style={{ fontSize: 12.5, lineHeight: 1.4, color: appleVibe.text.tertiary }}>
+              Nothing on the board to rank yet. Resolve the ambiguities (or add cards), then rank.
+            </span>
+            <button
+              type="button"
+              onClick={refresh}
+              disabled={refreshing}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "6px 11px",
+                borderRadius: appleVibe.radius.sm,
+                border: `1px solid ${appleVibe.stroke.soft}`,
+                background: appleVibe.surface.chip,
+                color: appleVibe.text.secondary,
+                fontSize: 11.5,
+                fontWeight: 650,
+                cursor: refreshing ? "default" : "pointer",
+                fontFamily: appleVibe.font.stack,
+              }}
+            >
+              <RefreshCw
+                className={refreshing ? "animate-spin" : undefined}
+                style={{ width: 12, height: 12 }}
+                strokeWidth={2.2}
+              />
+              Rank now
+            </button>
           </div>
         ) : (
           groups.map((g) => (
@@ -1313,8 +1384,8 @@ const resolveCta: CSSProperties = {
   padding: "7px 10px",
   borderRadius: appleVibe.radius.sm,
   border: "none",
-  background: "#059669",
-  color: "#fff",
+  background: appleVibe.accent.primary,
+  color: appleVibe.text.onAccent,
   fontSize: 12,
   fontWeight: 650,
   cursor: "pointer",
