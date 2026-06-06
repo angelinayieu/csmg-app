@@ -1047,6 +1047,7 @@ declare module "@tldraw/tlschema" {
       sourceText: string;
       uiPlanJson: string;
       status: "generating" | "ready" | "error";
+      objectId: string;
     };
     // Objective board — spec-feedback-card. Output of an inline op (Ask /
     // Variations / Improve) on a tech-spec section. Anchors back to the
@@ -1156,6 +1157,7 @@ declare module "@tldraw/tlschema" {
       entityCount: number;
       entitiesJson: string;
       color: string;
+      objectId: string;
     };
     // Whiteboard-native intake — the chatbox AS a card (live textarea). On
     // submit it transforms in place into an objective-card.

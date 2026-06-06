@@ -58,6 +58,11 @@ export type ObjectiveImageCardShape = TLBaseShape<
     /** extracted entities, JSON-encoded ([{name,type}]). */
     entitiesJson: string;
     color: string;
+    /** Backing library_objects row id (object_type='image_source'). Empty
+     *  until materialize-image-context has run + lazy-backfill resolved.
+     *  Once set, drag-connector links from this card + onClick opens the
+     *  object-detail rail. */
+    objectId: string;
   }
 >;
 
@@ -74,6 +79,7 @@ export class ObjectiveImageCardShapeUtil extends BaseBoxShapeUtil<ObjectiveImage
     entityCount: T.number,
     entitiesJson: T.string,
     color: T.string,
+    objectId: T.string,
   };
 
   override canResize = () => true;
@@ -83,6 +89,21 @@ export class ObjectiveImageCardShapeUtil extends BaseBoxShapeUtil<ObjectiveImage
     shape: ObjectiveImageCardShape,
     info: TLResizeInfo<ObjectiveImageCardShape>,
   ) => resizeBox(shape, info);
+
+  // Click-to-expand the object-detail rail. Modifier clicks fall
+  // through to multi-select.
+  override onClick = (shape: ObjectiveImageCardShape) => {
+    const i = this.editor.inputs;
+    if (i.shiftKey || i.ctrlKey || i.altKey) return;
+    const objectId = shape.props.objectId;
+    if (objectId) {
+      window.dispatchEvent(
+        new CustomEvent("objective-board:open-card-detail", {
+          detail: { objectId },
+        }),
+      );
+    }
+  };
 
   getDefaultProps(): ObjectiveImageCardShape["props"] {
     return {
@@ -96,6 +117,7 @@ export class ObjectiveImageCardShapeUtil extends BaseBoxShapeUtil<ObjectiveImage
       entityCount: 0,
       entitiesJson: "[]",
       color: "#2563EB",
+      objectId: "",
     };
   }
 

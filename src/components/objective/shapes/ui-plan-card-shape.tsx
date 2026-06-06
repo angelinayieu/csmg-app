@@ -54,6 +54,11 @@ export type UiPlanCardShape = TLBaseShape<
     /** Stringified TechSpecUiPlan — the planning artifact this card represents. */
     uiPlanJson: string;
     status: "generating" | "ready" | "error";
+    /** Backing library_objects row id (object_type='ui_idea'). Empty
+     *  until the /ui-plan/promote route returns. Once set, the card
+     *  click opens the object-detail rail and the drag-connector can
+     *  wire images / other oc-cards onto this plan. */
+    objectId: string;
   }
 >;
 
@@ -68,6 +73,7 @@ export class UiPlanCardShapeUtil extends BaseBoxShapeUtil<UiPlanCardShape> {
     sourceText: T.string,
     uiPlanJson: T.string,
     status: T.literalEnum("generating", "ready", "error"),
+    objectId: T.string,
   };
 
   override canResize = () => true;
@@ -75,6 +81,21 @@ export class UiPlanCardShapeUtil extends BaseBoxShapeUtil<UiPlanCardShape> {
 
   override onResize = (shape: UiPlanCardShape, info: TLResizeInfo<UiPlanCardShape>) => {
     return resizeBox(shape, info);
+  };
+
+  // Click-to-expand: open the object-detail rail. Modifier keys fall
+  // through to multi-select; do nothing if not yet promoted.
+  override onClick = (shape: UiPlanCardShape) => {
+    const i = this.editor.inputs;
+    if (i.shiftKey || i.ctrlKey || i.altKey) return;
+    const objectId = shape.props.objectId;
+    if (objectId) {
+      window.dispatchEvent(
+        new CustomEvent("objective-board:open-card-detail", {
+          detail: { objectId },
+        }),
+      );
+    }
   };
 
   getDefaultProps(): UiPlanCardShape["props"] {
@@ -87,6 +108,7 @@ export class UiPlanCardShapeUtil extends BaseBoxShapeUtil<UiPlanCardShape> {
       sourceText: "",
       uiPlanJson: "",
       status: "generating",
+      objectId: "",
     };
   }
 
