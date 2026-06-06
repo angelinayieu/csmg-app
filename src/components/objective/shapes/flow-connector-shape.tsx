@@ -72,21 +72,45 @@ function FlowConnectorRenderer({
       const a = editor.getShapePageBounds(shape.props.fromId as TLShapeId);
       const b = editor.getShapePageBounds(shape.props.toId as TLShapeId);
       if (!a || !b) return null;
-      // Local coords = page coords − this connector's own page point. Out port =
-      // right-center of the source; in port = left-center of the target.
+      // Pick the ports by the DOMINANT axis so the wire flows cleanly: a card
+      // stacked BELOW its source connects bottom→top (vertical), side-by-side
+      // connects right→left. Never the weird side-to-side loop when stacked.
+      const dxc = b.midX - a.midX;
+      const dyc = b.midY - a.midY;
+      let pax: number, pay: number, pbx: number, pby: number;
+      let vertical: boolean;
+      if (Math.abs(dyc) >= Math.abs(dxc)) {
+        vertical = true;
+        if (dyc >= 0) {
+          // target below → out = source bottom-center, in = target top-center
+          pax = a.midX; pay = a.maxY; pbx = b.midX; pby = b.minY;
+        } else {
+          pax = a.midX; pay = a.minY; pbx = b.midX; pby = b.maxY;
+        }
+      } else {
+        vertical = false;
+        if (dxc >= 0) {
+          pax = a.maxX; pay = a.midY; pbx = b.minX; pby = b.midY;
+        } else {
+          pax = a.minX; pay = a.midY; pbx = b.maxX; pby = b.midY;
+        }
+      }
+      // Local coords = page coords − this connector's own page point.
       return {
-        ax: a.maxX - shape.x,
-        ay: a.midY - shape.y,
-        bx: b.minX - shape.x,
-        by: b.midY - shape.y,
+        ax: pax - shape.x,
+        ay: pay - shape.y,
+        bx: pbx - shape.x,
+        by: pby - shape.y,
+        vertical,
       };
     },
     [editor, shape.props.fromId, shape.props.toId, shape.x, shape.y],
   );
   if (!ends) return null;
-  const { ax, ay, bx, by } = ends;
-  const dx = Math.max(40, Math.abs(bx - ax) * 0.5);
-  const d = `M ${ax} ${ay} C ${ax + dx} ${ay}, ${bx - dx} ${by}, ${bx} ${by}`;
+  const { ax, ay, bx, by, vertical } = ends;
+  const d = vertical
+    ? `M ${ax} ${ay} C ${ax} ${ay + Math.max(40, Math.abs(by - ay) * 0.5)}, ${bx} ${by - Math.max(40, Math.abs(by - ay) * 0.5)}, ${bx} ${by}`
+    : `M ${ax} ${ay} C ${ax + Math.max(40, Math.abs(bx - ax) * 0.5)} ${ay}, ${bx - Math.max(40, Math.abs(bx - ax) * 0.5)} ${by}, ${bx} ${by}`;
   const gid = `fcg-${shape.id.replace(/[^a-zA-Z0-9]/g, "")}`;
   return (
     <HTMLContainer

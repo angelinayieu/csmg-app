@@ -10,6 +10,7 @@ import { safeAuth } from "@/lib/api-helpers";
 import { BEST_CLAUDE_MODEL } from "@/lib/llm";
 import { instrumentedLLMCall } from "@/lib/objective-canvas/record-llm-call";
 import { refinePrototypeHtml } from "@/lib/objective-canvas/tech-spec/compose-prototype";
+import { buildTasteDesignContext } from "@/lib/objective-canvas/tech-spec/taste-design-block";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
 
 export const runtime = "nodejs";
@@ -56,6 +57,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  const taste = await buildTasteDesignContext(auth.supabase, spaceId);
+
   try {
     const html = await instrumentedLLMCall(
       {
@@ -64,9 +67,9 @@ export async function POST(req: Request) {
         spaceId,
         callSite: "objective:prototype_refine",
         modelHint: BEST_CLAUDE_MODEL,
-        metadata: { mode: "refine" },
+        metadata: { mode: "refine", taste_applied: taste.hasContent },
       },
-      () => refinePrototypeHtml(currentHtml, feedback, body.spec ?? null),
+      () => refinePrototypeHtml(currentHtml, feedback, body.spec ?? null, taste),
     );
     return NextResponse.json({ html });
   } catch (err) {

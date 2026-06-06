@@ -22,7 +22,7 @@ import {
   Send,
   X,
 } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 
 export function BoardSelectionToolbar({
@@ -167,7 +167,7 @@ export function BoardSelectionToolbar({
           className="flex items-center gap-2 rounded-full transition-all duration-150 ease-out hover:scale-[1.03] active:scale-95"
           style={{
             background: "rgba(255,255,255,0.94)",
-            border: `1px solid ${appleVibe.accent.primary}55`,
+            border: `1px solid ${withAlpha(appleVibe.accent.primary, "55")}`,
             color: appleVibe.accent.primary,
             padding: "9px 15px",
             fontSize: 12.5,
@@ -197,7 +197,7 @@ export function BoardSelectionToolbar({
                 height: 18,
                 padding: "0 5px",
                 borderRadius: 999,
-                background: `${appleVibe.accent.primary}1A`,
+                background: `${withAlpha(appleVibe.accent.primary, "1A")}`,
                 fontSize: 10.5,
                 fontWeight: 700,
               }}

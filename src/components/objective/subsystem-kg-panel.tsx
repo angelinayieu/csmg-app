@@ -17,7 +17,7 @@
 
 import { useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Frame, Workflow } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { RoomAltitudeMap } from "@/components/objective/causal-map/altitudes/RoomAltitudeMap";
 import { MechanismDataflowView } from "@/components/objective/mechanism-dataflow-view";
 import { scopeRoomToMechanism } from "@/lib/objective-canvas/build-subsystem-kg";
@@ -116,7 +116,7 @@ export function SubsystemKgPanel({
               className="h-[8px] w-[8px] flex-shrink-0 rounded-full"
               style={{
                 background: appleVibe.stage.features,
-                boxShadow: `0 0 0 3px ${appleVibe.stage.features}22`,
+                boxShadow: `0 0 0 3px ${withAlpha(appleVibe.stage.features, "22")}`,
               }}
             />
             <span

@@ -263,7 +263,7 @@ import type { UnfurlAnchor } from "./unfurl/anchor-from-path";
 import { buildRoomGraph } from "./causal-map/lib/build-room-graph";
 import type { CanvasGraph } from "./causal-map/lib/types";
 import { X } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 
 /** Detail payload for a collapse-to-card request. */
 export interface DeployCardDetail {
@@ -748,6 +748,14 @@ export function WhiteboardBase({
   // Editor also held in state so the selection overlay (which needs
   // reactive `useValue`) can mount once the editor exists.
   const [editor, setEditor] = useState<Editor | null>(null);
+  // ── Board dark theme ── toggles `.oc-dark` on the board root, which scopes
+  // the appleVibe `--av-*` dark var set to the board (and its chrome) only,
+  // and flips tldraw's canvas to dark. Persisted per-browser; default light so
+  // nothing changes until opted in. The ref lets handleMount pick the right
+  // scheme on first mount without a flash.
+  const [boardDark, setBoardDark] = useState(false);
+  const boardDarkRef = useRef(false);
+  boardDarkRef.current = boardDark;
   // True once server persistence has restored. Gates the minimal-mode
   // seed so a late restore can't wipe the seeded objective card.
   const [restoreSettled, setRestoreSettled] = useState(false);
@@ -771,7 +779,9 @@ export function WhiteboardBase({
     // Light, graph-paper feel that matches the pearl substrate. Force
     // light mode so it never inherits a dark OS preference (the rest of
     // the objective canvas is pearl-light).
-    editor.user.updateUserPreferences({ colorScheme: "light" });
+    editor.user.updateUserPreferences({
+      colorScheme: boardDarkRef.current ? "dark" : "light",
+    });
     editor.updateInstanceState({ isGridMode: true });
     // Real flow connectors (green/pink ports + gradient) for the sharpening fork
     // — replaces the SVG overlay; the reactor draws them + keeps them synced as
@@ -780,6 +790,35 @@ export function WhiteboardBase({
     ensureSharpeningFlowConnectors(editor);
     registerFlowConnectorReactor(editor);
     onEditorReadyRef.current?.(editor);
+  }, []);
+
+  // Hydrate the persisted board theme once on mount.
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("oc-board-theme") === "dark") setBoardDark(true);
+    } catch {
+      /* localStorage unavailable — stay light */
+    }
+  }, []);
+
+  // Keep tldraw's canvas color scheme in sync when the theme toggles live.
+  useEffect(() => {
+    if (!editor) return;
+    editor.user.updateUserPreferences({
+      colorScheme: boardDark ? "dark" : "light",
+    });
+  }, [editor, boardDark]);
+
+  const toggleBoardTheme = useCallback(() => {
+    setBoardDark((d) => {
+      const next = !d;
+      try {
+        localStorage.setItem("oc-board-theme", next ? "dark" : "light");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
   }, []);
 
   // Default AI runner posts to the objective connect route; an override
@@ -1907,7 +1946,7 @@ export function WhiteboardBase({
   }, [spaceId]);
 
   return (
-    <div className="absolute inset-0 oc-board">
+    <div className={`absolute inset-0 oc-board${boardDark ? " oc-dark" : ""}`}>
       <Tldraw
         shapeUtils={CUSTOM_SHAPE_UTILS}
         components={BOARD_COMPONENTS}
@@ -1938,6 +1977,35 @@ export function WhiteboardBase({
           spaceId={spaceId}
           restoreSettled={restoreSettled}
         />
+      )}
+      {/* Board theme toggle — light ⇄ dark. Minimal pill, bottom-left (clear
+          corner). Flips the `.oc-dark` scope class + tldraw canvas; persists. */}
+      {editor && showUi && (
+        <button
+          type="button"
+          onClick={toggleBoardTheme}
+          title={boardDark ? "Switch board to light" : "Switch board to dark"}
+          aria-label="Toggle board theme"
+          className="fixed bottom-4 left-4 z-[60] inline-flex h-9 w-9 items-center justify-center rounded-full transition-transform duration-150 ease-out hover:scale-105"
+          style={{
+            background: appleVibe.surface.cardElevated,
+            border: `1px solid ${appleVibe.stroke.soft}`,
+            color: appleVibe.text.secondary,
+            boxShadow: appleVibe.shadow.chip,
+            backdropFilter: "blur(12px)",
+          }}
+        >
+          {boardDark ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          )}
+        </button>
       )}
       {editor && <PrototypeEventBridge editor={editor} spaceId={spaceId} />}
       {editor && <UiPlanEventBridge editor={editor} spaceId={spaceId} />}
@@ -3783,7 +3851,7 @@ function ConvergePublishChip({ message }: { message: string }) {
           alignItems: "center",
           justifyContent: "center",
           borderRadius: 999,
-          background: `${appleVibe.accent.primary}1f`,
+          background: `${withAlpha(appleVibe.accent.primary, "1f")}`,
           color: appleVibe.accent.primary,
           flexShrink: 0,
         }}

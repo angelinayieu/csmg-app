@@ -31,7 +31,7 @@
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Info, RefreshCw, X } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import type {
   LayerInfluenceVerb,
   LayerVariable,
@@ -331,7 +331,7 @@ export function ObjectiveStackWidget({
                       <span
                         className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold"
                         style={{
-                          background: `${appleVibe.accent.primary}14`,
+                          background: `${withAlpha(appleVibe.accent.primary, "14")}`,
                           color: appleVibe.accent.primary,
                         }}
                         title={`${proposalCount} proposal${proposalCount === 1 ? "" : "s"} touching this layer`}

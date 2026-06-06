@@ -51,7 +51,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { Sparkle } from "@/components/objective/icons/sparkle";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { MethodBadge } from "./method-badge";
 import type { ChainTriple } from "@/lib/objective-canvas/compute-chains";
 import type {
@@ -2419,17 +2419,17 @@ function IndicatorBreakdown({
                       emp.observed_lift_pct < 0));
                 const chipBg = hasEmpirical
                   ? empNegative
-                    ? `${appleVibe.stage.pain}1A`
+                    ? `${withAlpha(appleVibe.stage.pain, "1A")}`
                     : `${OUTCOME_COLOR}1A`
                   : shaky
-                    ? `${appleVibe.stage.pain}10`
+                    ? `${withAlpha(appleVibe.stage.pain, "10")}`
                     : appleVibe.surface.chip;
                 const chipBorder = hasEmpirical
                   ? empNegative
-                    ? `1.5px solid ${appleVibe.stage.pain}60`
+                    ? `1.5px solid ${withAlpha(appleVibe.stage.pain, "60")}`
                     : `1.5px solid ${OUTCOME_COLOR}60`
                   : shaky
-                    ? `1px solid ${appleVibe.stage.pain}40`
+                    ? `1px solid ${withAlpha(appleVibe.stage.pain, "40")}`
                     : `1px solid ${appleVibe.stroke.hairline}`;
                 return (
                   <span
@@ -2666,7 +2666,7 @@ function InlineMockupPreview({
           style={{
             background: appleVibe.surface.card,
             color: appleVibe.accent.primary,
-            border: `1px solid ${appleVibe.accent.primary}40`,
+            border: `1px solid ${withAlpha(appleVibe.accent.primary, "40")}`,
             borderRadius: appleVibe.radius.pill,
             padding: "4px 10px",
             fontSize: "10.5px",

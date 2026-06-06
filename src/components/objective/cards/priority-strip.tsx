@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, Pencil, Sliders } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 import {
   DIMENSION_HINT,
@@ -55,7 +55,7 @@ const TIER_TINT: Record<PriorityTier, { bg: string; text: string }> = {
   },
   high: {
     // Light wash of the accent color — high-weighted dims pop.
-    bg: `${appleVibe.accent.primary}1A`,
+    bg: `${withAlpha(appleVibe.accent.primary, "1A")}`,
     text: appleVibe.accent.primary,
   },
 };
@@ -440,7 +440,7 @@ function TierControl({
         // user weighted up." Active low/med stay neutral.
         const activeBg =
           active && isHigh
-            ? `${appleVibe.accent.primary}1A`
+            ? `${withAlpha(appleVibe.accent.primary, "1A")}`
             : active
               ? appleVibe.surface.card
               : "transparent";

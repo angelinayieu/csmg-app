@@ -35,7 +35,7 @@ import {
   useValue,
 } from "tldraw";
 import { ArrowRight, Plus } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { OPEN_CARD_DETAIL_EVENT } from "../shapes/oc-card-shape";
 
 type RelationKey = "feeds" | "depends_on" | "derived_from";
@@ -551,7 +551,7 @@ export function ConnectorDragLayer({
               alignItems: "center",
               justifyContent: "center",
               borderRadius: 999,
-              background: `${appleVibe.accent.primary}1f`,
+              background: `${withAlpha(appleVibe.accent.primary, "1f")}`,
               color: appleVibe.accent.primary,
               flexShrink: 0,
             }}

@@ -19,7 +19,7 @@
 // position shape: bridge/span are slightly accented because they
 // indicate cross-cutting work; direct + cross-stack are neutral.
 
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 
 interface Props {
   /** Layer ordinals the proposal touches. Used for the tooltip + as
@@ -78,15 +78,15 @@ const SHAPE_ACCENT: Record<
     // "cross-cutting work" without shouting. Uses the canvas
     // accent at a quieter alpha.
     fg: appleVibe.accent.primary,
-    bg: `${appleVibe.accent.primary}0A`,
-    border: `${appleVibe.accent.primary}33`,
+    bg: `${withAlpha(appleVibe.accent.primary, "0A")}`,
+    border: `${withAlpha(appleVibe.accent.primary, "33")}`,
   },
   span: {
     // Spans (non-adjacent) — same accent as bridge but slightly
     // stronger border to signal the wider reach.
     fg: appleVibe.accent.primary,
-    bg: `${appleVibe.accent.primary}14`,
-    border: `${appleVibe.accent.primary}44`,
+    bg: `${withAlpha(appleVibe.accent.primary, "14")}`,
+    border: `${withAlpha(appleVibe.accent.primary, "44")}`,
   },
   cross_stack: {
     // Cross-stack — rare; uses a neutral but slightly bolder treatment

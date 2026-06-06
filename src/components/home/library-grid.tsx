@@ -304,7 +304,7 @@ export function LibraryGrid({ spaces }: { spaces: LibrarySpace[] }) {
                   <path
                     d="M1 0 L1 9 Q1 13 5 13 L13 13"
                     fill="none"
-                    stroke={appleVibe.stroke.soft}
+                    style={{ stroke: appleVibe.stroke.soft }}
                     strokeWidth="1.4"
                     strokeLinecap="round"
                   />

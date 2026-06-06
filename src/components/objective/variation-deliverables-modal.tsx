@@ -36,7 +36,7 @@ import {
   X,
 } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 
 type Tab = "doc" | "mockup" | "prompt";
 
@@ -544,7 +544,7 @@ function DocTab({
           className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10.5px] font-medium transition-[background,color]"
           style={{
             background: refine
-              ? `${appleVibe.accent.primary}14`
+              ? `${withAlpha(appleVibe.accent.primary, "14")}`
               : appleVibe.surface.card,
             color: refine ? appleVibe.accent.primary : appleVibe.text.secondary,
             border: `1px solid ${refine ? appleVibe.accent.primary : appleVibe.stroke.medium}`,
@@ -567,7 +567,7 @@ function DocTab({
           className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10.5px] font-medium transition-[background,color]"
           style={{
             background: copied
-              ? `${appleVibe.stage.outcomes}14`
+              ? `${withAlpha(appleVibe.stage.outcomes, "14")}`
               : appleVibe.surface.card,
             color: copied ? appleVibe.stage.outcomes : appleVibe.text.secondary,
             border: `1px solid ${copied ? appleVibe.stage.outcomes : appleVibe.stroke.medium}`,
@@ -864,7 +864,7 @@ function PromptTab({
           className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10.5px] font-medium transition-[background,color]"
           style={{
             background: optimize
-              ? `${appleVibe.accent.primary}14`
+              ? `${withAlpha(appleVibe.accent.primary, "14")}`
               : appleVibe.surface.card,
             color: optimize
               ? appleVibe.accent.primary
@@ -889,7 +889,7 @@ function PromptTab({
           className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10.5px] font-medium transition-[background,color]"
           style={{
             background: copied
-              ? `${appleVibe.stage.outcomes}14`
+              ? `${withAlpha(appleVibe.stage.outcomes, "14")}`
               : appleVibe.surface.card,
             color: copied ? appleVibe.stage.outcomes : appleVibe.text.secondary,
             border: `1px solid ${copied ? appleVibe.stage.outcomes : appleVibe.stroke.medium}`,

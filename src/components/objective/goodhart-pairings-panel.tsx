@@ -24,7 +24,7 @@
 // Future: also in Strategy Brief as part of the "Counter-indicators"
 // subsection per elected variation.
 
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 
 // ── Public types ──────────────────────────────────────────────────
 
@@ -221,8 +221,8 @@ export function GoodhartPairingsPanel({
               <div
                 className="flex-1 rounded-lg"
                 style={{
-                  background: `${appleVibe.stage.objective}10`,
-                  border: `1px solid ${appleVibe.stage.objective}30`,
+                  background: `${withAlpha(appleVibe.stage.objective, "10")}`,
+                  border: `1px solid ${withAlpha(appleVibe.stage.objective, "30")}`,
                   padding: compact ? "6px 8px" : "8px 10px",
                 }}
               >

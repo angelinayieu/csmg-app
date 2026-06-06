@@ -24,7 +24,7 @@ import {
   resizeBox,
 } from "tldraw";
 import { Paperclip, Plus, FileText, Lightbulb } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { PROMOTE_TO_OBJECTIVE_EVENT } from "@/components/objective/board-bus";
 
 export type ChatboxCardShape = TLBaseShape<
@@ -354,7 +354,7 @@ function ChatboxCardRenderer({ shape }: { shape: ChatboxCardShape }) {
                       borderRadius: 999,
                       border: `1px solid ${active ? appleVibe.accent.primary : appleVibe.stroke.soft}`,
                       background: active
-                        ? `${appleVibe.accent.primary}14`
+                        ? `${withAlpha(appleVibe.accent.primary, "14")}`
                         : "transparent",
                       color: active
                         ? appleVibe.accent.primary
@@ -559,7 +559,7 @@ function ChatboxCardRenderer({ shape }: { shape: ChatboxCardShape }) {
                 borderRadius: 999,
                 border: `1px solid ${showContext ? appleVibe.accent.primary : "transparent"}`,
                 background: showContext
-                  ? `${appleVibe.accent.primary}10`
+                  ? `${withAlpha(appleVibe.accent.primary, "10")}`
                   : "transparent",
                 color: showContext
                   ? appleVibe.accent.primary

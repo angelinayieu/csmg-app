@@ -263,7 +263,7 @@ export function SandboxPanel({ parentSpaceId }: { parentSpaceId: string }) {
             <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
               <path
                 d="M11 1 L1 11 M11 5 L5 11 M11 9 L9 11"
-                stroke={appleVibe.text.faint}
+                style={{ stroke: appleVibe.text.faint }}
                 strokeWidth="1.3"
                 fill="none"
                 strokeLinecap="round"

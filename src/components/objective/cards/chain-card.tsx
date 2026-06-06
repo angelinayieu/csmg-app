@@ -17,7 +17,7 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
 import { Check, ChevronDown, X } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import type { ChainTriple } from "@/lib/objective-canvas/compute-chains";
 
 export interface ChainCardLaneLabels {
@@ -131,18 +131,18 @@ export function ChainCard({
         // outcome-green bloom (color as light, not a flat tint + hard
         // border) so the "this is a live bet" signal feels lit, not painted.
         background: approved
-          ? `linear-gradient(180deg, ${appleVibe.stage.outcomes}0e, rgba(255,255,255,0.72))`
+          ? `linear-gradient(180deg, ${withAlpha(appleVibe.stage.outcomes, "0e")}, rgba(255,255,255,0.72))`
           : "rgba(255,255,255,0.72)",
         backdropFilter: "blur(16px) saturate(140%)",
         WebkitBackdropFilter: "blur(16px) saturate(140%)",
         border: `1px solid ${
           approved
-            ? `${appleVibe.stage.outcomes}33`
+            ? `${withAlpha(appleVibe.stage.outcomes, "33")}`
             : appleVibe.stroke.soft
         }`,
         borderRadius: appleVibe.radius.lg,
         boxShadow: approved
-          ? `${appleVibe.shadow.card}, 0 0 0 1px ${appleVibe.stage.outcomes}14, 0 10px 30px -14px ${appleVibe.stage.outcomes}55`
+          ? `${appleVibe.shadow.card}, 0 0 0 1px ${withAlpha(appleVibe.stage.outcomes, "14")}, 0 10px 30px -14px ${withAlpha(appleVibe.stage.outcomes, "55")}`
           : appleVibe.shadow.card,
       }}
       onMouseEnter={() => onHover(chain.painId)}
@@ -309,7 +309,7 @@ export function ChainCard({
             className="inline-flex items-center gap-1 rounded-full px-2.5 py-[4px] text-[10.5px] font-medium tracking-tight transition-colors"
             style={{
               background: approved
-                ? `${appleVibe.stage.outcomes}12`
+                ? `${withAlpha(appleVibe.stage.outcomes, "12")}`
                 : appleVibe.accent.primary,
               color: approved
                 ? appleVibe.stage.outcomes

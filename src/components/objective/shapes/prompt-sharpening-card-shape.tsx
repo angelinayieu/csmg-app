@@ -1686,7 +1686,7 @@ function StageIcon({
         cy="8"
         r="6.5"
         fill="none"
-        stroke={appleVibe.stroke.medium}
+        style={{ stroke: appleVibe.stroke.medium }}
         strokeWidth="1.6"
         strokeDasharray="2 3"
         strokeLinecap="round"

@@ -28,7 +28,7 @@
 
 import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import type { ItemVariation } from "@/lib/objective-canvas/expand-item-detail";
 
 // ── Public props ──────────────────────────────────────────────────
@@ -512,7 +512,7 @@ function ValidityMatrixShell({
       {!expanded && criticalCount > 0 && (
         <div
           className={cellPad}
-          style={{ background: `${appleVibe.stage.pain}06` }}
+          style={{ background: `${withAlpha(appleVibe.stage.pain, "06")}` }}
         >
           <ul className="space-y-1">
             {callouts
@@ -682,7 +682,7 @@ function ValidityMatrixShell({
           className={`border-t ${cellPad}`}
           style={{
             borderColor: appleVibe.stroke.hairline,
-            background: `${appleVibe.stage.pain}06`,
+            background: `${withAlpha(appleVibe.stage.pain, "06")}`,
           }}
         >
           <div

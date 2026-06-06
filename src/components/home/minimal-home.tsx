@@ -12,6 +12,7 @@
 // is re-routed off the default path — reachable via /app?legacy=1.
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Coins, Settings as SettingsIcon, LogOut } from "lucide-react";
@@ -372,14 +373,15 @@ export function MinimalHome({
                     </div>
                   </div>
 
-                  {/* actions */}
+                  {/* actions — Next <Link> so the click is a real
+                      anchor nav; the onClick still closes the popover.
+                      router.push was no-op'ing on some sessions when
+                      paired with the immediate setState close. */}
                   <div className="p-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setProfileOpen(false);
-                        router.push("/app/profile");
-                      }}
+                    <Link
+                      href="/app/profile"
+                      prefetch
+                      onClick={() => setProfileOpen(false)}
                       className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-black/[0.04]"
                       style={{ color: appleVibe.text.primary }}
                     >
@@ -388,13 +390,11 @@ export function MinimalHome({
                         strokeWidth={2}
                       />
                       Profile settings
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setProfileOpen(false);
-                        router.push("/app/credits");
-                      }}
+                    </Link>
+                    <Link
+                      href="/app/credits"
+                      prefetch
+                      onClick={() => setProfileOpen(false)}
                       className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-black/[0.04]"
                       style={{ color: appleVibe.text.primary }}
                     >
@@ -409,7 +409,7 @@ export function MinimalHome({
                       >
                         {creditBalance.toLocaleString()}
                       </span>
-                    </button>
+                    </Link>
                   </div>
 
                   {/* logout */}

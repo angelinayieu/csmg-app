@@ -10,7 +10,7 @@
 // pointer events, so the board stays fully interactive underneath.
 
 import { X } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 
 export function BoardHint({ onDismiss }: { onDismiss: () => void }) {
@@ -50,7 +50,7 @@ export function BoardHint({ onDismiss }: { onDismiss: () => void }) {
             width: 30,
             height: 30,
             borderRadius: 10,
-            background: `${appleVibe.accent.primary}14`,
+            background: `${withAlpha(appleVibe.accent.primary, "14")}`,
             flexShrink: 0,
           }}
         >

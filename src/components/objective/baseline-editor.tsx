@@ -34,7 +34,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check, Loader2, X } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 
 interface IndicatorBaselineRecord {
   baseline_value?: string;
@@ -315,7 +315,7 @@ export function BaselineEditor({
                           <span
                             className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em]"
                             style={{
-                              background: `${appleVibe.stage.outcomes}1F`,
+                              background: `${withAlpha(appleVibe.stage.outcomes, "1F")}`,
                               color: appleVibe.stage.outcomes,
                             }}
                           >
@@ -339,7 +339,7 @@ export function BaselineEditor({
                           <span
                             className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9.5px] font-light italic"
                             style={{
-                              background: `${appleVibe.stage.objective}14`,
+                              background: `${withAlpha(appleVibe.stage.objective, "14")}`,
                               color: appleVibe.stage.objective,
                             }}
                             title="Auto-filled from an LLM expansion-tree calibration_baseline node. Override anytime."

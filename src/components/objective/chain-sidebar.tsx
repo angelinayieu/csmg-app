@@ -33,7 +33,7 @@
 
 import { motion } from "framer-motion";
 import { ChevronDown, ChevronUp, Check } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import type { ChainTriple } from "@/lib/objective-canvas/compute-chains";
 
 interface ChainSidebarItem {
@@ -156,7 +156,7 @@ export function ChainSidebar({
                   isActive
                     ? `${accent}40`
                     : item.approved
-                      ? `${appleVibe.stage.outcomes}33`
+                      ? `${withAlpha(appleVibe.stage.outcomes, "33")}`
                       : appleVibe.stroke.hairline
                 }`,
                 borderRadius: appleVibe.radius.md,
@@ -185,7 +185,7 @@ export function ChainSidebar({
                   <span
                     className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.10em]"
                     style={{
-                      background: `${appleVibe.stage.outcomes}14`,
+                      background: `${withAlpha(appleVibe.stage.outcomes, "14")}`,
                       color: appleVibe.stage.outcomes,
                     }}
                   >

@@ -41,7 +41,7 @@ import {
   Wand2,
   Zap,
 } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { VariationDeliverablesModal } from "./variation-deliverables-modal";
 import {
   AutoElectModal,
@@ -479,7 +479,7 @@ export function DeliverablesStrip({ spaceId, embedded = false }: Props) {
               style={{
                 background: appleVibe.surface.card,
                 color: appleVibe.accent.primary,
-                border: `1px solid ${appleVibe.accent.primary}50`,
+                border: `1px solid ${withAlpha(appleVibe.accent.primary, "50")}`,
                 borderRadius: appleVibe.radius.pill,
                 padding: "4px 11px",
                 fontSize: "10.5px",
@@ -754,7 +754,7 @@ function DeliverableRow({
             style={{
               background: appleVibe.surface.card,
               color: appleVibe.stage.outcomes,
-              border: `1px solid ${appleVibe.stage.outcomes}40`,
+              border: `1px solid ${withAlpha(appleVibe.stage.outcomes, "40")}`,
               borderRadius: appleVibe.radius.pill,
               padding: "3px 9px",
               fontSize: "10px",
@@ -815,8 +815,8 @@ function StatusDot({
     : appleVibe.text.faint;
   const bg = on
     ? accent
-      ? `${appleVibe.accent.primary}14`
-      : `${appleVibe.stage.outcomes}14`
+      ? `${withAlpha(appleVibe.accent.primary, "14")}`
+      : `${withAlpha(appleVibe.stage.outcomes, "14")}`
     : appleVibe.surface.chip;
   return (
     <div

@@ -22,7 +22,7 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { Sparkle } from "@/components/objective/icons/sparkle";
 
 interface AutoElectChoice {
@@ -379,7 +379,7 @@ function EmptyAmbiguousState({ confident }: { confident: number }) {
       <div
         className="mx-auto flex h-10 w-10 items-center justify-center rounded-full"
         style={{
-          background: `${appleVibe.stage.outcomes}14`,
+          background: `${withAlpha(appleVibe.stage.outcomes, "14")}`,
           color: appleVibe.stage.outcomes,
         }}
       >
@@ -480,7 +480,7 @@ function VariationChoiceCard({
       onClick={onToggle}
       style={{
         background: selected
-          ? `${appleVibe.accent.primary}06`
+          ? `${withAlpha(appleVibe.accent.primary, "06")}`
           : appleVibe.surface.cardElevated,
         border: `1px solid ${accent}${selected ? "" : "60"}`,
         borderLeft: `3px solid ${selected ? appleVibe.accent.primary : appleVibe.stroke.medium}`,
@@ -502,7 +502,7 @@ function VariationChoiceCard({
               <span
                 className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.10em]"
                 style={{
-                  background: `${appleVibe.accent.primary}14`,
+                  background: `${withAlpha(appleVibe.accent.primary, "14")}`,
                   color: appleVibe.accent.primary,
                 }}
               >

@@ -180,7 +180,7 @@ export function SubsystemModulesView({ model, onOpenItem }: Props) {
                       y={(a.y + b.y) / 2 - 5}
                       textAnchor="middle"
                       fontSize="9.5"
-                      fill={appleVibe.text.tertiary}
+                      style={{ fill: appleVibe.text.tertiary }}
                     >
                       {w.tokens.slice(0, 2).join(", ")}
                       {w.tokens.length > 2 ? ` +${w.tokens.length - 2}` : ""}

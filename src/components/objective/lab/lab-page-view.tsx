@@ -46,7 +46,7 @@ import {
   X,
 } from "lucide-react";
 import { Sparkle } from "@/components/objective/icons/sparkle";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { sendArtifactToBoard } from "@/components/objective/board-bus";
 import { MethodBadge } from "@/components/objective/method-badge";
 import { BrainstormButton } from "@/components/objective/brainstorm/brainstorm-button";
@@ -1428,8 +1428,8 @@ function IndicatorCell({ cell }: { cell: IndicatorScoreCell }) {
           style={{
             background:
               cell.lift_pct >= 0
-                ? `${appleVibe.stage.features}14`
-                : `${appleVibe.stage.pain}14`,
+                ? `${withAlpha(appleVibe.stage.features, "14")}`
+                : `${withAlpha(appleVibe.stage.pain, "14")}`,
             color:
               cell.lift_pct >= 0
                 ? appleVibe.stage.features

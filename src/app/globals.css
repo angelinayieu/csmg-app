@@ -2445,3 +2445,79 @@ body[data-canvas-strategy-expanded="true"]
   100% { opacity: 1; transform: translateY(0)   scale(1); }
 }
 
+/* ── Objective board theme tokens (appleVibe) ──────────────────────────
+ * appleVibe reads every color through `var(--av-*, <hex fallback>)`. The
+ * LIGHT values live here at :root as the single source of truth (identical
+ * to the historical hex, so nothing changes by default). DARK is a scoped
+ * override on `.oc-board.oc-dark` — only the board container (and its
+ * chrome, which are DOM descendants even when position:fixed) flips, so
+ * the rest of the app stays light. Toggle the `oc-dark` class on the board
+ * root in whiteboard-base to switch. Alpha tints go through `withAlpha()`
+ * (color-mix), so they resolve the variable first and track the theme. */
+:root {
+  --av-surface-base: #fafafa;
+  --av-surface-card: #ffffff;
+  --av-surface-card-elevated: rgba(255, 255, 255, 0.92);
+  --av-surface-chip: rgba(15, 23, 42, 0.04);
+  --av-surface-chip-hover: rgba(15, 23, 42, 0.06);
+
+  --av-text-primary: #0f172a;
+  --av-text-secondary: #334155;
+  --av-text-tertiary: #64748b;
+  --av-text-faint: #94a3b8;
+  --av-text-on-accent: #ffffff;
+
+  --av-accent-primary: rgba(15, 23, 42, 0.92);
+  --av-accent-primary-hover: rgba(15, 23, 42, 1);
+
+  --av-stroke-hairline: rgba(15, 23, 42, 0.06);
+  --av-stroke-soft: rgba(15, 23, 42, 0.08);
+  --av-stroke-medium: rgba(15, 23, 42, 0.12);
+
+  --av-shadow-card: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 12px 32px -16px rgba(11, 18, 40, 0.18);
+  --av-shadow-chip: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 8px 24px -10px rgba(11, 18, 40, 0.18);
+  --av-shadow-card-hover: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 18px 40px -16px rgba(11, 18, 40, 0.22);
+
+  --av-stage-pain: #dc2626;
+  --av-stage-features: #2563eb;
+  --av-stage-process: #0d9488;
+  --av-stage-outcomes: #16a34a;
+  --av-stage-objective: #475569;
+
+  --av-label-color: #475569;
+}
+
+.oc-board.oc-dark {
+  --av-surface-base: #131318;
+  --av-surface-card: #1b1b22;
+  --av-surface-card-elevated: rgba(40, 40, 50, 0.92);
+  --av-surface-chip: rgba(255, 255, 255, 0.06);
+  --av-surface-chip-hover: rgba(255, 255, 255, 0.10);
+
+  --av-text-primary: #e9e9ee;
+  --av-text-secondary: #b6b6c2;
+  --av-text-tertiary: #8a8a97;
+  --av-text-faint: #5f5f6c;
+  --av-text-on-accent: #0b0b0f;
+
+  --av-accent-primary: rgba(255, 255, 255, 0.92);
+  --av-accent-primary-hover: #ffffff;
+
+  --av-stroke-hairline: rgba(255, 255, 255, 0.06);
+  --av-stroke-soft: rgba(255, 255, 255, 0.09);
+  --av-stroke-medium: rgba(255, 255, 255, 0.14);
+
+  --av-shadow-card: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 18px 44px -20px rgba(0, 0, 0, 0.7);
+  --av-shadow-chip: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 10px 28px -12px rgba(0, 0, 0, 0.6);
+  --av-shadow-card-hover: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 24px 56px -20px rgba(0, 0, 0, 0.78);
+
+  /* Stage / kind accents lightened for legibility on the dark canvas. */
+  --av-stage-pain: #f87171;
+  --av-stage-features: #60a5fa;
+  --av-stage-process: #2dd4bf;
+  --av-stage-outcomes: #4ade80;
+  --av-stage-objective: #a5b4fc;
+
+  --av-label-color: #9aa3b2;
+}
+

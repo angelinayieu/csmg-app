@@ -67,13 +67,16 @@ export async function generateSharpeningDepthForSpace(
       user: SHARPENING_DEPTH_USER(raw, sharpened),
       provider: "anthropic",
       model: DEPTH_MODEL,
-      // Depth pass returns more than the fast pass (interpretation + up to ~8
-      // annotations w/ candidate readings) — worst case ~2.8–3.4k tokens, so a
-      // 3000 cap truncated the LAST schema field (salience_annotations) on rich
-      // runs → normalizeSalience returned [] → the function returned null and
-      // the card's one-shot driver never re-tried, so the "Optimize for"
-      // section silently never appeared. 4096 gives real headroom.
-      maxTokens: 4096,
+      // Depth pass returns more than the fast pass: interpretation fields + up
+      // to ~10 salience annotations, and EACH annotation now also carries 2–4
+      // micro_questions (added later). That ~tripled the output, so the prior
+      // 4096 cap truncated the LAST schema field (salience_annotations) →
+      // normalizeSalience returned [] → the function returned null and nothing
+      // persisted (no salience → no priority map, no "Optimize for", no resolve
+      // panel — the pipeline silently stalled after the heatmap). 8192 restores
+      // real headroom for the micro-decomposed output. If it ever truncates
+      // again, lower the annotation/micro cap rather than starving the cap.
+      maxTokens: 8192,
       responseSchema: SHARPENING_DEPTH_RESPONSE_SCHEMA,
     });
 

@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, User } from "lucide-react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 
 interface Props {
   spaceId: string;
@@ -75,7 +75,7 @@ export function HCDToggle({ spaceId }: Props) {
       className="inline-flex items-center gap-1.5 transition-[background,color] duration-150 ease-out hover:bg-[rgba(15,23,42,0.04)] disabled:cursor-not-allowed disabled:opacity-50"
       style={{
         background: enabled
-          ? `${appleVibe.stage.outcomes}14`
+          ? `${withAlpha(appleVibe.stage.outcomes, "14")}`
           : appleVibe.surface.card,
         color: enabled ? appleVibe.stage.outcomes : appleVibe.text.secondary,
         border: `1px solid ${enabled ? appleVibe.stage.outcomes : appleVibe.stroke.medium}`,

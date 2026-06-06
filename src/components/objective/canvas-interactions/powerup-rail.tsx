@@ -664,7 +664,7 @@ const rail: CSSProperties = {
   top: 64,
   bottom: 12,
   right: 16,
-  width: 360,
+  width: 300,
   zIndex: 92,
   display: "flex",
   flexDirection: "column",

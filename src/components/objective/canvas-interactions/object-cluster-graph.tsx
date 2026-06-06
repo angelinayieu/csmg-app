@@ -74,7 +74,7 @@ export function ObjectClusterGraph({
           y1={cy}
           x2={p.x}
           y2={p.y}
-          stroke={appleVibe.stroke.medium}
+          style={{ stroke: appleVibe.stroke.medium }}
           strokeWidth={1.2}
         />
       ))}
@@ -85,7 +85,7 @@ export function ObjectClusterGraph({
           x={(cx + p.x) / 2}
           y={(cy + p.y) / 2 - 2}
           fontSize={7}
-          fill={appleVibe.text.faint}
+          style={{ fill: appleVibe.text.faint }}
           textAnchor="middle"
         >
           {(p.relation || "").replace(/_/g, " ")}
@@ -104,7 +104,7 @@ export function ObjectClusterGraph({
             y={p.y < cy ? p.y - 10 : p.y + 16}
             fontSize={8.5}
             fontWeight={600}
-            fill={appleVibe.text.secondary}
+            style={{ fill: appleVibe.text.secondary }}
             textAnchor="middle"
           >
             {trunc(p.title, 16)}
@@ -118,7 +118,7 @@ export function ObjectClusterGraph({
         y={cy + 22}
         fontSize={9.5}
         fontWeight={700}
-        fill={appleVibe.text.primary}
+        style={{ fill: appleVibe.text.primary }}
         textAnchor="middle"
       >
         {trunc(centerTitle, 18)}
