@@ -22,7 +22,23 @@ import { getSnapshot, loadSnapshot } from "tldraw";
 
 const SCHEMA_VERSION = 1;
 const lsKey = (spaceId: string) => `interaxis:objective-board:${spaceId}`;
-const DEBOUNCE_MS = 700;
+// Durable autosave debounce. Kept deliberately slow: each save ships the
+// FULL board snapshot (can exceed 1 MB) as a single upsert against one hot
+// row. A tight (sub-second) cadence let concurrent saves pile up on that
+// row lock, exhaust the connection pool, and cascade into 504/401s across
+// unrelated routes. The localStorage mirror (200ms) covers fast reloads.
+const DEBOUNCE_MS = 2500;
+
+/**
+ * The persisted snapshot is DOCUMENT-ONLY. `getSnapshot` also returns the
+ * `session` half (camera, selection, per-tab UI state) which churns on every
+ * pan/zoom/click and does not belong in a shared/durable row — persisting it
+ * inflated the payload and triggered needless saves. `loadSnapshot` happily
+ * restores a document-only snapshot (camera just resets to default on load).
+ */
+function documentSnapshot(editor: Editor) {
+  return { document: getSnapshot(editor.store).document };
+}
 
 export type BoardSaveStatus = "idle" | "saving" | "saved" | "error";
 
@@ -184,8 +200,8 @@ export function useObjectiveBoardPersistence(
   useEffect(() => {
     if (!editor) return;
 
-    const save = async (retriesLeft = 2) => {
-      const snapshot = getSnapshot(editor.store);
+    const save = async (isRetry = false) => {
+      const snapshot = documentSnapshot(editor);
       try {
         window.localStorage.setItem(
           lsKey(spaceId),
@@ -208,28 +224,43 @@ export function useObjectiveBoardPersistence(
       const ctrl = new AbortController();
       inflightRef.current = ctrl;
       setStatus("saving");
+
+      let res: Response;
       try {
-        const res = await fetch(`/api/objective/${spaceId}/board`, {
+        res = await fetch(`/api/objective/${spaceId}/board`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ snapshot, schema_version: SCHEMA_VERSION }),
           signal: ctrl.signal,
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        setStatus("saved");
       } catch (err) {
         if ((err as { name?: string }).name === "AbortError") return;
-        if (retriesLeft > 0) {
-          const delayMs = retriesLeft === 2 ? 800 : 2400;
+        // True network failure (offline / unreachable host). Retry AT MOST
+        // once, on a long backoff — never a tight loop. localStorage already
+        // mirrored this snapshot, so a dropped save is not data loss.
+        if (!isRetry) {
           setTimeout(() => {
             if (inflightRef.current !== ctrl) return;
-            void save(retriesLeft - 1);
-          }, delayMs);
+            void save(true);
+          }, 4000);
           return;
         }
-        console.warn("[objective-board] server save failed after retries", err);
         setStatus("error");
+        return;
       }
+
+      if (res.ok) {
+        setStatus("saved");
+        return;
+      }
+
+      // The server was REACHED but errored (504/500 — typically backend
+      // overload). Do NOT retry: retrying a saturated backend is exactly what
+      // turns a transient load blip into a connection-pool cascade. The
+      // localStorage mirror holds this snapshot; the next edit (or the
+      // unload flush) re-sends it once the backend recovers.
+      console.warn("[objective-board] server save failed", res.status);
+      setStatus("error");
     };
 
     // localStorage mirror on a SHORT trailing debounce so a dev HMR re-mount or
@@ -250,14 +281,14 @@ export function useObjectiveBoardPersistence(
           try {
             window.localStorage.setItem(
               lsKey(spaceId),
-              JSON.stringify({ snapshot: getSnapshot(editor.store), savedAt: Date.now() }),
+              JSON.stringify({ snapshot: documentSnapshot(editor), savedAt: Date.now() }),
             );
           } catch {
             /* quota / private mode — non-fatal */
           }
         }, 200);
         if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => save(2), DEBOUNCE_MS);
+        timerRef.current = setTimeout(() => save(), DEBOUNCE_MS);
       },
       { scope: "document" },
     );
@@ -276,7 +307,7 @@ export function useObjectiveBoardPersistence(
         lsTimer = null;
       }
       try {
-        const snapshot = getSnapshot(editor.store);
+        const snapshot = documentSnapshot(editor);
         try {
           window.localStorage.setItem(
             lsKey(spaceId),

@@ -157,12 +157,14 @@ export async function PUT(
       return NextResponse.json({ error: "Save failed" }, { status: 500 });
     }
 
-    // Mark the space modified so its home-library card brief regenerates with
-    // the latest board state. Fire-and-forget.
-    void db
-      .from("spaces")
-      .update({ updated_at: new Date().toISOString() })
-      .eq("id", spaceId);
+    // NOTE: we deliberately do NOT bump spaces.updated_at here. Autosave fires
+    // every few seconds, and a second write to the (hot, widely-read) spaces
+    // row on every board save caused lock contention + connection-pool
+    // starvation that cascaded into 504/401s across unrelated routes. The
+    // home-library card brief still invalidates on board edits — the brief
+    // route treats GREATEST(spaces.updated_at, objective_boards.updated_at) as
+    // its freshness source, and this upsert already advanced
+    // objective_boards.updated_at for free.
 
     return NextResponse.json({ ok: true, updated_at: data?.updated_at });
   } catch (err) {

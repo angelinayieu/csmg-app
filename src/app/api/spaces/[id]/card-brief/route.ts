@@ -43,7 +43,25 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     .maybeSingle();
 
   const cached = space?.card_brief as SpaceCardBrief | null | undefined;
-  const updatedAt = space?.updated_at as string | null | undefined;
+
+  // Freshness source = the LATER of spaces.updated_at and the objective
+  // board's own updated_at. The board autosave no longer bumps
+  // spaces.updated_at (that per-save write starved the connection pool), so
+  // we read the board's timestamp directly to keep briefs invalidating on
+  // board edits without the contending write.
+  const { data: boardRow } = await db
+    .from("objective_boards")
+    .select("updated_at")
+    .eq("space_id", spaceId)
+    .maybeSingle();
+
+  const spaceUpdatedAt = space?.updated_at as string | null | undefined;
+  const boardUpdatedAt = boardRow?.updated_at as string | null | undefined;
+  const updatedAt =
+    [spaceUpdatedAt, boardUpdatedAt]
+      .filter((t): t is string => typeof t === "string")
+      .sort()
+      .pop() ?? null;
 
   // Fresh = a current-version, well-formed cached brief whose source
   // updated_at is at or after the space's current updated_at. Older-version

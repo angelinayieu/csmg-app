@@ -57,6 +57,34 @@ export async function safeAuth(): Promise<
     const { data: { user }, error } = result;
 
     if (error || !user) {
+      // Distinguish a genuine auth rejection (expired/invalid token, no user)
+      // from an INFRASTRUCTURE failure that GoTrue surfaces as a 5xx. When
+      // Postgres is saturated, GoTrue's /user endpoint (which queries
+      // auth.users) times out and returns 500/504; supabase-js RETURNS that
+      // as `error` rather than throwing, so the old `→ 401` blanket mapping
+      // spuriously "logged out" users mid-session. That is exactly what made
+      // prototype/glossary/image-concepts fail with a confusing 401 during a
+      // board-save load spike (auth logs showed 50× 504 on /user @ ~40s).
+      // Map auth-service 5xx to a retryable 503 so the client can back off and
+      // recover instead of treating the session as dead.
+      const authStatus = (error as { status?: number } | null)?.status;
+      if (authStatus !== undefined && authStatus >= 500) {
+        console.warn(
+          `[safeAuth] auth service returned ${authStatus} — treating as service degradation, not 401`,
+        );
+        return {
+          supabase: null,
+          user: null,
+          error: NextResponse.json(
+            {
+              error:
+                "Auth service is temporarily unavailable. Please try again in a moment.",
+              isServiceDegradation: true,
+            },
+            { status: 503, headers: { "Retry-After": "5" } },
+          ),
+        };
+      }
       return {
         supabase: null,
         user: null,
