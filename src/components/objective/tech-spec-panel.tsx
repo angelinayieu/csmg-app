@@ -152,6 +152,7 @@ export function TechSpecPanel({
   // while it's open so a plus-button never floats over the document.
   const libraryOpen = usePanel("library");
   const powerupsOpen = usePanel("powerups");
+  const unpackOpen = usePanel("unpack");
   useEffect(() => {
     setPanel("techSpec", true);
     return () => setPanel("techSpec", false);
@@ -169,7 +170,7 @@ export function TechSpecPanel({
   const RAIL_PUSH = 412;
   // Either right-edge rail open → squish. (Style is a small popover that
   // doesn't span the height, so it doesn't trigger the push.)
-  const rightRailOpen = libraryOpen || powerupsOpen;
+  const rightRailOpen = libraryOpen || powerupsOpen || unpackOpen;
 
   return (
     <div

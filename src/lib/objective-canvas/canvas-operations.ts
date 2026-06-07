@@ -18,6 +18,15 @@ import type {
   VariationsResult,
   PlanResult,
 } from "@/lib/synergy/types";
+import {
+  UNPACK_STARTED_EVENT,
+  UNPACK_RESULT_EVENT,
+  UNPACK_FAILED_EVENT,
+  type UnpackStartedDetail,
+  type UnpackResultDetail,
+  type UnpackFailedDetail,
+  type UnpackResultPayload,
+} from "./unpack-events";
 
 /** What an operation needs to run.
  *  - text   : runs on a bare string (any sticky note / card title)
@@ -498,40 +507,113 @@ export async function runOperation(
  *  sibling cards in the cluster. Principles land first (so variations can
  *  reference them by slug) and variations get their `subsystem` set to
  *  their first principle's slug, so each principle visually groups its
- *  children in the deployed swimlane. */
+ *  children in the deployed swimlane.
+ *
+ *  Also dispatches Unpack lifecycle events (STARTED / RESULT / FAILED) so
+ *  the reasoning sidebar (UnpackReasoningPanel) can open immediately on
+ *  click, render the agent's reasoning log + the full structured tree, and
+ *  accept chat refinements that loop back into this same route. */
 async function runUnpack(
   target: OperationTarget,
   opts: OperationRunOptions,
 ): Promise<OperationResultItem[]> {
   if (!target.text.trim() || !opts.spaceId) return [];
-  const res = await postOp(
-    `/api/objective/${opts.spaceId}/unpack`,
-    JSON.stringify({
-      text: target.text.slice(0, 6000),
-      cardId: target.shapeId,
-      sourceKind: target.sourceKind ?? "",
-      temperature: opts.temperature,
-    }),
-  );
-  if (!res.ok) throw await transportErrorFor(res);
-  type UnpackCard = {
-    slug: string;
-    objectId: string | null;
-    kind: "first_principle" | "variation";
-    title: string;
-    body: string;
-    subsystem: string;
-    from_principles?: string[];
-  };
-  type UnpackLink = { fromSlug: string; toSlug: string; relation: string };
-  let json: { cards?: UnpackCard[]; links?: UnpackLink[] };
+  const cardId = target.shapeId ?? "";
+  const cardTitle = target.text.trim().split(/\n/)[0]?.slice(0, 120) ?? "";
+  // Fire STARTED before the fetch so the sidebar opens IMMEDIATELY with a
+  // "Reasoning…" state. Without this the user waits ~15s for the round-trip
+  // before the sidebar acknowledges anything happened.
+  if (typeof window !== "undefined") {
+    try {
+      window.dispatchEvent(
+        new CustomEvent<UnpackStartedDetail>(UNPACK_STARTED_EVENT, {
+          detail: { cardId, cardTitle, sourceKind: target.sourceKind ?? "" },
+        }),
+      );
+    } catch {
+      /* defensive — never block the op on a dispatch error */
+    }
+  }
+  let res: Response;
   try {
-    json = (await res.json()) as { cards?: UnpackCard[]; links?: UnpackLink[] };
+    res = await postOp(
+      `/api/objective/${opts.spaceId}/unpack`,
+      JSON.stringify({
+        text: target.text.slice(0, 6000),
+        cardId,
+        sourceKind: target.sourceKind ?? "",
+        temperature: opts.temperature,
+      }),
+    );
+  } catch (err) {
+    // Network / transport failure before the route responded.
+    if (typeof window !== "undefined") {
+      try {
+        window.dispatchEvent(
+          new CustomEvent<UnpackFailedDetail>(UNPACK_FAILED_EVENT, {
+            detail: { cardId, reason: err instanceof Error ? err.message : "network error" },
+          }),
+        );
+      } catch {
+        /* defensive */
+      }
+    }
+    throw err;
+  }
+  if (!res.ok) {
+    const err = await transportErrorFor(res);
+    if (typeof window !== "undefined") {
+      try {
+        window.dispatchEvent(
+          new CustomEvent<UnpackFailedDetail>(UNPACK_FAILED_EVENT, {
+            detail: { cardId, reason: err.message || `unpack failed (${res.status})` },
+          }),
+        );
+      } catch {
+        /* defensive */
+      }
+    }
+    throw err;
+  }
+  let json: UnpackResultPayload;
+  try {
+    json = (await res.json()) as UnpackResultPayload;
   } catch {
+    if (typeof window !== "undefined") {
+      try {
+        window.dispatchEvent(
+          new CustomEvent<UnpackFailedDetail>(UNPACK_FAILED_EVENT, {
+            detail: { cardId, reason: "malformed response" },
+          }),
+        );
+      } catch {
+        /* defensive */
+      }
+    }
     throw new OperationTransportError("server", "malformed response");
   }
   const cards = json.cards ?? [];
   const links = json.links ?? [];
+  // Fire RESULT with the full structured payload so the sidebar can render
+  // the reasoning log + principles tree + ranking without re-fetching.
+  if (typeof window !== "undefined") {
+    try {
+      window.dispatchEvent(
+        new CustomEvent<UnpackResultDetail>(UNPACK_RESULT_EVENT, {
+          detail: {
+            cardId,
+            goal_frame: json.goal_frame ?? { goal: "", evidence: "" },
+            reasoning_log: json.reasoning_log ?? [],
+            ranking: json.ranking ?? [],
+            cards,
+            links,
+          },
+        }),
+      );
+    } catch {
+      /* defensive */
+    }
+  }
   // Build a fromSlug → parents[] map for variations. Principles have no
   // parents inside the cluster (their parent is the source card, drawn by
   // the existing frameForkedGroup tether, not by an inter-card connector).

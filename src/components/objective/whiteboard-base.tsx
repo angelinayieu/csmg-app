@@ -155,6 +155,13 @@ import {
 } from "./canvas-interactions/specforge-runner";
 import { OperationLane } from "./canvas-interactions/operation-lane";
 import { SpecForgeDetailPanel } from "./canvas-interactions/specforge-detail-panel";
+import { UnpackReasoningPanel } from "./canvas-interactions/unpack-reasoning-panel";
+import {
+  UNPACK_REFINE_DEPLOY_EVENT,
+  type UnpackRefineDeployDetail,
+} from "@/lib/objective-canvas/unpack-events";
+import { deployFlowConnector } from "./canvas-interactions/flow-connector-board";
+import { frameForkedGroup } from "./canvas-interactions/group-frame";
 import { ConvergeDivergePopup } from "./canvas-interactions/converge-diverge-popup";
 import {
   ClusterRecommendationsMount,
@@ -209,6 +216,8 @@ import {
   type DeployPriorityMapCardDetail,
   DEPLOY_IMAGE_CARD_EVENT,
   type ImageCardDetail,
+  UPDATE_IMAGE_CARD_EVENT,
+  type UpdateImageCardDetail,
   DEPLOY_VOICE_NOTE_EVENT,
   UPDATE_VOICE_ANALYSIS_EVENT,
   DEPLOY_JOURNAL_EVENT,
@@ -251,7 +260,11 @@ import {
   promoteChatboxToObjective,
   clearStaleChatboxCards,
 } from "./canvas-interactions/intake-board";
-import { deployImageCardOnBoard } from "./canvas-interactions/objective-image-board";
+import {
+  deployImageCardOnBoard,
+  updateImageCardOnBoard,
+} from "./canvas-interactions/objective-image-board";
+import { registerImagePasteHandler } from "./canvas-interactions/image-paste-handler";
 import {
   deployVoiceNoteOnBoard,
   updateVoiceNoteAnalysisOnBoard,
@@ -833,6 +846,14 @@ export function WhiteboardBase({
       colorScheme: boardDark ? "dark" : "light",
     });
   }, [editor, boardDark]);
+
+  // Pasted/dropped images → vision pipeline (analyzed, scanner-ready image
+  // card) instead of tldraw's default inert image shape. See
+  // image-paste-handler.ts for the two-phase ingest+vision flow.
+  useEffect(() => {
+    if (!editor || !spaceId) return;
+    return registerImagePasteHandler(editor, spaceId);
+  }, [editor, spaceId]);
 
   const toggleBoardTheme = useCallback(() => {
     setBoardDark((d) => {
@@ -1615,6 +1636,15 @@ export function WhiteboardBase({
       );
     }
 
+    function onUpdateImageCard(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      updateImageCardOnBoard(
+        editor,
+        (e as CustomEvent<UpdateImageCardDetail>).detail,
+      );
+    }
+
     function onDeployVoiceNote(e: Event) {
       const editor = editorRef.current;
       if (!editor) return;
@@ -1710,6 +1740,8 @@ export function WhiteboardBase({
     window.addEventListener(DEPLOY_HEATMAP_CARD_EVENT, onDeployHeatmapCardB);
     window.addEventListener(DEPLOY_PRIORITY_MAP_EVENT, onDeployPriorityMapB);
     window.addEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCardB);
+    // Pass-through (not buffered) — patches a card that already exists.
+    window.addEventListener(UPDATE_IMAGE_CARD_EVENT, onUpdateImageCard);
     window.addEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNoteB);
     window.addEventListener(UPDATE_VOICE_ANALYSIS_EVENT, onUpdateVoiceAnalysis);
     window.addEventListener(DEPLOY_JOURNAL_EVENT, onDeployJournalB);
@@ -1727,6 +1759,7 @@ export function WhiteboardBase({
       window.removeEventListener(DEPLOY_HEATMAP_CARD_EVENT, onDeployHeatmapCardB);
       window.removeEventListener(DEPLOY_PRIORITY_MAP_EVENT, onDeployPriorityMapB);
       window.removeEventListener(DEPLOY_IMAGE_CARD_EVENT, onDeployImageCardB);
+      window.removeEventListener(UPDATE_IMAGE_CARD_EVENT, onUpdateImageCard);
       window.removeEventListener(DEPLOY_VOICE_NOTE_EVENT, onDeployVoiceNoteB);
       window.removeEventListener(UPDATE_VOICE_ANALYSIS_EVENT, onUpdateVoiceAnalysis);
       window.removeEventListener(DEPLOY_JOURNAL_EVENT, onDeployJournalB);
@@ -2489,6 +2522,155 @@ function createSubsystemKgCard(editor: Editor, d: SubsystemKgCardDetail) {
   editor.select(id);
   editor.centerOnPoint(
     { x: x + w / 2, y: y + h / 2 },
+    { animation: { duration: 300 } },
+  );
+}
+
+/** Deploy the delta from a chat-driven Unpack refinement (UNPACK_PLAN
+ *  Phase 3). The sidebar owns the run; we just extend the on-board
+ *  cluster: lay the new cards below the source's existing children,
+ *  frame them as their own forked sub-group tethered to the SAME source
+ *  (so the user sees "Refined" / "Expanded" / "Constrained" as a fork
+ *  off the original), and wire the new causal connectors — bridging to
+ *  existing principle shapes when a new variation cites a slug that
+ *  already landed on the board.
+ *
+ *  Resolution: the slug→shapeId map is built BY READING the board
+ *  (meta.unpackSlug stamped at deploy time, with a content-hash fallback
+ *  by title match for cards that came from the initial executor path
+ *  which didn't yet stamp slugs). New shapes get meta.unpackSlug so
+ *  future refines find them. */
+function deployUnpackDelta(
+  editor: Editor,
+  d: UnpackRefineDeployDetail,
+): void {
+  const CARD_W = 216;
+  const CARD_H = 132;
+  const ROW_H = 168;
+  const GAP_X = 16;
+  const PER_ROW = 3;
+  const ACCENT = "#64748B";
+  const stamp = Date.now();
+
+  // ── Resolve the source's bottom edge so the delta lands below the
+  // existing cluster, not on top of it.
+  const sourceBounds = editor.getShapePageBounds(d.cardId as TLShapeId);
+  if (!sourceBounds) return;
+
+  // Existing cluster bottom: any artifact-card carrying meta.sourceShapeId
+  // === d.cardId is a sibling deployment from a prior Unpack run.
+  const siblings = editor
+    .getCurrentPageShapes()
+    .filter((s) => {
+      const meta = (s.meta ?? {}) as { sourceShapeId?: unknown };
+      return (
+        s.type === "artifact-card" &&
+        typeof meta.sourceShapeId === "string" &&
+        meta.sourceShapeId === d.cardId
+      );
+    });
+  const siblingMaxY = siblings.reduce((max, s) => {
+    const b = editor.getShapePageBounds(s.id);
+    return b && b.maxY > max ? b.maxY : max;
+  }, sourceBounds.maxY);
+
+  // Cluster width: 3 cards per row (matches the executor's grid).
+  const nCards = d.cards.length;
+  const perRow = Math.min(nCards, PER_ROW);
+  const rowWidth = perRow * CARD_W + (perRow - 1) * GAP_X;
+  const nRows = Math.ceil(nCards / perRow);
+  const clusterH = nRows * ROW_H;
+
+  // Reserve a clear region for the delta.
+  const anchorMidX = sourceBounds.midX;
+  const spot = reserveSpace(
+    editor,
+    { w: rowWidth, h: clusterH },
+    { anchorMidX, preferredTop: siblingMaxY + 40, gap: 40 },
+  );
+  const clusterX = spot.x;
+  const clusterY = spot.y;
+
+  // ── Build the existing slug→shapeId map so new variations connect to
+  // the principles already on the board.
+  const slugToShapeId = new Map<string, TLShapeId>();
+  for (const s of siblings) {
+    const meta = (s.meta ?? {}) as { unpackSlug?: unknown };
+    if (typeof meta.unpackSlug === "string" && meta.unpackSlug) {
+      slugToShapeId.set(meta.unpackSlug, s.id);
+    }
+  }
+
+  // ── Create the new cards.
+  const created: { shapeId: TLShapeId; slug: string }[] = [];
+  d.cards.forEach((card, i) => {
+    const col = i % perRow;
+    const row = Math.floor(i / perRow);
+    const x = clusterX + col * (CARD_W + GAP_X);
+    const y = clusterY + row * ROW_H;
+    const id = createShapeId();
+    const kind =
+      card.kind === "first_principle" ? "first_principle" : "variation";
+    editor.createShape<ArtifactCardShape>({
+      id,
+      type: "artifact-card",
+      x,
+      y,
+      props: {
+        w: CARD_W,
+        h: CARD_H,
+        kind,
+        title: card.title || "Idea",
+        subtitle: card.body ?? "",
+        color: ACCENT,
+        entityId: `unpack-${kind}-${stamp}-${i}`,
+        roomId: "",
+      },
+      meta: {
+        opResult: true,
+        op: "decompose",
+        sourceShapeId: d.cardId,
+        // Stamp the slug so future refines can resolve causal edges back
+        // to this shape without re-reading library_objects.
+        unpackSlug: card.slug,
+        // Persist the objectId server-side from the route response so
+        // single-click opens the detail drawer.
+        objectId: card.objectId ?? "",
+      },
+    });
+    slugToShapeId.set(card.slug, id);
+    created.push({ shapeId: id, slug: card.slug });
+  });
+
+  // ── Frame the delta as its own forked sub-group, tethered to the
+  // SAME source so the user reads it as "another fork off the card".
+  if (created.length > 0) {
+    frameForkedGroup(editor, {
+      childIds: created.map((c) => c.shapeId),
+      sourceShapeId: d.cardId,
+      label: d.deltaLabel,
+      accent: ACCENT,
+    });
+  }
+
+  // ── Inter-card causal connectors. The delta links may reference
+  // principles that landed in a PRIOR cluster — slugToShapeId already
+  // includes those, so the wire bridges across clusters when the model
+  // says "this new variation derives from p2 from the original run".
+  for (const l of d.links) {
+    if (l.relation !== "derived_from") continue;
+    const from = slugToShapeId.get(l.fromSlug);
+    const to = slugToShapeId.get(l.toSlug);
+    if (!from || !to) continue;
+    // Edge direction: parent (principle) → child (variation). The route
+    // emits from=variation, to=principle, so we flip when drawing so the
+    // green-out / pink-in port flow reads downstream.
+    deployFlowConnector(editor, to, from, ACCENT);
+  }
+
+  // Reveal the delta without yanking the zoom.
+  editor.centerOnPoint(
+    { x: clusterX + rowWidth / 2, y: clusterY + clusterH / 2 },
     { animation: { duration: 300 } },
   );
 }
@@ -3395,6 +3577,32 @@ function BoardOverlay({
     };
   }, []);
 
+  // ── Unpack chat-refinement → delta deploy bridge ──
+  // The sidebar OWNS the chat loop (priorTurns state lives there), and
+  // fires UNPACK_REFINE_DEPLOY_EVENT with only the cards/links the chat
+  // turn ADDED. We extend the on-board cluster: drop the new cards just
+  // below whatever the source's children currently bottom out at, frame
+  // them as their own forked sub-group ("Refined" / "Expanded" /
+  // "Constrained") tethered to the SAME source, and wire the new
+  // variation→principle connectors — bridging to existing principle
+  // shapes when the new variation cites a previously-deployed principle.
+  useEffect(() => {
+    function onRefineDeploy(e: Event) {
+      const d = (e as CustomEvent<UnpackRefineDeployDetail>).detail;
+      if (!d || !d.cards.length) return;
+      try {
+        deployUnpackDelta(editor, d);
+      } catch (err) {
+        console.warn("[board] unpack delta deploy failed:", err);
+      }
+    }
+    window.addEventListener(UNPACK_REFINE_DEPLOY_EVENT, onRefineDeploy);
+    return () => {
+      window.removeEventListener(UNPACK_REFINE_DEPLOY_EVENT, onRefineDeploy);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor]);
+
   useEffect(() => {
     try {
       setHintDismissed(
@@ -3962,6 +4170,14 @@ function BoardOverlay({
           Mounted unconditionally (controls its own visibility via the
           OPEN_SPECFORGE_DETAIL_EVENT it listens for). */}
       <SpecForgeDetailPanel editor={editor} />
+
+      {/* Unpack Reasoning Panel — opens the moment the user presses Unpack
+          (UNPACK_PLAN Phase 3). Shows the agent's goal_frame, reasoning_log,
+          principles tree, ranking + a chat input that re-runs the unpack
+          route in refine/expand/constrain mode. Self-mounted; controls
+          its visibility via the UNPACK_STARTED_EVENT listener inside +
+          the shared board-panel-signal "unpack" slot. */}
+      <UnpackReasoningPanel spaceId={spaceId} editor={editor} />
 
       {/* Deep Synthesize progress — calm glass chip while pro Claude reads
           the selection, searches the web, and weaves the cross-link map. */}

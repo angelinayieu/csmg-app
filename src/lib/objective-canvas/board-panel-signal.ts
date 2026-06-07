@@ -17,13 +17,22 @@ import { useSyncExternalStore } from "react";
 // launcher panels (powerups/library/style) it does NOT share their slot — it
 // floats centered and coexists with the library rail (which pushes it aside),
 // so opening it must not close the others.
-export type BoardPanel = "powerups" | "library" | "style" | "techSpec";
+export type BoardPanel =
+  | "powerups"
+  | "library"
+  | "style"
+  | "techSpec"
+  // Unpack reasoning sidebar (UNPACK_PLAN Phase 3). Right-edge slot — joins
+  // the mutex with powerups/library/style so opening it closes those (and
+  // vice versa). techSpec stays out of the mutex and floats centered.
+  | "unpack";
 
 const state: Record<BoardPanel, boolean> = {
   powerups: false,
   library: false,
   style: false,
   techSpec: false,
+  unpack: false,
 };
 const subs = new Set<() => void>();
 
@@ -33,12 +42,13 @@ export function isPanelOpen(p: BoardPanel): boolean {
 
 export function setPanel(p: BoardPanel, open: boolean): void {
   if (state[p] === open) return;
-  // The three right-edge launcher panels share a slot — opening one closes
-  // the others. Tech Spec floats independently and stays out of that mutex.
+  // The right-edge launcher panels share a slot — opening one closes the
+  // others. Tech Spec floats independently and stays out of that mutex.
   if (open && p !== "techSpec") {
     state.powerups = false;
     state.library = false;
     state.style = false;
+    state.unpack = false;
   }
   state[p] = open;
   subs.forEach((f) => f());

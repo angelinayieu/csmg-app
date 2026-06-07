@@ -212,6 +212,10 @@ export async function executeCardOperation(
           opResult: true,
           op: opId,
           sourceShapeId: target.shapeId ?? "",
+          // Stamp the unpack slug so chat-driven refines can resolve causal
+          // edges to this card without re-reading library_objects. Omitted
+          // for non-unpack ops (no slug present).
+          ...(item.slug ? { unpackSlug: item.slug } : {}),
           ...tokenMeta,
         },
       });
