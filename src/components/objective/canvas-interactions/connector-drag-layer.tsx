@@ -46,6 +46,11 @@ const RELATIONS: { key: RelationKey; label: string }[] = [
   { key: "derived_from", label: "Derived from" },
 ];
 
+interface ApiImageLinkRef {
+  id: string;
+  objectId?: string;
+}
+
 /** The library_objects id a shape stands for, if any. Only object-cards (and
  *  anything else carrying a non-empty props.objectId) can be linked. */
 function objectIdOf(shape: TLShape | undefined): string | null {
@@ -162,6 +167,77 @@ export function ConnectorDragLayer({
     relationLabel: string;
     count: number;
   } | null>(null);
+
+  // Older persisted image cards can have imageFileId but no objectId because
+  // image_source promotion landed after the board card was created. The
+  // connector's linkability gate is intentionally objectId-based, so hydrate
+  // those image cards here too instead of relying on ObjectiveImageMount being
+  // mounted/polling at the exact right time.
+  useEffect(() => {
+    if (!spaceId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let tries = 0;
+    const maxTries = 8;
+
+    async function hydrateImageObjectIds() {
+      if (cancelled) return;
+      tries += 1;
+
+      const stale = editor
+        .getCurrentPageShapes()
+        .filter((shape) => {
+          if (shape.type !== "objective-image-card") return false;
+          const props = shape.props as { imageFileId?: unknown; objectId?: unknown };
+          return (
+            typeof props.imageFileId === "string" &&
+            props.imageFileId.length > 0 &&
+            !(typeof props.objectId === "string" && props.objectId.length > 0)
+          );
+        });
+
+      if (stale.length === 0) return;
+
+      try {
+        const res = await fetch(`/api/objective/${spaceId}/images`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const json = (await res.json()) as { images?: ApiImageLinkRef[] };
+        const byFileId = new Map<string, string>();
+        for (const img of json.images ?? []) {
+          if (img.id && img.objectId) byFileId.set(img.id, img.objectId);
+        }
+        const updates = stale
+          .map((shape) => {
+            const props = shape.props as { imageFileId?: unknown };
+            const fileId =
+              typeof props.imageFileId === "string" ? props.imageFileId : "";
+            const objectId = byFileId.get(fileId);
+            return objectId
+              ? {
+                  id: shape.id,
+                  type: "objective-image-card" as const,
+                  props: { objectId },
+                }
+              : null;
+          })
+          .filter((u): u is NonNullable<typeof u> => !!u);
+        if (updates.length > 0) editor.updateShapes(updates);
+      } finally {
+        if (!cancelled && tries < maxTries) {
+          timer = setTimeout(hydrateImageObjectIds, 2500);
+        }
+      }
+    }
+
+    void hydrateImageObjectIds();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [spaceId, editor]);
+
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 6500);

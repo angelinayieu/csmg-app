@@ -10,7 +10,7 @@
 // (replaces the entity-based drawer for the object layer). Reads
 // GET …/library/objects/[objectId]. Mount once at the board level.
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Editor, TLShape, TLShapeId } from "tldraw";
 import { X, Loader2, Boxes, ArrowRight, ArrowLeft, MapPin, Target, Star, Sparkles, Pencil } from "@/lib/cute-icons";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
@@ -23,17 +23,23 @@ export const OPEN_CARD_DETAIL_EVENT = "objective-board:open-card-detail";
 
 // ── MicrosSection ──
 // The per-card success rubric (3-5 micros derived from the seed objective).
-// MINIMAL by design: just label + ladder arrow. No why-text, no signals, no
-// confidence numbers, no edit affordance. The user reads what they NEED to
-// know — what this card needs to do, and which top-level factor it serves.
-// Anything more lives in the route's response if a power-user wants it.
+// Each row shows: label + the one-line WHY (which explicitly cites the
+// objective or a laddered factor, per the deriver's prompt) + the laddering
+// arrow. Surfacing the WHY closes the trust loop — the connection back to
+// the main objective is the whole point of the rubric.
 //
 // First open hits the route with `cacheOnly: true` so the panel renders
-// instantly (no LLM call). If empty, a single "Derive" pill kicks off the
-// objective-keyed derive (~2s Sonnet call, then auto-render).
+// instantly. On a cache miss, the section auto-derives once (objective-
+// keyed Sonnet call ~2s, cached for every future open of this card).
 interface MinimalMicro {
   slug: string;
   label: string;
+  /** 1-sentence WHY — references the main objective or a laddered factor.
+   *  Surfaced under the label so the grounding is visible. */
+  why?: string;
+  /** Optional measurable signal (threshold / ratio / time-bound). Shown as
+   *  a small chip when present — sharper micros include one. */
+  success_signal?: string;
   laddersTo: string[];
 }
 
@@ -49,46 +55,16 @@ function MicrosSection({
   const enabled = ["feature", "variable", "mechanism"].includes(objectType);
   const [micros, setMicros] = useState<MinimalMicro[] | null>(null);
   const [busy, setBusy] = useState(false);
+  // True once auto-derive has fired for this card — prevents a derive loop
+  // if the route legitimately returns [] (e.g. card content missing).
+  const autoDerivedRef = useRef(false);
   // slug → label for the ladder arrow. Populated from the route response
   // (which echoes the space's factors) so we don't fetch sharpening twice.
   const [factorLabel, setFactorLabel] = useState<Map<string, string>>(
     () => new Map(),
   );
 
-  // First open: cache-only read. Free (no LLM) and instant.
-  useEffect(() => {
-    if (!enabled) return;
-    let alive = true;
-    fetch(`/api/objective/${spaceId}/card-micro-objectives`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cardId: objectId, cacheOnly: true }),
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (!alive) return;
-        if (j && Array.isArray(j.micros)) setMicros(j.micros);
-        if (j && Array.isArray(j.factors)) {
-          setFactorLabel(
-            new Map(
-              (j.factors as { slug: string; label: string }[]).map((f) => [
-                f.slug,
-                f.label,
-              ]),
-            ),
-          );
-        }
-      })
-      .catch(() => {
-        /* leave null — render the empty "Derive" affordance */
-      });
-    return () => {
-      alive = false;
-    };
-  }, [enabled, spaceId, objectId]);
-
-  async function derive() {
-    if (busy) return;
+  const derive = useCallback(async () => {
     setBusy(true);
     try {
       const res = await fetch(
@@ -106,21 +82,73 @@ function MicrosSection({
         };
         setMicros(Array.isArray(j.micros) ? j.micros : []);
         if (Array.isArray(j.factors)) {
-          setFactorLabel(
-            new Map(j.factors.map((f) => [f.slug, f.label])),
-          );
+          setFactorLabel(new Map(j.factors.map((f) => [f.slug, f.label])));
         }
+      } else {
+        // Surface the empty state so the user sees SOMETHING (rather than the
+        // loading dot spinning forever on a server error).
+        setMicros([]);
       }
     } finally {
       setBusy(false);
     }
-  }
+  }, [spaceId, objectId]);
+
+  // First open: cache-only read. Free (no LLM) and instant. On a cache miss,
+  // AUTO-DERIVE once — the user shouldn't have to click a button to see
+  // the rubric for their own card.
+  useEffect(() => {
+    if (!enabled) return;
+    autoDerivedRef.current = false; // reset per card (component is keyed)
+    let alive = true;
+    fetch(`/api/objective/${spaceId}/card-micro-objectives`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: objectId, cacheOnly: true }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!alive) return;
+        const cached: MinimalMicro[] = Array.isArray(j?.micros) ? j.micros : [];
+        if (Array.isArray(j?.factors)) {
+          setFactorLabel(
+            new Map(
+              (j.factors as { slug: string; label: string }[]).map((f) => [
+                f.slug,
+                f.label,
+              ]),
+            ),
+          );
+        }
+        if (cached.length > 0) {
+          setMicros(cached);
+          return;
+        }
+        // Cache miss → auto-derive (once). Keep micros = null so the panel
+        // stays in the "deriving" state instead of flashing empty.
+        if (!autoDerivedRef.current) {
+          autoDerivedRef.current = true;
+          void derive();
+        } else {
+          setMicros([]);
+        }
+      })
+      .catch(() => {
+        // Network hiccup — fall back to the empty affordance so the user can
+        // still kick it manually.
+        if (alive) setMicros([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [enabled, spaceId, objectId, derive]);
 
   if (!enabled) return null;
 
-  // Cache-only fetch hasn't returned yet OR returned empty → show derive pill.
-  const isEmpty = micros !== null && micros.length === 0;
-  const isLoading = micros === null;
+  // Loading covers BOTH the initial cache-only fetch and the auto-derive
+  // round-trip — the user reads one continuous "working on it" state.
+  const isLoading = micros === null || busy;
+  const isEmpty = micros !== null && micros.length === 0 && !busy;
 
   return (
     <section style={{ marginTop: 14 }}>
@@ -140,8 +168,18 @@ function MicrosSection({
           </button>
         )}
       </div>
+      {/* Provenance line — makes the grounding visible. The deriver's prompt
+          frames every micro through the space's main objective; surfacing
+          that here is what closes the "this looks disconnected" gap. */}
+      {micros && micros.length > 0 && (
+        <div style={microsProvenance}>
+          Success conditions for this card to serve your main objective.
+        </div>
+      )}
       {isLoading && (
-        <div style={microsHint}>…</div>
+        <div style={microsHint}>
+          {busy ? "Deriving from your objective…" : "Loading…"}
+        </div>
       )}
       {isEmpty && (
         <button
@@ -149,21 +187,39 @@ function MicrosSection({
           onClick={derive}
           disabled={busy}
           style={microsDerivePill}
+          title="Re-derive — the previous derive returned no usable micros."
         >
-          {busy ? "Deriving…" : "Derive"}
+          Derive
         </button>
       )}
       {micros && micros.length > 0 && (
-        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+        <div
+          style={{
+            marginTop: 6,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
           {micros.map((m) => {
             const ladders = m.laddersTo
               .map((s) => factorLabel.get(s) || s)
               .filter(Boolean);
             return (
-              <div key={m.slug} style={microRow}>
-                <span style={microLabelText}>{m.label}</span>
-                {ladders.length > 0 && (
-                  <span style={microLadderText}>→ {ladders.join(" · ")}</span>
+              <div key={m.slug} style={microItem}>
+                <div style={microLabelRow}>
+                  <span style={microLabelText}>{m.label}</span>
+                  {ladders.length > 0 && (
+                    <span style={microLadderText}>
+                      → {ladders.join(" · ")}
+                    </span>
+                  )}
+                </div>
+                {m.why && <div style={microWhyText}>{m.why}</div>}
+                {m.success_signal && (
+                  <div style={microSignalChip} title="Measurable success signal">
+                    {m.success_signal}
+                  </div>
                 )}
               </div>
             );
@@ -1526,13 +1582,22 @@ const microsDerivePill: CSSProperties = {
   fontWeight: 600,
   cursor: "pointer",
 };
-const microRow: CSSProperties = {
+// One micro row = stacked label + why + optional signal chip. Each micro is
+// its own little group so the WHY breathes; the section reads as a list of
+// success conditions, not a wall of jammed text.
+const microItem: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 3,
+};
+const microLabelRow: CSSProperties = {
   display: "flex",
   alignItems: "baseline",
   gap: 8,
   fontSize: 12.5,
   lineHeight: 1.4,
   color: appleVibe.text.primary,
+  flexWrap: "wrap",
 };
 const microLabelText: CSSProperties = {
   fontWeight: 600,
@@ -1541,6 +1606,34 @@ const microLabelText: CSSProperties = {
 const microLadderText: CSSProperties = {
   fontSize: 11,
   color: appleVibe.text.tertiary,
+};
+// The objective-grounded WHY — the sentence the deriver writes that cites
+// the main objective or a laddered factor. Slate-secondary so it sits
+// quieter than the label but stays fully legible.
+const microWhyText: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.45,
+  color: appleVibe.text.secondary,
+};
+const microSignalChip: CSSProperties = {
+  alignSelf: "flex-start",
+  marginTop: 2,
+  fontSize: 10.5,
+  fontWeight: 600,
+  color: appleVibe.text.secondary,
+  padding: "3px 8px",
+  borderRadius: appleVibe.radius.pill,
+  background: appleVibe.surface.chip,
+  border: `1px solid ${appleVibe.stroke.hairline}`,
+};
+// Provenance line under the section heading — surfaces the objective lens
+// so the user reads "these serve my objective" before the list itself.
+const microsProvenance: CSSProperties = {
+  marginTop: 4,
+  fontSize: 11,
+  lineHeight: 1.4,
+  color: appleVibe.text.tertiary,
+  fontStyle: "italic",
 };
 const emptyRow: CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "16px 2px", color: appleVibe.text.tertiary, fontSize: 12.5 };
 const typePill: CSSProperties = {

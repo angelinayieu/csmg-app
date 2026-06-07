@@ -2,15 +2,21 @@
 
 // ── ObjectClusterGraph ──
 //
-// A small radial node-link diagram of ONE library object's neighborhood: the
+// A small node-link diagram of ONE library object's neighborhood: the
 // object in the center + its directly-linked objects (object_links: feeds /
-// depends_on / derived_from / …) around it. This is the per-variable "cluster"
-// view — the graph the object-detail rail renders instead of only a flat list.
-// Click a neighbor → navigate the rail to it (re-centers the cluster there).
-// Pure SVG, no deps.
+// depends_on / derived_from / …) around it. Click a neighbor → navigate the
+// drawer to it (re-centers the cluster there).
+//
+// Renders by reusing the SAME engine as the space-wide Knowledge Graph panel
+// (cytoscape + fcose, degree-sized dots, hover-reveals labels, shared color
+// tokens). One visual language for "graph of objects" everywhere it appears.
 
 import { useMemo } from "react";
-import { appleVibe } from "@/lib/apple-vibe-tokens";
+import {
+  KnowledgeGraphCanvas,
+  type KgEdge,
+  type KgNode,
+} from "./knowledge-graph-panel";
 
 export interface ClusterNeighbor {
   id: string;
@@ -20,16 +26,10 @@ export interface ClusterNeighbor {
   direction?: "out" | "in";
 }
 
-const TYPE_COLOR: Record<string, string> = {
-  variable: "#069494",
-  feature: "#2563EB",
-  mechanism: "#7C3AED",
-  experiment: "#D97706",
-  deliverable: "#059669",
-  insight: "#DB2777",
-};
-const typeColor = (t: string) => TYPE_COLOR[t] ?? "#64748B";
-const trunc = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+// Synthetic id for the center node — namespaced so it can never collide with
+// a real library_objects UUID (defensive: prevents onNavigate from opening
+// "the card itself" if the engine ever taps the center).
+const CENTER_ID = "__cluster_center__";
 
 export function ObjectClusterGraph({
   centerTitle,
@@ -42,87 +42,49 @@ export function ObjectClusterGraph({
   neighbors: ClusterNeighbor[];
   onNavigate: (id: string) => void;
 }) {
-  const W = 320;
-  const H = 230;
-  const cx = W / 2;
-  const cy = H / 2;
-  const R = Math.min(W, H) / 2 - 42;
-  const n = neighbors.length;
+  const { nodes, edges } = useMemo(() => {
+    // Center carries degree = N (one edge per neighbor) so the fcose layout
+    // sizes it as the obvious hub. Neighbors each carry degree = 1 so they
+    // settle as smaller satellite dots — visual hierarchy is automatic.
+    const n: KgNode[] = [
+      {
+        id: CENTER_ID,
+        type: centerType,
+        title: centerTitle,
+        degree: neighbors.length,
+      },
+      ...neighbors.map((nb) => ({
+        id: nb.id,
+        type: nb.type,
+        title: nb.title,
+        degree: 1,
+      })),
+    ];
+    // Direction: "out" = center → neighbor; "in" = neighbor → center.
+    // Default to "out" if missing so an unannotated link still reads cleanly.
+    const e: KgEdge[] = neighbors.map((nb) => {
+      const out = (nb.direction ?? "out") === "out";
+      return {
+        source: out ? CENTER_ID : nb.id,
+        target: out ? nb.id : CENTER_ID,
+        relation: nb.relation ?? "related",
+      };
+    });
+    return { nodes: n, edges: e };
+  }, [centerTitle, centerType, neighbors]);
 
-  const pts = useMemo(
-    () =>
-      neighbors.map((nb, i) => {
-        const ang = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(1, n);
-        return { ...nb, x: cx + R * Math.cos(ang), y: cy + R * Math.sin(ang) };
-      }),
-    [neighbors, n, cx, cy, R],
-  );
-
-  if (n === 0) return null;
+  if (neighbors.length === 0) return null;
 
   return (
-    <svg
-      width="100%"
-      viewBox={`0 0 ${W} ${H}`}
-      style={{ display: "block", fontFamily: appleVibe.font.stack, overflow: "visible" }}
-    >
-      {/* edges */}
-      {pts.map((p) => (
-        <line
-          key={`e-${p.id}`}
-          x1={cx}
-          y1={cy}
-          x2={p.x}
-          y2={p.y}
-          style={{ stroke: appleVibe.stroke.medium }}
-          strokeWidth={1.2}
-        />
-      ))}
-      {/* relation labels at edge midpoints */}
-      {pts.map((p) => (
-        <text
-          key={`rl-${p.id}`}
-          x={(cx + p.x) / 2}
-          y={(cy + p.y) / 2 - 2}
-          fontSize={7}
-          style={{ fill: appleVibe.text.faint }}
-          textAnchor="middle"
-        >
-          {(p.relation || "").replace(/_/g, " ")}
-        </text>
-      ))}
-      {/* neighbor nodes (clickable) */}
-      {pts.map((p) => (
-        <g
-          key={p.id}
-          style={{ cursor: "pointer" }}
-          onClick={() => onNavigate(p.id)}
-        >
-          <circle cx={p.x} cy={p.y} r={6.5} fill={typeColor(p.type)} />
-          <text
-            x={p.x}
-            y={p.y < cy ? p.y - 10 : p.y + 16}
-            fontSize={8.5}
-            fontWeight={600}
-            style={{ fill: appleVibe.text.secondary }}
-            textAnchor="middle"
-          >
-            {trunc(p.title, 16)}
-          </text>
-        </g>
-      ))}
-      {/* center node */}
-      <circle cx={cx} cy={cy} r={10} fill={typeColor(centerType)} stroke="white" strokeWidth={2} />
-      <text
-        x={cx}
-        y={cy + 22}
-        fontSize={9.5}
-        fontWeight={700}
-        style={{ fill: appleVibe.text.primary }}
-        textAnchor="middle"
-      >
-        {trunc(centerTitle, 18)}
-      </text>
-    </svg>
+    <div style={{ width: "100%", height: 280 }}>
+      <KnowledgeGraphCanvas
+        nodes={nodes}
+        edges={edges}
+        onNodeClick={(id) => {
+          // Center tap is a no-op — the drawer already shows this object.
+          if (id !== CENTER_ID) onNavigate(id);
+        }}
+      />
+    </div>
   );
 }

@@ -25,6 +25,7 @@ import {
   type TasteSection,
   type TasteVoice,
 } from "@/lib/objective-canvas/taste-profile";
+import { ensureImageSource } from "@/lib/objective-canvas/materialize-image-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -48,6 +49,157 @@ async function loadSpace(
   return space;
 }
 
+async function hydrateSourceObjects(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  spaceId: string,
+  userId: string,
+  snapshot: TasteProfileSnapshot,
+): Promise<TasteProfileSnapshot> {
+  const ids = snapshot.sources
+    .map((s) => s.ingestedFileId)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (ids.length === 0) return snapshot;
+
+  try {
+    const [{ data: imageRows }, { data: imageObjects }] = await Promise.all([
+      db
+        .from("ingested_files")
+        .select(
+          "id, source_type, source_url, image_object_id, image_description, image_narrative, image_concepts",
+        )
+        .eq("space_id", spaceId)
+        .in("id", ids),
+      db
+        .from("library_objects")
+        .select("id, source_ref, content_snapshot")
+        .eq("space_id", spaceId)
+        .eq("object_type", "image_source")
+        .in(
+          "source_ref",
+          ids.map((id) => `img:${id}`),
+        ),
+    ]);
+
+    const rowsById = new Map<
+      string,
+      {
+        image_object_id?: string | null;
+        source_type?: string | null;
+        source_url?: string | null;
+        image_description?: string | null;
+        image_narrative?: string | null;
+        image_concepts?: unknown;
+      }
+    >();
+    for (const row of (imageRows ?? []) as Array<{
+      id: string;
+      image_object_id?: string | null;
+      source_type?: string | null;
+      source_url?: string | null;
+      image_description?: string | null;
+      image_narrative?: string | null;
+      image_concepts?: unknown;
+    }>) {
+      rowsById.set(row.id, row);
+    }
+
+    const objectsByIngestedId = new Map<
+      string,
+      { id: string; content_snapshot?: unknown }
+    >();
+    for (const obj of (imageObjects ?? []) as Array<{
+      id: string;
+      source_ref: string | null;
+      content_snapshot?: unknown;
+    }>) {
+      const ingestedId =
+        typeof obj.source_ref === "string" && obj.source_ref.startsWith("img:")
+          ? obj.source_ref.slice(4)
+          : "";
+      if (ingestedId) objectsByIngestedId.set(ingestedId, obj);
+    }
+
+    const createdObjectIds = new Map<string, string>();
+    for (const source of snapshot.sources) {
+      if (source.objectId || objectsByIngestedId.has(source.ingestedFileId)) {
+        continue;
+      }
+      const row = rowsById.get(source.ingestedFileId);
+      if (row?.image_object_id) continue;
+      try {
+        const conceptSlugs = Array.isArray(row?.image_concepts)
+          ? row.image_concepts.filter(
+              (v): v is string => typeof v === "string" && v.trim().length > 0,
+            )
+          : source.conceptSlugs;
+        const objectId = await ensureImageSource(db, {
+          spaceId,
+          userId,
+          ingestedFileId: source.ingestedFileId,
+          narrative: row?.image_narrative ?? null,
+          description: row?.image_description ?? null,
+          conceptSlugs,
+        });
+        if (objectId) {
+          createdObjectIds.set(source.ingestedFileId, objectId);
+          await db
+            .from("ingested_files")
+            .update({ image_object_id: objectId })
+            .eq("id", source.ingestedFileId);
+        }
+      } catch {
+        /* soft — tile will stay read-only until the normal image backfill runs */
+      }
+    }
+
+    return {
+      ...snapshot,
+      sources: snapshot.sources.map((source) => {
+        const row = rowsById.get(source.ingestedFileId);
+        const obj = objectsByIngestedId.get(source.ingestedFileId);
+        const createdObjectId = createdObjectIds.get(source.ingestedFileId) ?? null;
+        const snap =
+          obj?.content_snapshot && typeof obj.content_snapshot === "object"
+            ? (obj.content_snapshot as Record<string, unknown>)
+            : null;
+        const styleAnalysis =
+          snap?.style_analysis && typeof snap.style_analysis === "object"
+            ? (snap.style_analysis as {
+                palette?: { dominant?: unknown; accent?: unknown };
+                patterns?: unknown;
+              })
+            : null;
+        const dominant = Array.isArray(styleAnalysis?.palette?.dominant)
+          ? styleAnalysis.palette.dominant
+          : [];
+        const accent = Array.isArray(styleAnalysis?.palette?.accent)
+          ? styleAnalysis.palette.accent
+          : [];
+        const palette = [...dominant, ...accent]
+          .filter((v): v is string => typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v))
+          .slice(0, 4);
+        const patterns = Array.isArray(styleAnalysis?.patterns)
+          ? styleAnalysis.patterns
+              .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+              .slice(0, 4)
+          : [];
+
+        return {
+          ...source,
+          objectId: source.objectId ?? row?.image_object_id ?? obj?.id ?? createdObjectId,
+          sourceType: source.sourceType ?? row?.source_type ?? null,
+          sourceUrl: source.sourceUrl ?? row?.source_url ?? null,
+          palette: source.palette.length ? source.palette : palette,
+          patterns: source.patterns.length ? source.patterns : patterns,
+        };
+      }),
+    };
+  } catch {
+    return snapshot;
+  }
+}
+
 // ── GET ─────────────────────────────────────────────────────────────
 
 export async function GET(_req: NextRequest, ctx: Ctx) {
@@ -64,7 +216,8 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   if (!found) {
     return NextResponse.json({ snapshot: null });
   }
-  return NextResponse.json({ snapshot: found.snapshot, objectId: found.row.id });
+  const snapshot = await hydrateSourceObjects(db, spaceId, auth.user.id, found.snapshot);
+  return NextResponse.json({ snapshot, objectId: found.row.id });
 }
 
 // ── POST (regenerate) ───────────────────────────────────────────────
