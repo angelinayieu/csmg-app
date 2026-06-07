@@ -185,6 +185,28 @@ export function shapeToScanTarget(shape: TLShape): OperationTarget | null {
         typeof props.kind === "string" ? (props.kind as string) : undefined;
       return { text, shapeId: shape.id as string, sourceKind };
     }
+    case "objective-image-card": {
+      // An analyzed image IS an idea source: the AI vision description (+ the
+      // extracted entity names) become the text every op runs on, so selecting
+      // an analyzed image card opens the same Converge/Diverge + power-up
+      // surfaces as a sticky note. While the vision pass is still running (or
+      // failed) there's no description yet → text is empty → null → no scanner.
+      const desc = asString(props.description);
+      let entityText = "";
+      try {
+        const ents = JSON.parse(asString(props.entitiesJson, "[]")) as Array<{
+          name?: unknown;
+        }>;
+        entityText = ents
+          .map((e) => (typeof e?.name === "string" ? e.name : ""))
+          .filter(Boolean)
+          .join(", ");
+      } catch {
+        /* malformed entities JSON — fall back to description only */
+      }
+      const text = [desc, entityText].filter(Boolean).join(" — ");
+      return text.length >= 3 ? { text, shapeId: shape.id as string } : null;
+    }
     default:
       return null;
   }

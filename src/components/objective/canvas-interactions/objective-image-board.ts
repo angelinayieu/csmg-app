@@ -13,7 +13,7 @@ import {
 } from "tldraw";
 import type { ObjectiveImageCardShape } from "../shapes/objective-image-card-shape";
 import type { RoomCardShape } from "../shapes/room-card-shape";
-import type { ImageCardDetail } from "../board-bus";
+import type { ImageCardDetail, UpdateImageCardDetail } from "../board-bus";
 import { reserveSpace } from "./placement";
 
 const CARD_W = 240;
@@ -131,6 +131,8 @@ export function deployImageCardOnBoard(
       entitiesJson: d.entitiesJson,
       color: d.color || "#2563EB",
       objectId: d.objectId ?? "",
+      analyzing: d.analyzing ?? false,
+      analysisError: "",
     },
   });
 
@@ -145,4 +147,36 @@ export function deployImageCardOnBoard(
       { animation: { duration: 300 } },
     );
   }
+}
+
+/** Patch a deployed image card in place — find by imageFileId === key and
+ *  apply only the provided props. The canvas paste flow uses this to swap the
+ *  temp client key for the real ingested_file_id + public URL (phase 1), fill
+ *  the vision description/entities + flip `analyzing` off (phase 2), and
+ *  backfill the objectId. No-op if the card isn't on this board. */
+export function updateImageCardOnBoard(
+  editor: Editor,
+  d: UpdateImageCardDetail,
+): void {
+  const card = editor
+    .getCurrentPageShapes()
+    .find(
+      (s) =>
+        s.type === "objective-image-card" &&
+        (s as ObjectiveImageCardShape).props.imageFileId === d.key,
+    ) as ObjectiveImageCardShape | undefined;
+  if (!card) return;
+  // Drop undefined keys so we never clobber existing props with `undefined`.
+  const props: Partial<ObjectiveImageCardShape["props"]> = {};
+  for (const [k, v] of Object.entries(d.patch)) {
+    if (v !== undefined) {
+      (props as Record<string, unknown>)[k] = v;
+    }
+  }
+  if (Object.keys(props).length === 0) return;
+  editor.updateShape<ObjectiveImageCardShape>({
+    id: card.id,
+    type: "objective-image-card",
+    props,
+  });
 }

@@ -262,6 +262,11 @@ export interface ImageCardDetail {
    *  hasn't been materialized yet — the card lands without an objectId
    *  and the drag-connector / detail rail stay dormant until backfill. */
   objectId?: string;
+  /** True when the card is landing BEFORE analysis completes (canvas paste/
+   *  drop): shows a local blob preview + amber "Analyzing…" footer, then gets
+   *  patched via updateImageCard once the vision pass returns. The poller-fed
+   *  path (already-analyzed images) omits this → green footer immediately. */
+  analyzing?: boolean;
 }
 
 export const DEPLOY_IMAGE_CARD_EVENT = "objective-board:deploy-image-card";
@@ -269,6 +274,38 @@ export const DEPLOY_IMAGE_CARD_EVENT = "objective-board:deploy-image-card";
 /** Materialize an analyzed image as a card on a board mounted on this page. */
 export function deployImageCard(detail: ImageCardDetail) {
   window.dispatchEvent(new CustomEvent(DEPLOY_IMAGE_CARD_EVENT, { detail }));
+}
+
+// ── Image card in-place patch ──────────────────────────────────────
+// The canvas paste/drop flow lands an "Analyzing…" card immediately, then
+// patches it as each phase returns (phase 1 swaps the temp client key for the
+// real ingested_file_id + public URL; phase 2 fills the description/entities +
+// flips analyzing off; a final pass backfills the objectId). Keyed by the
+// card's CURRENT imageFileId so the patch finds the right shape.
+
+export interface ImageCardPatch {
+  imageFileId?: string;
+  imageUrl?: string;
+  imageName?: string;
+  description?: string;
+  entityCount?: number;
+  entitiesJson?: string;
+  objectId?: string;
+  analyzing?: boolean;
+  analysisError?: string;
+}
+
+export interface UpdateImageCardDetail {
+  /** Match the on-board card whose `imageFileId` equals this. */
+  key: string;
+  patch: ImageCardPatch;
+}
+
+export const UPDATE_IMAGE_CARD_EVENT = "objective-board:update-image-card";
+
+/** Patch an already-deployed image card in place (find by imageFileId === key). */
+export function updateImageCard(detail: UpdateImageCardDetail) {
+  window.dispatchEvent(new CustomEvent(UPDATE_IMAGE_CARD_EVENT, { detail }));
 }
 
 // ── Chatbox → objective promotion ──────────────────────────────────

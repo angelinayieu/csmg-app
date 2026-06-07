@@ -404,6 +404,10 @@ async function persistAndRespond(opts: {
     ingested_file_id: ingestedFileId,
     asset_class: assetClass,
     awaiting_vision: awaitingVision,
+    // Public Storage URL of the stored image binary (images only; null
+    // otherwise). Lets the canvas paste flow show a durable image immediately
+    // instead of holding a client-only blob URL that dies on reload.
+    image_url: imageUrl ?? null,
     // Synchronous path is always ready by the time we respond.
     awaiting_parse: false,
     parse_status: "ready",

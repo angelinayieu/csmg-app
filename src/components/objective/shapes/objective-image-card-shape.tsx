@@ -15,6 +15,8 @@ import {
   BaseBoxShapeUtil,
   HTMLContainer,
   T,
+  createShapePropsMigrationIds,
+  createShapePropsMigrationSequence,
   stopEventPropagation,
   type RecordProps,
   type TLBaseShape,
@@ -31,6 +33,8 @@ const MIN_IMG_H = 116;
 const MAX_IMG_H = 320;
 const DEFAULT_H = MIN_IMG_H + FOOTER_H;
 const GREEN = appleVibe.stage.outcomes;
+const AMBER = "#F59E0B"; // analyzing — vision pass in flight
+const RED = "#EF4444"; // analysis failed
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -63,8 +67,42 @@ export type ObjectiveImageCardShape = TLBaseShape<
      *  Once set, drag-connector links from this card + onClick opens the
      *  object-detail rail. */
     objectId: string;
+    /** True while the vision pass is in flight (card lands immediately on
+     *  paste/drop with a local blob preview, then fills in). Drives the
+     *  amber "Analyzing…" footer state. */
+    analyzing: boolean;
+    /** Non-empty when the vision pass failed — drives the red footer state +
+     *  tooltip. Cleared on success. */
+    analysisError: string;
   }
 >;
+
+// Props migration — `analyzing` + `analysisError` were added so a pasted image
+// can land on the board IMMEDIATELY (before the vision pass finishes). Without
+// this, tldraw validation rejects image cards persisted before the new props
+// existed. Defaults (`analyzing:false`, `analysisError:""`) keep every already-
+// analyzed card rendering exactly as before (green "analyzed" footer).
+const Versions = createShapePropsMigrationIds("objective-image-card", {
+  addAnalyzingState: 1,
+});
+
+export const objectiveImageCardMigrations = createShapePropsMigrationSequence({
+  sequence: [
+    {
+      id: Versions.addAnalyzingState,
+      up(props) {
+        const p = props as Record<string, unknown>;
+        if (p.analyzing === undefined) p.analyzing = false;
+        if (p.analysisError === undefined) p.analysisError = "";
+      },
+      down(props) {
+        const p = props as Record<string, unknown>;
+        delete p.analyzing;
+        delete p.analysisError;
+      },
+    },
+  ],
+});
 
 export class ObjectiveImageCardShapeUtil extends BaseBoxShapeUtil<ObjectiveImageCardShape> {
   static override type = "objective-image-card" as const;
@@ -80,7 +118,11 @@ export class ObjectiveImageCardShapeUtil extends BaseBoxShapeUtil<ObjectiveImage
     entitiesJson: T.string,
     color: T.string,
     objectId: T.string,
+    analyzing: T.boolean,
+    analysisError: T.string,
   };
+
+  static override migrations = objectiveImageCardMigrations;
 
   override canResize = () => true;
   override canEdit = () => false;
@@ -118,6 +160,8 @@ export class ObjectiveImageCardShapeUtil extends BaseBoxShapeUtil<ObjectiveImage
       entitiesJson: "[]",
       color: "#2563EB",
       objectId: "",
+      analyzing: false,
+      analysisError: "",
     };
   }
 
@@ -147,9 +191,21 @@ function ImageCardRenderer({
   util: ObjectiveImageCardShapeUtil;
 }) {
   const editor = util.editor;
-  const { expanded, imageName, imageUrl, description, w, objectId } = shape.props;
+  const { expanded, imageName, imageUrl, description, w, objectId, analyzing } =
+    shape.props;
+  const analysisError = shape.props.analysisError;
   const entities = parseEntities(shape.props.entitiesJson);
   const hasMeta = !!description || entities.length > 0;
+  // Footer status light: amber pulse while the vision pass runs, red on
+  // failure, green once analyzed. The label mirrors it so the card reads as
+  // "working" the instant it lands on paste — the missing "response" the user
+  // never used to see.
+  const statusColor = analyzing ? AMBER : analysisError ? RED : GREEN;
+  const statusLabel = analyzing
+    ? "Analyzing…"
+    : analysisError
+      ? imageName || "Image"
+      : imageName || "Image";
 
   // React-level onClick survives the chevron's stopEventPropagation (which
   // only blocks tldraw-shape-level gestures). Putting it on the outer
@@ -210,7 +266,7 @@ function ImageCardRenderer({
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
     >
-      <style>{`@keyframes objImgPulse{0%,100%{box-shadow:0 0 0 3px ${GREEN}22,0 0 8px 1px ${GREEN}aa}50%{box-shadow:0 0 0 4px ${GREEN}14,0 0 13px 2px ${GREEN}}}`}</style>
+      <style>{`@keyframes objImgPulse{0%,100%{box-shadow:0 0 0 3px ${statusColor}22,0 0 8px 1px ${statusColor}aa}50%{box-shadow:0 0 0 4px ${statusColor}14,0 0 13px 2px ${statusColor}}}`}</style>
       <div
         onClick={openDetail}
         title={objectId ? "Open image details" : ""}
@@ -266,27 +322,32 @@ function ImageCardRenderer({
           }}
         >
           <span
-            aria-label="Analyzed"
+            aria-label={analyzing ? "Analyzing" : analysisError ? "Analysis failed" : "Analyzed"}
             style={{
               width: 8,
               height: 8,
               flexShrink: 0,
               borderRadius: 999,
-              background: GREEN,
-              animation: "objImgPulse 2.4s ease-in-out infinite",
+              background: statusColor,
+              // Error state holds steady (red); analyzing + analyzed pulse.
+              animation: analysisError
+                ? "none"
+                : "objImgPulse 2.4s ease-in-out infinite",
             }}
           />
           <div
             className="truncate"
+            title={analysisError || undefined}
             style={{
               minWidth: 0,
               flex: 1,
               fontSize: 12,
               fontWeight: 600,
-              color: appleVibe.text.primary,
+              color: analyzing ? appleVibe.text.secondary : appleVibe.text.primary,
+              fontStyle: analyzing ? "italic" : "normal",
             }}
           >
-            {imageName || "Image"}
+            {statusLabel}
           </div>
           {hasMeta && (
             <button

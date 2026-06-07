@@ -1170,6 +1170,8 @@ declare module "@tldraw/tlschema" {
       entitiesJson: string;
       color: string;
       objectId: string;
+      analyzing: boolean;
+      analysisError: string;
     };
     // Whiteboard-native intake — the chatbox AS a card (live textarea). On
     // submit it transforms in place into an objective-card.
