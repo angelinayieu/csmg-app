@@ -55,6 +55,25 @@ export interface OperationResultItem {
   consumes?: string[];
   /** Tokens this step emits — pair to `consumes` (see above). */
   produces?: string[];
+  /** Stable slug for the item — opaque to the deploy path EXCEPT as the
+   *  resolution key for `parents` (which references slugs of other items
+   *  in the same result set). Set by ops that emit causal structure
+   *  (unpack); omitted by legacy flat ops. */
+  slug?: string;
+  /** Slugs of items in the SAME result set this row causally derives from.
+   *  The deploy path reads these to draw flow-connectors between cards in
+   *  the same cluster — turning the flat grid into a real causal map.
+   *  Empty for ops without inter-row structure. */
+  parents?: string[];
+  /** Library_objects.id when the route pre-persisted this item (unpack
+   *  does this so the cluster's edges land in `object_links` server-side
+   *  and the on-board card opens its detail drawer on click). Omitted by
+   *  legacy ops that don't persist before deploy. */
+  objectId?: string;
+  /** Optional grouping label so the deploy path can paint per-subsystem
+   *  underlays around causally-related rows (e.g. variations cluster under
+   *  the principle they were spawned from). */
+  subsystem?: string;
 }
 
 /** Per-run knobs the scanner / top settings bar thread into the analysis routes.
@@ -448,7 +467,15 @@ function normalizeAugment(
 }
 
 /** Dispatch: run any wired operation and return normalized result rows.
- *  augment-backed ops → /api/synergy/augment; the rest → /api/canvas/idea-op.
+ *  - `decompose` ("Unpack") with a spaceId routes to the new context-aware
+ *    /api/objective/[spaceId]/unpack — it loads micros + intake factors +
+ *    parent links + sharpened objective server-side, so variations are
+ *    optimized for the card's actual purpose. The structured output
+ *    carries causal edges (variation→principle) so the deploy path can
+ *    draw real connectors between the cards. Falls back to the legacy
+ *    augment path when there's no spaceId (raw text, no project context).
+ *  - All other augment-backed ops → /api/synergy/augment (legacy flat path).
+ *  - Native ops → /api/canvas/idea-op or their explicit endpoint.
  *  Returns [] for a genuine empty result; throws OperationTransportError when
  *  the request failed (the executor catches it → surfaces a "couldn't run"
  *  state rather than a silent "Empty"). */
@@ -457,9 +484,82 @@ export async function runOperation(
   target: OperationTarget,
   opts: OperationRunOptions = {},
 ): Promise<OperationResultItem[]> {
+  if (op.id === "decompose" && opts.spaceId) {
+    return runUnpack(target, opts);
+  }
   if (op.augmentMode) return runAugmentOperation(op, target, opts);
   if (op.wired) return runIdeaOp(op, target, opts);
   return [];
+}
+
+/** Unpack runner — calls /api/objective/[spaceId]/unpack and flattens its
+ *  {cards, links} into OperationResultItem[]. Links become `parents` on
+ *  each variation so the deploy path can wire flow-connectors between
+ *  sibling cards in the cluster. Principles land first (so variations can
+ *  reference them by slug) and variations get their `subsystem` set to
+ *  their first principle's slug, so each principle visually groups its
+ *  children in the deployed swimlane. */
+async function runUnpack(
+  target: OperationTarget,
+  opts: OperationRunOptions,
+): Promise<OperationResultItem[]> {
+  if (!target.text.trim() || !opts.spaceId) return [];
+  const res = await postOp(
+    `/api/objective/${opts.spaceId}/unpack`,
+    JSON.stringify({
+      text: target.text.slice(0, 6000),
+      cardId: target.shapeId,
+      sourceKind: target.sourceKind ?? "",
+      temperature: opts.temperature,
+    }),
+  );
+  if (!res.ok) throw await transportErrorFor(res);
+  type UnpackCard = {
+    slug: string;
+    objectId: string | null;
+    kind: "first_principle" | "variation";
+    title: string;
+    body: string;
+    subsystem: string;
+    from_principles?: string[];
+  };
+  type UnpackLink = { fromSlug: string; toSlug: string; relation: string };
+  let json: { cards?: UnpackCard[]; links?: UnpackLink[] };
+  try {
+    json = (await res.json()) as { cards?: UnpackCard[]; links?: UnpackLink[] };
+  } catch {
+    throw new OperationTransportError("server", "malformed response");
+  }
+  const cards = json.cards ?? [];
+  const links = json.links ?? [];
+  // Build a fromSlug → parents[] map for variations. Principles have no
+  // parents inside the cluster (their parent is the source card, drawn by
+  // the existing frameForkedGroup tether, not by an inter-card connector).
+  const parentsBySlug = new Map<string, string[]>();
+  for (const l of links) {
+    if (l.relation !== "derived_from") continue;
+    const arr = parentsBySlug.get(l.fromSlug) ?? [];
+    arr.push(l.toSlug);
+    parentsBySlug.set(l.fromSlug, arr);
+  }
+  return cards
+    .map((c): OperationResultItem | null => {
+      if (!c.title) return null;
+      return {
+        title: c.title,
+        // Honest label: shown directly on the card chrome (the user asked
+        // for this — no more "Lab" eyebrow). The full rationale follows
+        // on the next line as the body.
+        subtitle: c.body,
+        type: c.kind, // "first_principle" or "variation"
+        slug: c.slug,
+        parents: parentsBySlug.get(c.slug) ?? [],
+        objectId: c.objectId ?? undefined,
+        subsystem: c.subsystem,
+      };
+    })
+    .filter((c): c is OperationResultItem => !!c)
+    .slice(0, MAX_RESULT_ITEMS);
 }
 
 /** Run a non-augment text op (diverge / converge / layers / make_technical) via

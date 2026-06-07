@@ -27,6 +27,7 @@ import {
 import { saveCardsToLibrary, type SaveableCard } from "./save-to-library";
 import { reserveSpace } from "./placement";
 import { frameForkedGroup } from "./group-frame";
+import { deployFlowConnector } from "./flow-connector-board";
 
 const RESULT_W = 216;
 const RESULT_H = 132;
@@ -174,10 +175,17 @@ export async function executeCardOperation(
       // make_technical + data_flow emit a runtime FLOW (1. step → 2. step …,
       // with consumes/produces tokens); paint those as "mechanism" cards so the
       // group reads as a mechanism chain instead of a pile of generic "Lab"
-      // nodes. Every other non-oc result stays "lab".
+      // nodes. Unpack emits typed principle/variation rows; render them with
+      // the matching kind so the eyebrow chip reads as the type directly
+      // (per the user's "labels should be 'First principle' / 'Variation'").
+      // Every other non-oc result stays "lab".
       const kind: ArtifactCardShape["props"]["kind"] = MECHANISM_OPS.has(opId)
         ? "mechanism"
-        : "lab";
+        : item.type === "first_principle"
+          ? "first_principle"
+          : item.type === "variation"
+            ? "variation"
+            : "lab";
       // Stash structured tokens on shape meta (mechanism steps only) so the
       // in-memory card carries them even before the async library save lands;
       // the library save below mirrors them into content_snapshot. Non-empty
@@ -223,6 +231,30 @@ export async function executeCardOperation(
     accent: RESULT_COLOR,
   });
 
+  // ── Inter-card causal connectors ──
+  // Structured ops (today: unpack) emit `parents` on each row — the slug of
+  // another row in the SAME cluster it derives from. Draw a real flow-
+  // connector for each, so the user sees the causal map (variation →
+  // principle) instead of just a flat grid. Source: their request:
+  // "we must ensure we can see … the connecting nodes that we have rn for
+  // the outforking of cards … should always be there for things the ai
+  // generates that has interconnection + relations."
+  const slugToShapeId = new Map<string, TLShapeId>();
+  for (const c of created) {
+    if (c.item.slug) slugToShapeId.set(c.item.slug, c.shapeId);
+  }
+  for (const c of created) {
+    const parents = c.item.parents ?? [];
+    if (!parents.length) continue;
+    for (const parentSlug of parents) {
+      const parentShape = slugToShapeId.get(parentSlug);
+      if (!parentShape) continue;
+      // from = the parent (principle), to = the child (variation) — so the
+      // green-out → pink-in port flow reads "causes → derived item".
+      deployFlowConnector(editor, parentShape, c.shapeId, RESULT_COLOR);
+    }
+  }
+
   // Reveal where the results landed (the cluster may have been relocated to
   // clear space) without yanking the zoom level.
   editor.centerOnPoint(
@@ -230,10 +262,41 @@ export async function executeCardOperation(
     { animation: { duration: 300 } },
   );
 
-  // Persist each result to library_objects, then backfill the objectId onto its
-  // shape so a single click opens the object detail drawer (no dead ends). The
-  // cards already render above; this just makes them first-class. Soft-fails.
-  if (opts.spaceId) {
+  // ── Library persistence + objectId backfill ──
+  // Two paths:
+  //   A. Items already carry an objectId (the route pre-persisted — unpack
+  //      does this so its principle→source edges + variation→principle edges
+  //      land in object_links server-side). Skip saveCardsToLibrary AND the
+  //      source-link write (the route already did both); just backfill the
+  //      shape so single-click opens its drawer.
+  //   B. Items don't carry an objectId (legacy ops). Save to library via the
+  //      Connect-style endpoint, then write `derived_from` source edges as
+  //      before.
+  const prePersisted = created.every(({ item }) => !!item.objectId);
+  if (prePersisted && created.length > 0) {
+    created.forEach(({ shapeId, isOc, item }) => {
+      const objectId = item.objectId;
+      if (!objectId) return;
+      try {
+        if (isOc) {
+          editor.updateShape<OcCardShape>({
+            id: shapeId,
+            type: "oc-card",
+            props: { objectId },
+          });
+        } else {
+          const s = editor.getShape(shapeId);
+          editor.updateShape({
+            id: shapeId,
+            type: "artifact-card",
+            meta: { ...(s?.meta ?? {}), objectId },
+          });
+        }
+      } catch {
+        /* shape removed before backfill */
+      }
+    });
+  } else if (opts.spaceId) {
     const spaceId = opts.spaceId;
     void (async () => {
       const { objectIds } = await saveCardsToLibrary(

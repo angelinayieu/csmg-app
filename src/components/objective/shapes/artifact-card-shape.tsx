@@ -32,7 +32,24 @@ export type ArtifactCardShape = TLBaseShape<
     h: number;
     /** `mechanism` = a runtime-flow step (make_technical / data_flow) — reads
      *  as "Mechanism Step", not the catch-all "Lab". */
-    kind: "pain" | "feature" | "outcome" | "lab" | "mechanism";
+    kind:
+      | "pain"
+      | "feature"
+      | "outcome"
+      | "lab"
+      | "mechanism"
+      // Three legacy kinds already present in src/types/tldraw-shapes.d.ts
+      // (factor / decision / question) — keep the type unions in sync even
+      // though the literalEnum below doesn't accept them at runtime yet.
+      | "factor"
+      | "decision"
+      | "question"
+      // Unpack output (UNPACK_PLAN Phase 1) — the type label IS the eyebrow
+      // chip, per the user's "labels should be 'First principle' / 'Variation'
+      // directly, not 'Lab'". The kind drives both the eyebrow string and the
+      // accent color, so the cluster reads as a typed map at a glance.
+      | "first_principle"
+      | "variation";
     title: string;
     subtitle: string;
     color: string;
@@ -49,6 +66,11 @@ const KIND_LABEL: Record<ArtifactCardShape["props"]["kind"], string> = {
   outcome: "Outcome",
   lab: "Lab",
   mechanism: "Mechanism Step",
+  factor: "Factor",
+  decision: "Decision",
+  question: "Question",
+  first_principle: "First principle",
+  variation: "Variation",
 };
 
 export class ArtifactCardShapeUtil extends BaseBoxShapeUtil<ArtifactCardShape> {
@@ -56,7 +78,15 @@ export class ArtifactCardShapeUtil extends BaseBoxShapeUtil<ArtifactCardShape> {
   static override props: RecordProps<ArtifactCardShape> = {
     w: T.number,
     h: T.number,
-    kind: T.literalEnum("pain", "feature", "outcome", "lab", "mechanism"),
+    kind: T.literalEnum(
+      "pain",
+      "feature",
+      "outcome",
+      "lab",
+      "mechanism",
+      "first_principle",
+      "variation",
+    ),
     title: T.string,
     subtitle: T.string,
     color: T.string,

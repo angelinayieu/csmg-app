@@ -954,7 +954,12 @@ declare module "@tldraw/tlschema" {
         | "mechanism"
         | "factor"
         | "decision"
-        | "question";
+        | "question"
+        // Unpack output (UNPACK_PLAN Phase 1) — surfaces the type directly
+        // on the eyebrow chip ("First principle" / "Variation") so the
+        // user sees the kind without reading the body.
+        | "first_principle"
+        | "variation";
       title: string;
       subtitle: string;
       color: string;

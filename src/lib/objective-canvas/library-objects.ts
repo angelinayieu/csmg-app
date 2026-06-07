@@ -25,6 +25,12 @@ export type LibraryObjectType =
   | "insight"
   | "ui_idea"
   | "recommendation"
+  // First-principle reasoning artifacts (UNPACK_PLAN Phase 1) — an
+  // irreducible truth derived from a source card under a goal frame
+  // ("simplify" / "low-friction" / …). Each `variation` row carries a
+  // `derived_from` link back to the principle(s) it was spawned from,
+  // so the cluster reads as a causal map on the board, not a flat list.
+  | "first_principle"
   | "variation"
   | "variable"
   | "brainstorm_cluster"
