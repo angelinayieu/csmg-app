@@ -128,9 +128,15 @@ export class PrototypeCardShapeUtil extends BaseBoxShapeUtil<PrototypeCardShape>
 // to the target screen — succeeds for hash-routed, data-routed, and
 // text-labeled-button apps without the prototype knowing about us.
 
-const MINI_W = 280; // each mini-iframe column width when expanded
+const MINI_W = 280; // each mini-iframe column COLUMN width when expanded
 const MINI_GAP = 12;
 const SIDE_PAD = 12;
+// The logical width prototypes are designed around (mobile-first; the spec's
+// ui_plan "screens" + the warm app shells top out around max-width:540 but read
+// best at a phone width). Mini-iframes RENDER at this width and are CSS-scaled
+// down to the column, so the real layout shows instead of a cramped 280px
+// sliver that only reveals the gradient hero.
+const SCREEN_DESIGN_W = 430;
 
 /** Splice a bootstrap nav script just before </body>. Pure string op; no
  *  re-sanitize needed (the sanitizer ran server-side on the original; the
@@ -144,18 +150,24 @@ const SIDE_PAD = 12;
  *        common "tab bar" UI patterns the model spits out
  *  All steps soft-fail; a prototype that can't find the screen just shows
  *  its default route. */
-function injectScreenNavigator(html: string, screenName: string): string {
+function injectScreenNavigator(
+  html: string,
+  screenName: string,
+  /** 0..1 — where to scroll a SINGLE-PAGE prototype that has no navigable
+   *  screens. Each expanded column passes a successive fraction so the rail
+   *  reveals the whole page top→bottom instead of N identical heroes. */
+  scrollFraction = 0,
+): string {
   // JSON-encode to safely embed inside a <script> string literal.
   const target = JSON.stringify(screenName);
+  const frac = Number.isFinite(scrollFraction)
+    ? Math.max(0, Math.min(1, scrollFraction))
+    : 0;
   const boot = `<script>(function(){
+  // Returns true if it managed to navigate to a real, named screen.
   function go(){
     var name=${target};
-    try{ if(typeof window.__navigateTo==="function"){ window.__navigateTo(name); return; } }catch(e){}
-    try{
-      var slugA=name.toLowerCase().replace(/\\s+/g,"-").replace(/[^a-z0-9-]/g,"");
-      var slugB=name.toLowerCase().replace(/\\s+/g,"");
-      location.hash=slugA;
-    }catch(e){}
+    try{ if(typeof window.__navigateTo==="function"){ window.__navigateTo(name); return true; } }catch(e){}
     try{
       var sel=[
         '[data-screen='+JSON.stringify(name)+']',
@@ -165,7 +177,7 @@ function injectScreenNavigator(html: string, screenName: string): string {
       ];
       for(var i=0;i<sel.length;i++){
         var el=document.querySelector(sel[i]);
-        if(el && typeof el.click==="function"){ el.click(); return; }
+        if(el && typeof el.click==="function"){ el.click(); return true; }
       }
     }catch(e){}
     try{
@@ -174,15 +186,28 @@ function injectScreenNavigator(html: string, screenName: string): string {
       for(var j=0;j<nodes.length;j++){
         var t=(nodes[j].textContent||"").trim().toLowerCase();
         if(t===want || t.indexOf(want)===0){
-          try{ nodes[j].click(); return; }catch(e){}
+          try{ nodes[j].click(); return true; }catch(e){}
         }
       }
     }catch(e){}
+    return false;
   }
+  // Single-page prototypes (the common case — no hash/data routes, no nav
+  // hook) have nothing to navigate to. Reveal a successive vertical band of
+  // the page so each column shows DIFFERENT content instead of the same hero.
+  function band(){
+    try{
+      var doc=document.documentElement, b=document.body;
+      var sh=Math.max(doc.scrollHeight||0, b?b.scrollHeight:0);
+      var vh=window.innerHeight||0;
+      if(sh>vh+8){ window.scrollTo(0, Math.round(${frac}*(sh-vh))); }
+    }catch(e){}
+  }
+  function run(){ if(!go() && ${frac}>0){ band(); } }
   if(document.readyState==="complete"||document.readyState==="interactive"){
-    setTimeout(go,40);
+    setTimeout(run,60);
   } else {
-    window.addEventListener("DOMContentLoaded", function(){ setTimeout(go,40); });
+    window.addEventListener("DOMContentLoaded", function(){ setTimeout(run,60); });
   }
 })();</script>`;
   // Splice before </body> if present, else append.
@@ -389,47 +414,70 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
                 boxSizing: "border-box",
               }}
             >
-              {screens.slice(0, 5).map((s, i) => (
-                <div
-                  key={`${i}-${s.name}`}
-                  style={{
-                    flex: `0 0 ${MINI_W}px`,
-                    height: "100%",
-                    display: "flex",
-                    flexDirection: "column",
-                    background: "#fff",
-                    borderRadius: 12,
-                    border: `1px solid ${appleVibe.stroke.soft}`,
-                    overflow: "hidden",
-                    boxShadow: "0 1px 0 rgba(255,255,255,0.6) inset, 0 8px 24px -18px rgba(11,18,40,0.18)",
-                  }}
-                >
+              {screens.slice(0, 5).map((s, i, arr) => {
+                // Render the prototype at its mobile DESIGN width and scale the
+                // whole frame down to the column — so the real layout shows,
+                // not a cramped sliver. Pure CSS (no cross-origin measuring of
+                // the sandboxed iframe): width = DESIGN_W, height = 100/scale%
+                // → after scale() the visual box is exactly column-sized.
+                const scale = MINI_W / SCREEN_DESIGN_W;
+                const frac = arr.length > 1 ? i / (arr.length - 1) : 0;
+                return (
                   <div
+                    key={`${i}-${s.name}`}
                     style={{
-                      padding: "6px 10px",
-                      fontSize: 10.5,
-                      fontWeight: 700,
-                      letterSpacing: 0.2,
-                      textTransform: "uppercase",
-                      color: appleVibe.text.tertiary,
-                      borderBottom: `1px solid ${appleVibe.stroke.hairline}`,
+                      flex: `0 0 ${MINI_W}px`,
+                      height: "100%",
+                      display: "flex",
+                      flexDirection: "column",
                       background: "#fff",
-                      whiteSpace: "nowrap",
+                      borderRadius: 12,
+                      border: `1px solid ${appleVibe.stroke.soft}`,
                       overflow: "hidden",
-                      textOverflow: "ellipsis",
+                      boxShadow: "0 1px 0 rgba(255,255,255,0.6) inset, 0 8px 24px -18px rgba(11,18,40,0.18)",
                     }}
-                    title={s.purpose || s.name}
                   >
-                    {s.name}
+                    <div
+                      style={{
+                        padding: "6px 10px",
+                        fontSize: 10.5,
+                        fontWeight: 700,
+                        letterSpacing: 0.2,
+                        textTransform: "uppercase",
+                        color: appleVibe.text.tertiary,
+                        borderBottom: `1px solid ${appleVibe.stroke.hairline}`,
+                        background: "#fff",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        flexShrink: 0,
+                      }}
+                      title={s.purpose || s.name}
+                    >
+                      {s.name}
+                    </div>
+                    <div style={{ position: "relative", flex: 1, minHeight: 0, overflow: "hidden", background: "#fff" }}>
+                      <iframe
+                        title={`${title} – ${s.name}`}
+                        srcDoc={injectScreenNavigator(html, s.name, frac)}
+                        sandbox="allow-scripts allow-forms allow-modals allow-popups"
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: SCREEN_DESIGN_W,
+                          height: `${100 / scale}%`,
+                          border: "none",
+                          display: "block",
+                          background: "#fff",
+                          transform: `scale(${scale})`,
+                          transformOrigin: "top left",
+                        }}
+                      />
+                    </div>
                   </div>
-                  <iframe
-                    title={`${title} – ${s.name}`}
-                    srcDoc={injectScreenNavigator(html, s.name)}
-                    sandbox="allow-scripts allow-forms allow-modals allow-popups"
-                    style={{ width: "100%", flex: 1, border: "none", display: "block", background: "#fff" }}
-                  />
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : status === "ready" && html ? (
             <iframe
