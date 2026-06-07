@@ -88,6 +88,19 @@ export class ResolvePillShapeUtil extends BaseBoxShapeUtil<ResolvePillShape> {
     return { w: PILL_W, h: PILL_H, spaceId: "", sourceIds: "", color: SHARPEN_COLOR };
   }
 
+  /** Flip `meta.userMoved = true` when the user finishes dragging the pill,
+   *  so `ensureResolvePill` stops auto-recentering it (see
+   *  prompt-sharpening-board.ts). Programmatic updates from the board reactor
+   *  don't go through this hook — only real pointer drags do. */
+  override onTranslateEnd = (_initial: ResolvePillShape, current: ResolvePillShape) => {
+    if (current.meta?.userMoved === true) return;
+    this.editor.updateShape<ResolvePillShape>({
+      id: current.id,
+      type: "resolve-pill",
+      meta: { ...(current.meta ?? {}), userMoved: true },
+    });
+  };
+
   component(shape: ResolvePillShape) {
     return <ResolvePillRenderer shape={shape} util={this} />;
   }

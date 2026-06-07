@@ -407,28 +407,65 @@ export function ensureResolvePill(editor: Editor): void {
   // priority once it exists — each id wires a connector down into the pill.
   const sourceIds = cards.map((c) => c.id).join(",");
 
+  // Geometric midpoint between the active fork branches (heatmap alone, or
+  // heatmap+priority). Same math used for both the initial create and the
+  // late re-centering when the priority map joins.
+  const midX = bounds.reduce((s, b) => s + b.midX, 0) / bounds.length;
+  const top = Math.max(...bounds.map((b) => b.maxY)) + 72;
+
   const existing = shapes.find((s) => s.type === "resolve-pill") as
     | ResolvePillShape
     | undefined;
   if (existing) {
-    // Already out (likely created off the heatmap alone) — when the priority
-    // branch lands, widen its sources so the second connector draws and it
-    // resolves off the richer salience. Position left as-is (respect any drag).
+    // The pill is spawned the moment the heatmap exists (so the user sees the
+    // resolve action), then the priority map lands ~seconds later. On THAT
+    // join the pill needs to slide to the new merged midpoint — otherwise it
+    // stays pinned under the heatmap (off to the left, ugly). We respect a
+    // user drag via `meta.userMoved`, set by the board on the first drag.
+    const oldCount = existing.props.sourceIds.split(",").filter(Boolean).length;
+    const newCount = cards.length;
+    const userMoved = existing.meta?.userMoved === true;
+    const sourcesGrew = newCount > oldCount;
+    // Legacy pills predating the userMoved flag have meta.userMoved === undefined.
+    // Re-center those ONCE (then stamp the flag so a real drag can take over).
+    const isLegacy = existing.meta?.userMoved === undefined;
+    const shouldRecenter = (sourcesGrew || isLegacy) && !userMoved;
+
+    let recentered: { x: number; y: number } | null = null;
+    if (shouldRecenter) {
+      recentered = reserveSpace(
+        editor,
+        { w: RESOLVE_PILL_W, h: RESOLVE_PILL_H },
+        {
+          anchorMidX: midX,
+          preferredTop: top,
+          gap: 24,
+          allowPush: true, // muscle through the merge column if needed
+          ignore: new Set([existing.id]), // don't treat self as an obstacle
+        },
+      );
+    }
+
     if (
       existing.props.sourceIds !== sourceIds ||
-      existing.props.spaceId !== spaceId
+      existing.props.spaceId !== spaceId ||
+      recentered ||
+      isLegacy
     ) {
       editor.updateShape<ResolvePillShape>({
         id: existing.id,
         type: "resolve-pill",
+        ...(recentered ? { x: recentered.x, y: recentered.y } : {}),
         props: { sourceIds, spaceId },
+        // Stamp the flag so the next ensure() round leaves the pill alone
+        // (unless sources grow again). Real drags flip this to true via
+        // ResolvePillShapeUtil.onTranslateEnd.
+        meta: { ...(existing.meta ?? {}), userMoved: false },
       });
     }
     return;
   }
 
-  const midX = bounds.reduce((s, b) => s + b.midX, 0) / bounds.length;
-  const top = Math.max(...bounds.map((b) => b.maxY)) + 72;
   const spot = reserveSpace(
     editor,
     { w: RESOLVE_PILL_W, h: RESOLVE_PILL_H },
@@ -442,5 +479,8 @@ export function ensureResolvePill(editor: Editor): void {
     x: spot.x,
     y: spot.y,
     props: { w: RESOLVE_PILL_W, h: RESOLVE_PILL_H, spaceId, sourceIds, color },
+    // Auto-placed marker. The board's drag handler flips `userMoved=true` on
+    // first user drag; until then re-center is allowed when sources grow.
+    meta: { userMoved: false },
   });
 }
