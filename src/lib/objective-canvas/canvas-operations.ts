@@ -367,7 +367,22 @@ async function transportErrorFor(res: Response): Promise<OperationTransportError
   }
   if (res.status === 401 || res.status === 403)
     return new OperationTransportError("auth");
-  return new OperationTransportError("server", `HTTP ${res.status}`);
+  // Surface the server's `error` body so the sidebar / progress chip can
+  // show what actually went wrong ("Failed to parse LLM JSON", schema
+  // validation messages, etc.) instead of a bare HTTP code.
+  let serverMessage = "";
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    if (typeof body.error === "string" && body.error.trim()) {
+      serverMessage = body.error.trim();
+    }
+  } catch {
+    /* no/empty body */
+  }
+  return new OperationTransportError(
+    "server",
+    serverMessage ? `${serverMessage} (HTTP ${res.status})` : `HTTP ${res.status}`,
+  );
 }
 
 const BY_ID = new Map(CANVAS_OPERATIONS.map((o) => [o.id, o]));

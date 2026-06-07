@@ -31,7 +31,7 @@
 
 import { NextResponse } from "next/server";
 import { safeAuth, safeJsonParse, sanitizeErrorMessage } from "@/lib/api-helpers";
-import { llmJSON, BEST_CLAUDE_MODEL, detectCreditError } from "@/lib/llm";
+import { llmJSON, BEST_TUNABLE_CLAUDE_MODEL, detectCreditError } from "@/lib/llm";
 import { withCharge, creditErrorResponse } from "@/lib/credits/with-charge";
 import { buildSpaceContext } from "@/lib/objective-canvas/build-space-context";
 import { loadOptimizationFactors } from "@/lib/objective-canvas/load-optimization-factors";
@@ -177,9 +177,8 @@ const UNPACK_SCHEMA = {
             from_principles: {
               type: "array",
               description:
-                "Principle slugs (from first_principles above) this variation derives from. MUST be non-empty.",
+                "Principle slugs (from first_principles above) this variation derives from. MUST contain at least one slug — variations without a causal parent are dropped server-side.",
               items: { type: "string" },
-              minItems: 1,
             },
             optimizes_for: {
               type: "array",
@@ -328,6 +327,24 @@ function renderPriorTurns(
 }
 
 export async function POST(request: Request, ctx: RouteContext) {
+  // Top-level guard so an exception anywhere in the route (a misnamed
+  // helper, a schema validation mismatch, a Supabase column error, …) is
+  // surfaced as a usable error message in the response body instead of a
+  // bare 500 with "(unrecognized error)". The client's
+  // `transportErrorFor` ferries the body through so the sidebar can
+  // render WHY it failed.
+  try {
+    return await unpackImpl(request, ctx);
+  } catch (err) {
+    console.error("[/api/objective/[spaceId]/unpack] uncaught:", err);
+    return NextResponse.json(
+      { error: sanitizeErrorMessage(err) || "unpack failed" },
+      { status: 500 },
+    );
+  }
+}
+
+async function unpackImpl(request: Request, ctx: RouteContext) {
   const { spaceId } = await ctx.params;
   const { supabase, user, error: authError } = await safeAuth();
   if (authError) return authError;
@@ -449,7 +466,13 @@ export async function POST(request: Request, ctx: RouteContext) {
             priorTurnsBlock,
           }),
           provider: "anthropic",
-          model: BEST_CLAUDE_MODEL,
+          // Every working responseSchema route on the codebase uses
+          // BEST_TUNABLE_CLAUDE_MODEL (opus-4-1) — opus-4-7 isn't reliably
+          // wired for forced tool-calls on the current SDK. Memory:
+          // reference_claude_model_constraints — opus-4-8 was rolled back
+          // for hard-failing on board cards; opus-4-1 stays the
+          // structured-output workhorse.
+          model: BEST_TUNABLE_CLAUDE_MODEL,
           maxTokens: 3072,
           temperature,
           responseSchema: UNPACK_SCHEMA as unknown as {
