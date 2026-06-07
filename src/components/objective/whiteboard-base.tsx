@@ -94,7 +94,11 @@ import {
 } from "@/lib/objective-canvas/specforge/types";
 import {
   runForgePipeline,
+  TECH_SPEC_READY_EVENT,
+  TECH_SPEC_FAILED_EVENT,
   type InspirationImage,
+  type TechSpecReadyDetail,
+  type TechSpecFailedDetail,
 } from "./canvas-interactions/forge-pipeline";
 import { BoardSelectionToolbar } from "./board-selection-toolbar";
 import {
@@ -175,6 +179,7 @@ import {
   Globe,
   AlertTriangle,
   ArrowRight,
+  FileText,
 } from "lucide-react";
 import { BoardHint } from "./board-hint";
 import { FavoritesSidebar } from "./favorites-sidebar";
@@ -234,7 +239,10 @@ import {
 } from "./canvas-interactions/flow-connector-board";
 import { ImageWireOverlay } from "./canvas-interactions/image-wire-overlay";
 import { SpecForgeConnectorsOverlay } from "./canvas-interactions/specforge-connectors";
-import { SpecForgeSourceLaneConnector } from "./canvas-interactions/specforge-source-connector";
+import {
+  SpecForgeSourceLaneConnector,
+  SpecForgeLaneTargetConnector,
+} from "./canvas-interactions/specforge-source-connector";
 import { CommentStrandsOverlay } from "./canvas-interactions/comment-strands";
 import { GroupForkConnectorsOverlay } from "./canvas-interactions/group-fork-connectors";
 import {
@@ -3155,6 +3163,20 @@ function BoardOverlay({
   // SpecForge → Tech Spec stage (auto-runs after the forge unfurl completes).
   const [techSpecBusy, setTechSpecBusy] = useState(false);
   const [techSpecStage, setTechSpecStage] = useState("Writing the tech spec…");
+  // Click-to-open notification shown when the tech-spec stage lands a card on
+  // the board. Replaces the previous behavior of auto-popping the full-screen
+  // document — the user opens it on their own terms. Either kind carries the
+  // board shape id so clicks can focus the card OR open the document.
+  type TechSpecNotice =
+    | {
+        kind: "ready";
+        shapeId: string;
+        title: string;
+        specJson: string;
+        markdown: string;
+      }
+    | { kind: "error"; shapeId: string; title: string; reason: string };
+  const [techSpecNotice, setTechSpecNotice] = useState<TechSpecNotice | null>(null);
   // "Custom" synthesizing op (the user's own instruction over the selection).
   const [customBusy, setCustomBusy] = useState(false);
   // Which forge verb is running, so only the clicked toolbar button spins:
@@ -3220,16 +3242,40 @@ function BoardOverlay({
         setForgeSourceShapeId(null);
         return;
       }
-      setForging(null);
-      setForgeSourceShapeId(null);
+      // ── Stage hand-off ──
+      // Previously: setForging(null) here → OperationLane unmounted → tech
+      // spec quietly generated behind a centered chip. The lane (forked off
+      // the source card) is the one continuous progress indicator now, so
+      // we KEEP `forging` set and flip its phase to "tech-spec" instead of
+      // nulling it. The source-card → lane connector stays painted; only
+      // the lane's tail row swaps from per-engine status into a "Writing
+      // the tech spec…" pending row.
       if (!forge?.createdAny) {
+        // Chain produced nothing — clean shutdown, no tech-spec stage.
+        setForging(null);
+        setForgeSourceShapeId(null);
         setForgeKind(null);
         return;
       }
+      setForging((prev) =>
+        prev
+          ? {
+              ...prev,
+              phase: "tech-spec",
+              techSpec: {
+                stage: opts?.autoPrototype
+                  ? "Writing the spec → prototype…"
+                  : "Writing the tech spec…",
+              },
+            }
+          : prev,
+      );
 
-      // 2) Auto-generate the tech-spec page (incl. UI plan), ingesting any
-      //    inspiration images. With autoPrototype, the pipeline skips the spec
-      //    page and jumps straight to building the prototype off the spec.
+      // 2) Generate the tech-spec doc, ingesting any inspiration images.
+      //    runForgePipeline writes the artifact + fires TECH_SPEC_READY_EVENT
+      //    (or _FAILED_EVENT) — it does NOT auto-open the document anymore.
+      //    Threading both `label` and `cardId` through onProgress lets the
+      //    lane paint the connector to the card the instant it lands.
       setTechSpecBusy(true);
       setTechSpecStage(
         opts?.autoPrototype
@@ -3240,7 +3286,22 @@ function BoardOverlay({
         await runForgePipeline(editor, spaceId, forge, {
           anchorShapeId: target.shapeId,
           inspirationImages: collectInspirationImages(editor),
-          onProgress: setTechSpecStage,
+          onProgress: ({ label, cardId }) => {
+            if (label) setTechSpecStage(label);
+            setForging((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    phase: "tech-spec",
+                    techSpec: {
+                      ...(prev.techSpec ?? {}),
+                      ...(label ? { stage: label } : {}),
+                      ...(cardId ? { shapeId: cardId } : {}),
+                    },
+                  }
+                : prev,
+            );
+          },
           autoPrototype: opts?.autoPrototype,
         });
       } catch (err) {
@@ -3248,9 +3309,91 @@ function BoardOverlay({
       } finally {
         setTechSpecBusy(false);
         setForgeKind(null);
+        // The lane stays parked in "tech-spec-ready" (or in the error row)
+        // — the TECH_SPEC_READY / FAILED listeners below promote `forging`
+        // into that terminal phase and the lane's footer renders a
+        // click-to-open / click-to-inspect row. The auto-dismiss timer
+        // there also nulls `forging` after the user clicks or after a
+        // grace period, removing the source-card connector with it.
       }
     })();
   }
+
+  // Tech-spec arrival → flip the lane into the terminal "ready" phase with
+  // everything the row needs to fire OPEN_TECH_SPEC_EVENT on click, AND
+  // queue a board-level notification toast (the "popup" we no longer want
+  // to auto-open). The toast is the OTHER click-to-open surface so the
+  // user always has a target — they don't have to find the lane row.
+  useEffect(() => {
+    function onReady(e: Event) {
+      const d = (e as CustomEvent<TechSpecReadyDetail>).detail;
+      if (!d) return;
+      setForging((prev) =>
+        prev
+          ? {
+              ...prev,
+              phase: "tech-spec-ready",
+              techSpec: {
+                stage: "Tech spec ready",
+                shapeId: d.shapeId,
+                title: d.title,
+                specJson: d.specJson,
+                markdown: d.markdown,
+              },
+            }
+          : prev,
+      );
+      setTechSpecNotice({
+        kind: "ready",
+        shapeId: d.shapeId,
+        title: d.title,
+        specJson: d.specJson,
+        markdown: d.markdown,
+      });
+    }
+    function onFailed(e: Event) {
+      const d = (e as CustomEvent<TechSpecFailedDetail>).detail;
+      if (!d) return;
+      setForging((prev) =>
+        prev
+          ? {
+              ...prev,
+              phase: "tech-spec-ready",
+              techSpec: {
+                stage: "Tech spec failed",
+                shapeId: d.shapeId,
+                title: d.title,
+                error: d.reason,
+              },
+            }
+          : prev,
+      );
+      setTechSpecNotice({
+        kind: "error",
+        shapeId: d.shapeId,
+        title: d.title,
+        reason: d.reason,
+      });
+    }
+    // When the user opens the tech spec — from the lane row, the
+    // notification, the on-board card, or any other surface — retire the
+    // in-flight forge state so the lane + the source/lane→target connectors
+    // dismount. The terminal phase has served its purpose: the user took
+    // the click-through action.
+    function onOpenSpec() {
+      setForging(null);
+      setForgeSourceShapeId(null);
+      setTechSpecNotice(null);
+    }
+    window.addEventListener(TECH_SPEC_READY_EVENT, onReady);
+    window.addEventListener(TECH_SPEC_FAILED_EVENT, onFailed);
+    window.addEventListener(OPEN_TECH_SPEC_EVENT, onOpenSpec);
+    return () => {
+      window.removeEventListener(TECH_SPEC_READY_EVENT, onReady);
+      window.removeEventListener(TECH_SPEC_FAILED_EVENT, onFailed);
+      window.removeEventListener(OPEN_TECH_SPEC_EVENT, onOpenSpec);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -3789,11 +3932,27 @@ function BoardOverlay({
 
       {/* Source → Lane "fork" connector — a screen-space bezier from the
           source card's right edge to the lane, so the lane reads as the
-          forked-out operation popup, not a floating sidebar. Only renders
-          while the chain is running and a source shape is known. */}
+          forked-out operation popup, not a floating sidebar. Renders for
+          the full life of the chain — both the engine phase AND the
+          tech-spec phase — so the user sees one continuous fork from
+          their selection through to the landed document. */}
       {forging && forgeSourceShapeId && (
         <SpecForgeSourceLaneConnector
+          editor={editor}
           sourceShapeId={forgeSourceShapeId}
+          laneRef={laneRef}
+        />
+      )}
+
+      {/* Lane → Tech-Spec card connector — paints once the tech-spec card
+          lands, so the document reads as "forked out of the operation
+          card" (the user's framing). Pulls the card shape id straight off
+          the progress snapshot so we don't have to thread another piece
+          of state. Hides itself if the card was deleted. */}
+      {forging?.techSpec?.shapeId && (
+        <SpecForgeLaneTargetConnector
+          editor={editor}
+          targetShapeId={forging.techSpec.shapeId}
           laneRef={laneRef}
         />
       )}
@@ -3810,13 +3969,72 @@ function BoardOverlay({
       {deepError && !deepBusy && <DeepSynthErrorChip message={deepError} />}
       {publishMsg && <ConvergePublishChip message={publishMsg} />}
 
-      {/* Tech-spec progress — the SpecForge → Tech Spec hand-off chip. */}
-      {techSpecBusy && (
-        <DeepSynthProgressChip
-          title="Tech spec"
-          label={techSpecStage}
-          stages={TECH_SPEC_STAGES}
-          expectedMs={30000}
+      {/* Tech-spec progress moved INTO the OperationLane (a tail row), so
+          we no longer render a separate centered chip during generation —
+          one indicator end-to-end. When the spec lands, the small
+          notification toast below renders as the click-to-open surface. */}
+
+      {/* Tech-spec ready / failed notification — replaces the auto-open of
+          the full-screen document. The toast is the second click-to-open
+          surface (alongside the lane row + the on-board card). One click
+          opens the panel; the ✕ dismisses, leaving the card on the board
+          for later. Auto-dismisses after a generous window so it doesn't
+          stack across multiple runs. */}
+      {techSpecNotice && (
+        <TechSpecReadyNotice
+          notice={techSpecNotice}
+          onOpen={() => {
+            if (techSpecNotice.kind === "ready") {
+              // Fire the shared open event — the top-level WhiteboardBase
+              // listener mounts the document, and our own OPEN_TECH_SPEC
+              // listener inside BoardOverlay (above) clears forging +
+              // notice + source-shape state in lockstep. One event, one
+              // open path — keeps every click target (card / lane / toast)
+              // routing through the same wiring.
+              try {
+                window.dispatchEvent(
+                  new CustomEvent<OpenTechSpecDetail>(OPEN_TECH_SPEC_EVENT, {
+                    detail: {
+                      specJson: techSpecNotice.specJson,
+                      markdown: techSpecNotice.markdown,
+                      title: techSpecNotice.title,
+                      shapeId: techSpecNotice.shapeId,
+                    },
+                  }),
+                );
+              } catch {
+                /* defensive */
+              }
+            } else {
+              // Failure: focus the error card on the board so the user
+              // can read the markdown explaining what happened.
+              try {
+                const id = techSpecNotice.shapeId as TLShapeId;
+                const b = editor.getShapePageBounds(id);
+                if (b) {
+                  editor.select(id);
+                  editor.centerOnPoint(
+                    { x: b.midX, y: b.midY },
+                    { animation: { duration: 320 } },
+                  );
+                }
+              } catch {
+                /* defensive */
+              }
+              // Failure path doesn't go through OPEN_TECH_SPEC_EVENT — clear
+              // state inline so the lane + source connector + notice all
+              // dismount together (mirrors the listener-driven clear path
+              // above for the success case).
+              setTechSpecNotice(null);
+              setForging(null);
+              setForgeSourceShapeId(null);
+            }
+          }}
+          onDismiss={() => {
+            setTechSpecNotice(null);
+            setForging(null);
+            setForgeSourceShapeId(null);
+          }}
         />
       )}
 
@@ -4048,14 +4266,6 @@ const DEEP_SYNTH_STAGES = [
   { label: "Composing the map", atMs: 21000 },
 ];
 
-/** Stage timeline for the Tech-Spec hand-off (reuses the same panel). */
-const TECH_SPEC_STAGES = [
-  { label: "Reading the idea", atMs: 0 },
-  { label: "Tracing the mechanism", atMs: 3000 },
-  { label: "Designing the build", atMs: 11000 },
-  { label: "Writing the spec", atMs: 19000 },
-];
-
 /** One stage row: filled-check (done) · spinning ring (active) · dotted ring
  *  (pending). Mirrors the sharpening card's GenerationActivity treatment. */
 function DeepStageIcon({ state }: { state: "done" | "active" | "pending" }) {
@@ -4158,6 +4368,168 @@ function DeepSynthErrorChip({ message }: { message: string }) {
 /** Brief, centered glass confirmation toast for Converge → Publish — so the
  *  commit is visible (the panel used to close silently). Same glass language
  *  as DeepSynthErrorChip, neutral/accent tone with the Converge icon. */
+/** Toast-style notification shown when the tech-spec stage lands a card on
+ *  the board. Replaces the previous behavior of auto-popping the full-screen
+ *  document — the user clicks the toast (or the on-board card, or the lane
+ *  row) to open it on their own terms. Auto-dismisses after 18s so it
+ *  doesn't stack across multiple runs; the on-board card persists forever.
+ *
+ *  Sits in the bottom-CENTER of the viewport so it doesn't fight the lane
+ *  on the left or the right-edge rails — clear corner, hard to miss. */
+function TechSpecReadyNotice({
+  notice,
+  onOpen,
+  onDismiss,
+}: {
+  notice:
+    | {
+        kind: "ready";
+        shapeId: string;
+        title: string;
+        specJson: string;
+        markdown: string;
+      }
+    | { kind: "error"; shapeId: string; title: string; reason: string };
+  onOpen: () => void;
+  onDismiss: () => void;
+}) {
+  // Auto-dismiss timer — long enough for the user to act, short enough that
+  // multiple back-to-back forge runs don't stack. Re-arms when the notice
+  // identity (shapeId) changes — i.e. a new run replaces the prior toast.
+  useEffect(() => {
+    const id = window.setTimeout(onDismiss, 18000);
+    return () => window.clearTimeout(id);
+  }, [notice.shapeId, onDismiss]);
+
+  const isError = notice.kind === "error";
+  const accent = isError ? "#DC2626" : appleVibe.accent.primary;
+  const title = isError ? "Tech spec failed" : "Tech spec ready";
+  const subtitle = isError
+    ? notice.reason.length > 96
+      ? notice.reason.slice(0, 93) + "…"
+      : notice.reason
+    : notice.title.length > 56
+      ? notice.title.slice(0, 53) + "…"
+      : notice.title;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: "fixed",
+        left: "50%",
+        bottom: 28,
+        transform: "translateX(-50%)",
+        zIndex: 90,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "10px 12px 10px 14px",
+        borderRadius: 14,
+        background: "var(--glass-float-bg)",
+        backdropFilter: "blur(var(--blur-float)) saturate(1.8)",
+        WebkitBackdropFilter: "blur(var(--blur-float)) saturate(1.8)",
+        border: "1px solid var(--glass-border)",
+        boxShadow:
+          "inset 0 1px 0 var(--glass-highlight), 0 30px 70px -26px rgba(11,18,40,0.46)",
+        fontFamily: appleVibe.font.stack,
+        maxWidth: "min(560px, calc(100vw - 32px))",
+      }}
+    >
+      <span
+        style={{
+          display: "inline-flex",
+          width: 30,
+          height: 30,
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: 999,
+          background: withAlpha(accent, "1f"),
+          color: accent,
+          flexShrink: 0,
+        }}
+      >
+        {isError ? (
+          <AlertTriangle style={{ width: 16, height: 16 }} strokeWidth={2.4} />
+        ) : (
+          <FileText style={{ width: 16, height: 16 }} strokeWidth={2.4} />
+        )}
+      </span>
+      <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <span
+          style={{
+            fontSize: 12.5,
+            fontWeight: 700,
+            letterSpacing: "-0.01em",
+            color: appleVibe.text.primary,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {title}
+        </span>
+        <span
+          style={{
+            fontSize: 11.5,
+            fontWeight: 500,
+            color: appleVibe.text.tertiary,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            maxWidth: 420,
+          }}
+        >
+          {subtitle}
+        </span>
+      </span>
+      <button
+        type="button"
+        onClick={onOpen}
+        autoFocus
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          padding: "6px 12px",
+          borderRadius: 999,
+          background: accent,
+          color: "white",
+          fontSize: 12,
+          fontWeight: 650,
+          border: "none",
+          cursor: "pointer",
+          flexShrink: 0,
+        }}
+      >
+        {isError ? "See error" : "Open"}
+        <ArrowRight style={{ width: 12, height: 12 }} strokeWidth={2.6} />
+      </button>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 26,
+          height: 26,
+          borderRadius: 999,
+          background: "transparent",
+          color: appleVibe.text.tertiary,
+          border: "none",
+          cursor: "pointer",
+          flexShrink: 0,
+        }}
+      >
+        <X style={{ width: 14, height: 14 }} strokeWidth={2.2} />
+      </button>
+    </div>
+  );
+}
+
 function ConvergePublishChip({ message }: { message: string }) {
   return (
     <div

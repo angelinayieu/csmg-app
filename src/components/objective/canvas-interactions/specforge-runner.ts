@@ -79,7 +79,18 @@ export interface EngineLaneStatus {
 }
 
 export interface SpecForgeProgress {
-  phase: "running" | "done" | "error";
+  /** Phases:
+   *  - `running`  : 20-engine SpecForge chain in flight.
+   *  - `tech-spec`: Engine chain done, tech-spec document being composed —
+   *                 OperationLane keeps showing so the user has one
+   *                 continuous indicator (source card → lane → tech spec)
+   *                 instead of a flash-and-pop.
+   *  - `tech-spec-ready`: Tech-spec card landed on the board. Lane shows a
+   *                 "Tech spec ready" row so the user can click to open
+   *                 the document (no auto-pop).
+   *  - `done`     : Chain ended without a tech spec (older path / opt-out).
+   *  - `error`    : Chain failed (kept for symmetry; not currently emitted). */
+  phase: "running" | "tech-spec" | "tech-spec-ready" | "done" | "error";
   /** Engines completed (0…total). */
   done: number;
   total: number;
@@ -100,6 +111,28 @@ export interface SpecForgeProgress {
    *  flip to "running" then "passed"/"failed"/"repaired"). Powers the
    *  Operation Lane — clickable per-engine map of the chain. */
   engineStatuses: Partial<Record<SpecForgeEngineId, EngineLaneStatus>>;
+  /** Tech-spec stage state — populated while `phase === "tech-spec"` (an
+   *  in-flight stage label like "Writing the tech spec…") and while
+   *  `phase === "tech-spec-ready"` (the landed tech-spec card's shape id +
+   *  title, so the lane can fork its row to it and the user can click to
+   *  open the document). */
+  techSpec?: {
+    /** Stage label while running. */
+    stage?: string;
+    /** Tech-spec card's tldraw shape id once it lands. Used by the
+     *  TechSpecLaneConnector overlay to draw a bezier from the lane to the
+     *  card, and by the lane row's click handler to open the document. */
+    shapeId?: string;
+    /** Title shown in the lane's "tech spec ready" row. */
+    title?: string;
+    /** The full JSON-serialized spec + markdown so the lane click can fire
+     *  OPEN_TECH_SPEC_EVENT with the same payload the card itself uses. */
+    specJson?: string;
+    markdown?: string;
+    /** Error message — set when the tech-spec API/persist call soft-failed
+     *  so the lane row reads as a failure, not a perpetual pending. */
+    error?: string;
+  };
 }
 
 interface RunOptions {

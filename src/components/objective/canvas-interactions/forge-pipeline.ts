@@ -3,14 +3,18 @@
 // The path AFTER SpecForge: take the chain's accumulated synthesis, POST it
 // to the tech-spec route (Opus + UI agent skill, optionally with pasted
 // inspiration images), drop a Tech Spec card at the bottom of the forge
-// unfurl, and auto-open the full-screen spec page. Imported only by
-// whiteboard-base. The prototype stage hangs off the card's "Build
-// prototype" button (BUILD_PROTOTYPE_EVENT).
+// unfurl, and (instead of auto-popping the document) hand the user a "Tech
+// spec ready" affordance forked from the OperationLane that they can click
+// to open. Imported only by whiteboard-base. The prototype stage hangs off
+// the card's "Build prototype" button (BUILD_PROTOTYPE_EVENT).
+//
+// Also persists the spec as a `document` artifact so it shows up in the
+// Library rail's Artifacts shelf — without this it only existed as a
+// tldraw shape, so deleting the card or switching boards lost it.
 
 import { createShapeId, type Editor, type TLShapeId } from "tldraw";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
 import {
-  OPEN_TECH_SPEC_EVENT,
   BUILD_PROTOTYPE_EVENT,
   type OpenTechSpecDetail,
   type TechSpecCardShape,
@@ -22,13 +26,41 @@ export interface InspirationImage {
   mediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 }
 
+/** Fired after the tech-spec card lands on the board so the OperationLane
+ *  can switch its in-flight "Writing tech spec…" row into a clickable
+ *  "Tech spec ready" row and a notification chip can offer click-to-open.
+ *  Carries everything OpenTechSpecDetail would so the consumer can dispatch
+ *  the open event without re-reading the card. */
+export const TECH_SPEC_READY_EVENT = "objective-board:tech-spec-ready";
+export interface TechSpecReadyDetail extends OpenTechSpecDetail {
+  /** Whether the original request asked for autoPrototype (the prototype
+   *  branch already fired BUILD_PROTOTYPE_EVENT before this event — the
+   *  notification then reads as "Spec ready, prototype building"). */
+  autoPrototype?: boolean;
+}
+
+/** Fired when the tech-spec API/persist soft-fails so the lane can show a
+ *  "Tech spec failed" row + the notification chip reads as a failure. */
+export const TECH_SPEC_FAILED_EVENT = "objective-board:tech-spec-failed";
+export interface TechSpecFailedDetail {
+  anchorShapeId?: string;
+  shapeId: string;
+  title: string;
+  reason: string;
+}
+
 interface PipelineOptions {
   anchorShapeId?: string;
   inspirationImages?: InspirationImage[];
-  onProgress?: (label: string) => void;
+  /** Two-channel progress:
+   *  - `label`: free-form stage string ("Writing the tech spec…") — pumped
+   *             to the OperationLane via SpecForgeProgress.techSpec.stage.
+   *  - `cardId`: the tldraw shape id once the card lands — pumped so the
+   *             lane connector can render before the runner returns. */
+  onProgress?: (update: { label?: string; cardId?: string }) => void;
   /** Prototype-on-selection: after the tech spec lands, go straight to
-   *  building the prototype (fire BUILD_PROTOTYPE_EVENT) instead of
-   *  auto-opening the full-screen spec page. */
+   *  building the prototype (fire BUILD_PROTOTYPE_EVENT) instead of leaving
+   *  the user with the click-to-open notification. */
   autoPrototype?: boolean;
 }
 
@@ -68,18 +100,58 @@ function placementBelowForge(
   return { x: vp.center.x - CARD_W / 2, y: vp.center.y };
 }
 
-/** Run the tech-spec stage and surface the card + page. Soft-fails. */
+/** Persist the spec to the artifacts table so it shows up in the Library
+ *  rail's Artifacts shelf. Soft-fails — the on-board card always wins as
+ *  the source of truth; persistence is a recoverability backstop. */
+async function persistTechSpecArtifact(
+  spaceId: string,
+  args: {
+    cardId: string;
+    title: string;
+    specJson: string;
+    markdown: string;
+    sourceShapeId?: string;
+    status: "ready" | "error";
+  },
+): Promise<void> {
+  try {
+    await fetch(`/api/objective/${spaceId}/artifacts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "upsert",
+        artifactType: "document",
+        engineKey: "tech_spec",
+        title: args.title,
+        status: args.status,
+        content: { specJson: args.specJson, markdown: args.markdown },
+        boardShapeId: args.cardId,
+        sourceShapeIds: args.sourceShapeId ? [args.sourceShapeId] : undefined,
+        // First write also pins an immutable version so the Library has
+        // history even before the user edits anything.
+        appendVersion: args.status === "ready",
+      }),
+    });
+  } catch (err) {
+    console.warn("[forge-pipeline] persist artifact failed (soft):", err);
+  }
+}
+
+/** Run the tech-spec stage and surface the card + lane handoff. Soft-fails.
+ *  No longer auto-opens the document; instead fires TECH_SPEC_READY_EVENT
+ *  so the OperationLane can offer a click-to-open row + the notification
+ *  chip can read as "Tech spec ready". */
 export async function runForgePipeline(
   editor: Editor,
   spaceId: string,
   forge: SpecForgeResult,
   opts: PipelineOptions = {},
 ): Promise<void> {
-  opts.onProgress?.(
-    opts.inspirationImages?.length
+  opts.onProgress?.({
+    label: opts.inspirationImages?.length
       ? "Reading inspiration & writing the tech spec…"
       : "Writing the tech spec…",
-  );
+  });
 
   const res = await fetch(`/api/canvas/specforge/tech-spec`, {
     method: "POST",
@@ -96,13 +168,37 @@ export async function runForgePipeline(
     // sees that the chain ran but the spec step failed (no more silent
     // disappearance). Skip the prototype branch on the way out.
     const why = await safeErrorMessage(res);
-    placeErrorTechSpec(editor, opts.anchorShapeId, forge.idea, why);
-    opts.onProgress?.("Tech spec failed");
+    const failed = placeErrorTechSpec(editor, opts.anchorShapeId, forge.idea, why);
+    // Persist the failure too so the Library shelf reflects it (status:error)
+    // and the user knows where the artifact attempt lives.
+    void persistTechSpecArtifact(spaceId, {
+      cardId: failed.cardId,
+      title: failed.title,
+      specJson: "",
+      markdown: failed.markdown,
+      sourceShapeId: opts.anchorShapeId,
+      status: "error",
+    });
+    opts.onProgress?.({ label: "Tech spec failed", cardId: failed.cardId });
+    try {
+      window.dispatchEvent(
+        new CustomEvent<TechSpecFailedDetail>(TECH_SPEC_FAILED_EVENT, {
+          detail: {
+            anchorShapeId: opts.anchorShapeId,
+            shapeId: failed.cardId,
+            title: failed.title,
+            reason: why,
+          },
+        }),
+      );
+    } catch {
+      /* defensive */
+    }
     return;
   }
   const data = (await res.json()) as { spec: TechSpec; markdown: string };
 
-  opts.onProgress?.("Planning the UI…");
+  opts.onProgress?.({ label: "Planning the UI…" });
 
   const { x, y } = placementBelowForge(editor, opts.anchorShapeId);
   const cardId = createShapeId();
@@ -123,32 +219,60 @@ export async function runForgePipeline(
     },
     meta: { techSpec: true, sourceShapeId: opts.anchorShapeId ?? "" },
   });
-  editor.select(cardId);
-  editor.centerOnPoint(
-    { x: x + CARD_W / 2, y: y + CARD_H / 2 },
-    { animation: { duration: 320 } },
-  );
+  // Gentle camera nudge to bring the card into view (user complaint: "not
+  // shown on the whiteboard"). We DON'T open the document — just make sure
+  // the artifact is visible on the board so the lane→card connector reads,
+  // and the notification's "Open" CTA reads as the explicit hand-off.
+  try {
+    editor.select(cardId);
+    editor.centerOnPoint(
+      { x: x + CARD_W / 2, y: y + CARD_H / 2 },
+      { animation: { duration: 380 } },
+    );
+  } catch {
+    /* tldraw race — fine; the card still exists */
+  }
+  // Pump the card id BEFORE persistence + the ready event so the connector
+  // can paint as soon as the shape exists.
+  opts.onProgress?.({ label: "Tech spec ready", cardId });
 
-  const detail: OpenTechSpecDetail = {
+  // Persist as a `document` artifact (status:ready) — fire-and-forget so the
+  // notification doesn't wait on the round-trip.
+  void persistTechSpecArtifact(spaceId, {
+    cardId,
+    title: data.spec.title,
+    specJson,
+    markdown: data.markdown,
+    sourceShapeId: opts.anchorShapeId,
+    status: "ready",
+  });
+
+  const detail: TechSpecReadyDetail = {
     specJson,
     markdown: data.markdown,
     title: data.spec.title,
     shapeId: cardId,
+    autoPrototype: opts.autoPrototype,
   };
 
   if (opts.autoPrototype) {
-    // Prototype-on-selection: the tech-spec card stays on the board (openable
+    // Prototype-on-selection: tech-spec card stays on the board (openable
     // later); jump straight to building the prototype off this spec.
-    opts.onProgress?.("Building prototype…");
     window.dispatchEvent(
       new CustomEvent<OpenTechSpecDetail>(BUILD_PROTOTYPE_EVENT, { detail }),
     );
-  } else {
-    // Auto-open the full-screen spec page (the "page at the end").
+  }
+  // Always fire the ready event so the OperationLane can switch its
+  // in-flight row into a click-to-open row and the notification chip can
+  // render. The auto-open of the full-screen document is GONE — the user
+  // chooses when to open it (clicking the lane row, the notification, or
+  // the card itself).
+  try {
     window.dispatchEvent(
-      new CustomEvent<OpenTechSpecDetail>(OPEN_TECH_SPEC_EVENT, { detail }),
+      new CustomEvent<TechSpecReadyDetail>(TECH_SPEC_READY_EVENT, { detail }),
     );
-    opts.onProgress?.("Tech spec ready");
+  } catch {
+    /* defensive */
   }
 }
 
@@ -172,7 +296,7 @@ function placeErrorTechSpec(
   anchorShapeId: string | undefined,
   idea: string,
   why: string,
-): void {
+): { cardId: string; title: string; markdown: string } {
   const { x, y } = placementBelowForge(editor, anchorShapeId);
   const cardId = createShapeId();
   const ideaLine = idea.length > 120 ? idea.slice(0, 117).trimEnd() + "…" : idea;
@@ -183,6 +307,7 @@ function placeErrorTechSpec(
     (ideaLine ? `**Idea:** ${ideaLine}\n\n` : "") +
     `Try again — if it keeps failing, the Anthropic model id in ` +
     `\`src/lib/llm.ts\` (BEST_CLAUDE_MODEL) may need a bump.`;
+  const title = "Tech spec failed";
   editor.createShape<TechSpecCardShape>({
     id: cardId,
     type: "tech-spec-card",
@@ -191,7 +316,7 @@ function placeErrorTechSpec(
     props: {
       w: CARD_W,
       h: CARD_H,
-      title: "Tech spec failed",
+      title,
       specJson: "",
       markdown,
       featureCount: 0,
@@ -199,9 +324,5 @@ function placeErrorTechSpec(
     },
     meta: { techSpec: true, error: true, sourceShapeId: anchorShapeId ?? "" },
   });
-  editor.select(cardId);
-  editor.centerOnPoint(
-    { x: x + CARD_W / 2, y: y + CARD_H / 2 },
-    { animation: { duration: 320 } },
-  );
+  return { cardId, title, markdown };
 }

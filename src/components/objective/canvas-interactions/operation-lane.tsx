@@ -31,7 +31,11 @@ import {
   type SpecForgePhase,
 } from "@/lib/objective-canvas/specforge/types";
 import type { EngineLaneStatus, SpecForgeProgress } from "./specforge-runner";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  OPEN_TECH_SPEC_EVENT,
+  type OpenTechSpecDetail,
+} from "../shapes/tech-spec-card-shape";
+import { ChevronLeft, ChevronRight, FileText, Loader2, AlertTriangle } from "lucide-react";
 
 /** Fired when a lane row is clicked: opens the side panel rendered against
  *  the engine's polished bullets (no shape required). Listened to by
@@ -328,6 +332,14 @@ export const OperationLane = forwardRef<HTMLDivElement, OperationLaneProps>(
             editor={editor}
           />
         ))}
+
+        {/* Tech-spec tail row — one continuous progress story instead of a
+            separate centered chip. Renders whenever the chain has spilled
+            into the tech-spec stage (running/ready/failed). */}
+        {(progress.phase === "tech-spec" ||
+          progress.phase === "tech-spec-ready") && (
+          <TechSpecTailRow progress={progress} editor={editor} />
+        )}
       </div>
 
       <style jsx>{`
@@ -340,6 +352,188 @@ export const OperationLane = forwardRef<HTMLDivElement, OperationLaneProps>(
   );
   },
 );
+
+// ── Tech-spec tail row ──
+// The lane's terminal row while the chain is composing the tech spec OR
+// after the document landed. While composing: spinner + the stage label
+// (matches the engine-row pulse so it reads as the same surface). When
+// ready: clickable row → fires OPEN_TECH_SPEC_EVENT with the same payload
+// the on-board card uses. On failure: amber alert icon, click focuses the
+// failure card on the board (no spec to open).
+function TechSpecTailRow({
+  progress,
+  editor,
+}: {
+  progress: SpecForgeProgress;
+  editor: Editor;
+}) {
+  const ts = progress.techSpec;
+  if (!ts) return null;
+  const isRunning = progress.phase === "tech-spec" && !ts.error;
+  const isError = !!ts.error;
+  const isReady = progress.phase === "tech-spec-ready" && !isError;
+
+  const stageLabel =
+    ts.stage ?? (isRunning ? "Writing the tech spec…" : "Tech spec");
+
+  // Capture the fields once — TS doesn't preserve outer-scope narrowing of
+  // `ts` into the nested handleClick closure (closures could fire after a
+  // re-render where `progress.techSpec` changed shape), so destructure now.
+  const tsShapeId = ts.shapeId;
+  const tsSpecJson = ts.specJson;
+  const tsMarkdown = ts.markdown;
+  const tsTitle = ts.title;
+
+  function handleClick() {
+    if (isReady && tsSpecJson && tsShapeId) {
+      try {
+        window.dispatchEvent(
+          new CustomEvent<OpenTechSpecDetail>(OPEN_TECH_SPEC_EVENT, {
+            detail: {
+              specJson: tsSpecJson,
+              markdown: tsMarkdown ?? "",
+              title: tsTitle ?? "Tech Spec",
+              shapeId: tsShapeId,
+            },
+          }),
+        );
+      } catch {
+        /* defensive */
+      }
+      return;
+    }
+    if (tsShapeId) {
+      // Running or failed — focus the card on the board so the user can see
+      // where the artifact will land / read the failure markdown.
+      try {
+        const id = tsShapeId as TLShapeId;
+        const b = editor.getShapePageBounds(id);
+        if (b) {
+          editor.select(id);
+          editor.centerOnPoint(
+            { x: b.midX, y: b.midY },
+            { animation: { duration: 320 } },
+          );
+        }
+      } catch {
+        /* defensive */
+      }
+    }
+  }
+
+  const clickable = isReady || (isError && !!tsShapeId);
+  const accent = isError ? "#DC2626" : isReady ? "#22C55E" : "#3B82F6";
+
+  return (
+    <div
+      style={{
+        padding: "10px 14px 14px",
+        marginTop: 6,
+        borderTop: "1px dashed rgba(15,23,42,0.08)",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 9.5,
+          fontWeight: 700,
+          letterSpacing: 1.2,
+          textTransform: "uppercase",
+          color: appleVibe.text.faint,
+          padding: "2px 0 6px",
+        }}
+      >
+        Tech spec
+      </div>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={!clickable}
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 9,
+          width: "100%",
+          background: "transparent",
+          border: "none",
+          textAlign: "left",
+          padding: "6px 4px",
+          borderRadius: 7,
+          cursor: clickable ? "pointer" : "default",
+          color: appleVibe.text.primary,
+          fontFamily: appleVibe.font.stack,
+          transition: "background 120ms ease-out",
+        }}
+        onMouseEnter={(e) => {
+          if (clickable) e.currentTarget.style.background = "rgba(15,23,42,0.045)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "transparent";
+        }}
+      >
+        <span
+          style={{
+            width: 18,
+            height: 18,
+            borderRadius: 999,
+            background: `${accent}1f`,
+            color: accent,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            marginTop: 1,
+            animation: isRunning ? "pulse 1.4s ease-in-out infinite" : undefined,
+          }}
+        >
+          {isRunning ? (
+            <Loader2 className="animate-spin" style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+          ) : isError ? (
+            <AlertTriangle style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+          ) : (
+            <FileText style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+          )}
+        </span>
+        <span
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            minWidth: 0,
+            flex: 1,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              letterSpacing: 0.1,
+              lineHeight: 1.3,
+              color: appleVibe.text.primary,
+            }}
+          >
+            {isReady ? ts.title ?? "Tech spec ready" : stageLabel}
+          </span>
+          <span
+            style={{
+              fontSize: 10.5,
+              color: appleVibe.text.tertiary,
+              letterSpacing: 0.1,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {isReady
+              ? "Click to open spec"
+              : isError
+                ? ts.error ?? "Tech spec failed"
+                : "Composing the build doc…"}
+          </span>
+        </span>
+      </button>
+    </div>
+  );
+}
 
 // ── Phase block — one of the 5 acts ──
 function PhaseBlock({

@@ -151,19 +151,25 @@ export function TechSpecPanel({
   // Tell the rest of the board this panel is up — connector "+" handle hides
   // while it's open so a plus-button never floats over the document.
   const libraryOpen = usePanel("library");
+  const powerupsOpen = usePanel("powerups");
   useEffect(() => {
     setPanel("techSpec", true);
     return () => setPanel("techSpec", false);
   }, []);
 
   // Float below the top-right bar (top:16, ~36px tall, +20px breathing room)
-  // and above the bottom toolbar. When the Library rail (right:16, w:384) is
-  // open, slide our right edge to clear it (16 + 384 + 12 gutter = 412).
-  // Side margins clear the left BoardNavBar pill as well.
+  // and above the bottom toolbar. The three right-edge launcher rails
+  // (library / powerups / style — they share the same slot) all sit at
+  // right:16 width:384 → 412px from the right when open. Push our right
+  // edge to clear whichever is showing. Side margins clear the left
+  // BoardNavBar pill as well.
   const TOP_CLEAR = 72;
   const BOTTOM_CLEAR = 72;
   const SIDE_CLEAR = 84;
-  const LIBRARY_PUSH = 412;
+  const RAIL_PUSH = 412;
+  // Either right-edge rail open → squish. (Style is a small popover that
+  // doesn't span the height, so it doesn't trigger the push.)
+  const rightRailOpen = libraryOpen || powerupsOpen;
 
   return (
     <div
@@ -173,7 +179,7 @@ export function TechSpecPanel({
         top: TOP_CLEAR,
         bottom: BOTTOM_CLEAR,
         left: SIDE_CLEAR,
-        right: libraryOpen ? LIBRARY_PUSH : SIDE_CLEAR,
+        right: rightRailOpen ? RAIL_PUSH : SIDE_CLEAR,
         zIndex: 40,
         background: C.bg,
         fontFamily: FONT,
