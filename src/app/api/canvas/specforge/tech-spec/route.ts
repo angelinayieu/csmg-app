@@ -156,7 +156,45 @@ export async function POST(req: Request) {
       inspirationCues,
     });
   } catch (err) {
+    // Surface the actual reason instead of a generic "Generation failed" —
+    // the prior version masked Anthropic 404/model-rolled-back, credit-
+    // exhausted, and timeout errors as the same opaque board card. Status
+    // is split: 402 for credit / 504 for upstream timeout / 502 for everything
+    // else, so the client + the on-board error markdown can read accurately.
+    const e = err as { status?: number; message?: string; name?: string } | null;
+    const message =
+      (e?.message ?? "").trim() || "tech-spec generation failed";
     console.error("[tech-spec] generation failed:", err);
-    return NextResponse.json({ error: "Generation failed" }, { status: 502 });
+    const lower = message.toLowerCase();
+    const isCredit =
+      lower.includes("credit balance is too low") ||
+      lower.includes("insufficient_quota");
+    const isTimeout =
+      e?.name === "AbortError" ||
+      lower.includes("timeout") ||
+      lower.includes("timed out") ||
+      e?.status === 408 ||
+      e?.status === 524;
+    const isModel404 =
+      e?.status === 404 ||
+      lower.includes("not_found_error") ||
+      lower.includes("model_not_found");
+    const status = isCredit ? 402 : isTimeout ? 504 : 502;
+    return NextResponse.json(
+      {
+        error: message,
+        code: isCredit
+          ? "credit_exhausted"
+          : isTimeout
+            ? "timeout"
+            : isModel404
+              ? "model_not_found"
+              : "generation_failed",
+        // Echo the model id so a "404 not_found_error" lands somewhere
+        // actionable — bumping BEST_CLAUDE_MODEL is a one-line repair.
+        model: BEST_CLAUDE_MODEL,
+      },
+      { status },
+    );
   }
 }

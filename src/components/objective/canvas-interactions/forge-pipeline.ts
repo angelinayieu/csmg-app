@@ -276,11 +276,29 @@ export async function runForgePipeline(
   }
 }
 
-/** Read a useful one-liner from a failed response without throwing. */
+/** Read a useful one-liner from a failed response without throwing. The
+ *  tech-spec route now returns `{error, code, model}` so we surface the
+ *  code (credit_exhausted / timeout / model_not_found) prominently — those
+ *  three failure modes need different user remediation. */
 async function safeErrorMessage(res: Response): Promise<string> {
   try {
-    const j = (await res.json()) as { error?: string };
-    if (j?.error) return `${res.status} — ${j.error}`;
+    const j = (await res.json()) as {
+      error?: string;
+      code?: string;
+      model?: string;
+    };
+    if (j?.code === "credit_exhausted") {
+      return `Anthropic credits exhausted — top up to keep forging specs.`;
+    }
+    if (j?.code === "timeout") {
+      return `Tech-spec generation timed out (${res.status}). Try again — Opus can stall on cold starts.`;
+    }
+    if (j?.code === "model_not_found") {
+      return `Anthropic model "${j.model ?? "?"}" 404'd. Bump BEST_CLAUDE_MODEL in src/lib/llm.ts.`;
+    }
+    if (j?.error) {
+      return `${res.status} — ${j.error}${j.model ? ` (model: ${j.model})` : ""}`;
+    }
   } catch {
     /* not JSON */
   }

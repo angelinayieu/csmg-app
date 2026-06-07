@@ -65,7 +65,41 @@ export async function POST(req: Request) {
     );
     return NextResponse.json({ html });
   } catch (err) {
+    // Same structured-error shape as /canvas/specforge/tech-spec so the
+    // client can surface "credit exhausted" / "model 404'd" / "timeout"
+    // with actionable text instead of "Generation failed" (which read as
+    // a black-screen empty card on the board).
+    const e = err as { status?: number; message?: string; name?: string } | null;
+    const message = (e?.message ?? "").trim() || "prototype generation failed";
     console.error("[prototype] generation failed:", err);
-    return NextResponse.json({ error: "Generation failed" }, { status: 502 });
+    const lower = message.toLowerCase();
+    const isCredit =
+      lower.includes("credit balance is too low") ||
+      lower.includes("insufficient_quota");
+    const isTimeout =
+      e?.name === "AbortError" ||
+      lower.includes("timeout") ||
+      lower.includes("timed out") ||
+      e?.status === 408 ||
+      e?.status === 524;
+    const isModel404 =
+      e?.status === 404 ||
+      lower.includes("not_found_error") ||
+      lower.includes("model_not_found");
+    const status = isCredit ? 402 : isTimeout ? 504 : 502;
+    return NextResponse.json(
+      {
+        error: message,
+        code: isCredit
+          ? "credit_exhausted"
+          : isTimeout
+            ? "timeout"
+            : isModel404
+              ? "model_not_found"
+              : "generation_failed",
+        model: BEST_CLAUDE_MODEL,
+      },
+      { status },
+    );
   }
 }
