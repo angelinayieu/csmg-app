@@ -202,7 +202,11 @@ export function PowerupRail({
   const [running, setRunning] = useState<string | null>(null);
   function runOp(opId: string, prompt?: string) {
     if (sel.count === 0 || running) return;
-    const target: OperationTarget = { text: sel.text, shapeId: sel.anchorId };
+    const target: OperationTarget = {
+      text: sel.text,
+      shapeId: sel.anchorId,
+      sourceKind: sel.sourceKind,
+    };
     setRunning(opId);
     void executeCardOperation(editor, target, opId, {
       temperature: settings.temperature,

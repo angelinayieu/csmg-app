@@ -75,7 +75,7 @@ export class CommentCardShapeUtil extends BaseBoxShapeUtil<CommentCardShape> {
     authorAvatarUrl: T.string,
     body: T.string,
     targetShapeIds: T.arrayOf(T.string),
-    status: T.string,
+    status: T.literalEnum("open", "resolved", "analyzed"),
     createdAtIso: T.string,
     color: T.string,
   };

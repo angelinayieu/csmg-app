@@ -388,16 +388,82 @@ export interface ExtractedRelationship {
   polarity?: "positive" | "negative" | "neutral";
 }
 
+/** Visual grammar pulled from a reference image — the moodboard lens.
+ *  Distinct axis from entities (which says WHAT the image depicts): this
+ *  says what it LOOKS LIKE. Aggregated across all an objective's image
+ *  references to derive taste_profile.style_synthesis, which the
+ *  prototype generator reads via taste-design-block. All fields optional
+ *  + defensively defaulted at parse — a thin image just returns sparse
+ *  arrays / unknowns rather than nulling the whole record. */
+export interface StyleAnalysis {
+  palette: {
+    /** 2-4 dominant hex codes ordered most-prominent first. */
+    dominant: string[];
+    /** Accent / call-out hex codes, ≤2. */
+    accent: string[];
+    temperature: "warm" | "neutral" | "cool" | "unknown";
+    contrast: "low" | "medium" | "high" | "unknown";
+  };
+  typography: {
+    weight_range: "light" | "regular" | "bold" | "heavy" | "mixed" | "unknown";
+    scale_contrast: "subtle" | "expressive" | "unknown";
+    voice:
+      | "humanist"
+      | "geometric"
+      | "monospaced"
+      | "serif"
+      | "mixed"
+      | "unknown";
+  };
+  composition: {
+    density: "sparse" | "balanced" | "dense" | "unknown";
+    grid: "rigid" | "loose" | "asymmetric" | "unknown";
+    hierarchy: "flat" | "two-tier" | "deep" | "unknown";
+  };
+  /** Named UI patterns the image embodies — "sidebar+main", "hero+cta",
+   *  "card-grid", "conversational", "full-bleed-canvas", "dashboard-feed",
+   *  etc. Free-form so the model can name patterns the enum misses. ≤6. */
+  patterns: string[];
+  /** Implied motion words — "fade-in", "scale-pop", "parallax", "spring".
+   *  Empty when the image is static / has no motion cues. ≤4. */
+  motion_cues: string[];
+}
+
 export interface StructuredImageExtraction {
   ocr_text: string;
   description: string;
   entities: ExtractedEntity[];
   relationships: ExtractedRelationship[];
+  /** Visual grammar — palette / typography / composition / patterns /
+   *  motion. Optional on the wire so legacy responses still parse; the
+   *  parser fills sparse defaults when missing. */
+  style_analysis?: StyleAnalysis;
 }
 
-const STRUCTURED_IMAGE_SYSTEM = `You are reading an image dropped onto a knowledge canvas.
+const EMPTY_STYLE_ANALYSIS: StyleAnalysis = {
+  palette: {
+    dominant: [],
+    accent: [],
+    temperature: "unknown",
+    contrast: "unknown",
+  },
+  typography: {
+    weight_range: "unknown",
+    scale_contrast: "unknown",
+    voice: "unknown",
+  },
+  composition: {
+    density: "unknown",
+    grid: "unknown",
+    hierarchy: "unknown",
+  },
+  patterns: [],
+  motion_cues: [],
+};
 
-The user is building a structured knowledge graph and wants the image to contribute discrete entities + relationships, not just raw text.
+const STRUCTURED_IMAGE_SYSTEM = `You are reading an image dropped onto a knowledge canvas. You wear two hats at once:
+  1. KG analyst — pulling discrete entities + relationships out of the image's content
+  2. UX designer cataloguing a moodboard — recording the image's VISUAL GRAMMAR (palette, typography, composition, patterns, motion) so future generated UI can imitate this taste
 
 Return STRICT JSON in this shape (no prose before or after, no code fences):
 
@@ -405,15 +471,53 @@ Return STRICT JSON in this shape (no prose before or after, no code fences):
   "ocr_text": string,
   "description": string,
   "entities": [{ "name": string, "type": string, "description": string, "rolePosition"?: string }],
-  "relationships": [{ "fromName": string, "toName": string, "label": string, "polarity"?: "positive" | "negative" | "neutral" }]
+  "relationships": [{ "fromName": string, "toName": string, "label": string, "polarity"?: "positive" | "negative" | "neutral" }],
+  "style_analysis": {
+    "palette": {
+      "dominant": [string],
+      "accent": [string],
+      "temperature": "warm" | "neutral" | "cool" | "unknown",
+      "contrast": "low" | "medium" | "high" | "unknown"
+    },
+    "typography": {
+      "weight_range": "light" | "regular" | "bold" | "heavy" | "mixed" | "unknown",
+      "scale_contrast": "subtle" | "expressive" | "unknown",
+      "voice": "humanist" | "geometric" | "monospaced" | "serif" | "mixed" | "unknown"
+    },
+    "composition": {
+      "density": "sparse" | "balanced" | "dense" | "unknown",
+      "grid": "rigid" | "loose" | "asymmetric" | "unknown",
+      "hierarchy": "flat" | "two-tier" | "deep" | "unknown"
+    },
+    "patterns": [string],
+    "motion_cues": [string]
+  }
 }
 
-RULES:
+RULES — KG SIDE:
 - ocr_text: any visible text, transcribed verbatim with markdown structure preserved (headings, lists, tables). Empty string if no readable text.
 - description: 2-4 sentences naming what the image depicts. Be specific about the kind of artifact (diagram, screenshot, photo, sketch) and what's in it. Avoid generic phrases like "an image showing".
 - entities: one entry per discrete thing visible — services, people, metrics, components, steps, concepts, locations, datasets. Skip purely decorative elements. Use the image's own terminology for names; if a thing is unlabeled, give it a short specific name based on what it depicts. Cap at 12 entities — pick the most meaningful.
 - relationships: one entry per visible arrow, line, or spatial grouping that implies a connection. fromName/toName MUST exactly match names in the entities array (case-sensitive). polarity is optional; only include when the visual makes the sign obvious (e.g., a red X, a blocking icon, a "+" symbol).
-- If the image carries no semantic content (pure decoration, abstract art with no labels), return entities: [] and relationships: [] but still produce a description.
+
+RULES — STYLE LENS SIDE:
+- palette.dominant: 2-4 hex codes for the colors that read FIRST. Order by prominence. Lowercase "#rrggbb". If the image is a black-and-white sketch, return ["#000000","#ffffff"] and accent: [].
+- palette.accent: ≤2 hex codes for the colors that mark CTAs, badges, or focus points (not the background). Empty array if no clear accent.
+- palette.temperature: lean WARM if oranges/reds/yellows dominate, COOL if blues/greens/violets, NEUTRAL if grays/beiges. Use "unknown" only when the image has no color information.
+- palette.contrast: HIGH if foreground/background have strong tonal separation (think Linear, Stripe); LOW if subtle pastels or grayscale gradients; MEDIUM for typical balanced UI.
+- typography.weight_range: dominant text weight. "mixed" only when both light AND bold are clearly used for hierarchy. "unknown" when no text is visible.
+- typography.scale_contrast: SUBTLE = headings are slightly larger than body. EXPRESSIVE = huge displays next to tiny body. "unknown" for no text.
+- typography.voice: HUMANIST = warm, calligraphic (Inter, Söhne, body-feeling sans). GEOMETRIC = mechanical, even (Futura, Manrope). MONOSPACED = code-like. SERIF = traditional. MIXED only if two voices are used together. "unknown" for no text.
+- composition.density: SPARSE = lots of negative space and few elements per screen. DENSE = packed grid, every cell used. BALANCED = the middle.
+- composition.grid: RIGID = strict alignment to a column grid. LOOSE = roughly aligned but breathing. ASYMMETRIC = intentional offsets, broken alignment.
+- composition.hierarchy: FLAT = no visual primacy among elements. TWO-TIER = one clear hero + supporting equals. DEEP = multiple nested hierarchies.
+- patterns: ≤6 named UI patterns the image embodies — choose from: "sidebar+main", "hero+cta", "card-grid", "feed", "split-pane", "dashboard", "conversational", "full-bleed-canvas", "modal-form", "wizard", "settings-tabs", "kanban", "timeline", "data-table", "command-palette", or coin a 1-3 word name if none fit. Empty array for non-UI imagery (photos, abstract art).
+- motion_cues: ≤4 implied motion words — "fade-in", "scale-pop", "parallax", "spring", "slide", "stagger". Empty for static stills with no animation hints.
+- If the image is purely decorative or has no inferable style (e.g. a blank canvas, a single icon), all style_analysis enums may be "unknown" and arrays empty — but still emit the field.
+
+ALWAYS emit "style_analysis" — never omit. If unsure on an axis, use "unknown" / [].
+
+If the image carries no semantic content (pure decoration, abstract art with no labels), return entities: [] and relationships: [] but still produce a description AND a style_analysis.
 
 Return ONLY the JSON object.`;
 
@@ -568,10 +672,141 @@ function parseStructuredImageJson(raw: string): StructuredImageExtraction | null
           }))
       : [];
     if (!description && entities.length === 0 && !ocr_text) return null;
-    return { ocr_text, description, entities, relationships };
+    const style_analysis = parseStyleAnalysis(obj.style_analysis);
+    return { ocr_text, description, entities, relationships, style_analysis };
   } catch {
     return null;
   }
+}
+
+// ── Style-lens parsing helpers ──────────────────────────────────────
+//
+// Defensive — any field omitted, mistyped, or out-of-enum collapses to
+// "unknown" / [] so the row still lands. Hex codes are normalized to
+// lowercase + #rrggbb (so the K-means aggregator in taste_profile can
+// compare them); anything that doesn't look like a hex is dropped.
+
+const HEX_RE = /^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
+function normalizeHex(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!HEX_RE.test(s)) return null;
+  const cleaned = s.startsWith("#") ? s.slice(1) : s;
+  // Expand short form #abc → #aabbcc so downstream comparisons are stable.
+  if (cleaned.length === 3) {
+    return `#${cleaned
+      .split("")
+      .map((c) => c + c)
+      .join("")
+      .toLowerCase()}`;
+  }
+  return `#${cleaned.toLowerCase()}`;
+}
+
+function pickEnum<T extends string>(
+  raw: unknown,
+  allowed: readonly T[],
+  fallback: T,
+): T {
+  return typeof raw === "string" && (allowed as readonly string[]).includes(raw)
+    ? (raw as T)
+    : fallback;
+}
+
+function pickStringArray(raw: unknown, cap: number): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+    .map((v) => v.trim().slice(0, 60))
+    .slice(0, cap);
+}
+
+function parseStyleAnalysis(raw: unknown): StyleAnalysis {
+  if (!raw || typeof raw !== "object") return EMPTY_STYLE_ANALYSIS;
+  const o = raw as Record<string, unknown>;
+
+  const palette = ((): StyleAnalysis["palette"] => {
+    const p = (o.palette ?? {}) as Record<string, unknown>;
+    const dominant = (Array.isArray(p.dominant) ? p.dominant : [])
+      .map(normalizeHex)
+      .filter((h): h is string => h !== null)
+      .slice(0, 4);
+    const accent = (Array.isArray(p.accent) ? p.accent : [])
+      .map(normalizeHex)
+      .filter((h): h is string => h !== null)
+      .slice(0, 2);
+    return {
+      dominant,
+      accent,
+      temperature: pickEnum(
+        p.temperature,
+        ["warm", "neutral", "cool", "unknown"] as const,
+        "unknown",
+      ),
+      contrast: pickEnum(
+        p.contrast,
+        ["low", "medium", "high", "unknown"] as const,
+        "unknown",
+      ),
+    };
+  })();
+
+  const typography = ((): StyleAnalysis["typography"] => {
+    const t = (o.typography ?? {}) as Record<string, unknown>;
+    return {
+      weight_range: pickEnum(
+        t.weight_range,
+        ["light", "regular", "bold", "heavy", "mixed", "unknown"] as const,
+        "unknown",
+      ),
+      scale_contrast: pickEnum(
+        t.scale_contrast,
+        ["subtle", "expressive", "unknown"] as const,
+        "unknown",
+      ),
+      voice: pickEnum(
+        t.voice,
+        [
+          "humanist",
+          "geometric",
+          "monospaced",
+          "serif",
+          "mixed",
+          "unknown",
+        ] as const,
+        "unknown",
+      ),
+    };
+  })();
+
+  const composition = ((): StyleAnalysis["composition"] => {
+    const c = (o.composition ?? {}) as Record<string, unknown>;
+    return {
+      density: pickEnum(
+        c.density,
+        ["sparse", "balanced", "dense", "unknown"] as const,
+        "unknown",
+      ),
+      grid: pickEnum(
+        c.grid,
+        ["rigid", "loose", "asymmetric", "unknown"] as const,
+        "unknown",
+      ),
+      hierarchy: pickEnum(
+        c.hierarchy,
+        ["flat", "two-tier", "deep", "unknown"] as const,
+        "unknown",
+      ),
+    };
+  })();
+
+  return {
+    palette,
+    typography,
+    composition,
+    patterns: pickStringArray(o.patterns, 6),
+    motion_cues: pickStringArray(o.motion_cues, 4),
+  };
 }
 
 // ── Plain text / markdown ────────────────────────────────────────────

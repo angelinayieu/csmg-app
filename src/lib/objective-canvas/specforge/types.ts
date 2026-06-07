@@ -570,8 +570,10 @@ export interface EvaluationCriterion {
 
 export interface EvaluationCandidate {
   name: string;
-  /** Map of criterion.name → score on the rubric's 0..5 scale. */
-  scores: Record<string, number>;
+  /** Per-criterion rubric scores. One entry per criterion (criterion === EvaluationCriterion.name).
+   *  Array shape (not a map) because OpenAI strict json_schema mode rejects
+   *  open-keyed `additionalProperties` schemas. */
+  scores: Array<{ criterion: string; score: number }>;
   /** 0..100 — criterion weight × score, summed and normalized. */
   weighted_score: number;
   strengths: string[];

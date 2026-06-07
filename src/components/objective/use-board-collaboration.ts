@@ -10,6 +10,12 @@
 // hook layers live deltas on top of it.
 //
 // Design notes:
+//   • The hook subscribes whenever the user has board access — NOT only
+//     when ≥2 members already exist. Otherwise the owner, who is alone
+//     before invitees accept, would never spin up the channel and would
+//     silently miss every peer who joins later. Cursor + delta sends
+//     short-circuit on `peerCountRef` so a truly solo board pays almost
+//     nothing on the wire (presence track only).
 //   • Outbound shape edits: a SECOND store.listen filtered to
 //     { source: 'user', scope: 'document' } — so applied REMOTE deltas
 //     (tagged source:'remote' by mergeRemoteChanges) never re-broadcast.
@@ -129,6 +135,12 @@ export function useBoardCollaboration(
 
     setStatus("connecting");
 
+    // Live peer count — read at send time to short-circuit cursor + delta
+    // broadcasts when nobody else is on the board. Lets us subscribe on
+    // every board (so peers light up the moment they arrive) without
+    // paying for outbound traffic on solo sessions.
+    const peerCountRef = { current: 0 };
+
     // ── Outbound shape deltas (batched/coalesced) ──
     const pendingPuts = new Map<string, TLRecord>();
     const pendingRemoves = new Set<string>();
@@ -137,6 +149,12 @@ export function useBoardCollaboration(
     const flush = () => {
       flushTimer = null;
       if (pendingPuts.size === 0 && pendingRemoves.size === 0) return;
+      if (peerCountRef.current === 0) {
+        // Nobody to deliver to — drop the queue and skip the WS write.
+        pendingPuts.clear();
+        pendingRemoves.clear();
+        return;
+      }
       const puts = [...pendingPuts.values()];
       const removes = [...pendingRemoves];
       pendingPuts.clear();
@@ -225,10 +243,13 @@ export function useBoardCollaboration(
       upsertRemoteCursor(payload);
     });
 
-    // Local cursor → throttled broadcast.
+    // Local cursor → throttled broadcast. Skipped when nobody else is here
+    // (peerCountRef === 0) so solo boards don't push a cursor ping every
+    // 50ms over the WebSocket.
     let lastCursorAt = 0;
     const container = editor.getContainer();
     const onPointerMove = () => {
+      if (peerCountRef.current === 0) return;
       const now = Date.now();
       if (now - lastCursorAt < CURSOR_THROTTLE_MS) return;
       lastCursorAt = now;
@@ -269,6 +290,7 @@ export function useBoardCollaboration(
           color: m.color,
           role: m.role,
         }));
+      peerCountRef.current = others.length;
       setCollaborators(others);
 
       // Drop cursors for clients no longer present.

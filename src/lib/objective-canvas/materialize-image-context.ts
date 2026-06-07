@@ -33,7 +33,11 @@ import {
   recordContextConcept,
   type ContextConcept,
 } from "./context-frontier";
-import { upsertLibraryObject, linkObjects } from "./library-objects";
+import {
+  upsertLibraryObject,
+  linkObjects,
+  mergeObjectContentSnapshot,
+} from "./library-objects";
 import { slugifyConcept } from "./normalize-annotations";
 import type { StructuredImageExtraction } from "../ingest/extractors";
 
@@ -247,6 +251,9 @@ export async function materializeImageContext(
       narrative,
       description: args.extraction.description ?? null,
       conceptSlugs: allSlugs,
+      // Carry the style lens through — the vision extractor now returns
+      // this field (extractors.ts:StructuredImageExtraction).
+      styleAnalysis: args.extraction.style_analysis ?? null,
     });
     if (imageObjectId) {
       await linkObjects(db, {
@@ -286,16 +293,22 @@ export async function materializeImageContext(
 // First writer for the `image_source` LibraryObjectType. One row per
 // ingested image (idempotent on source_ref='img:'||fileId).
 
-interface EnsureImageSourceArgs {
+export interface EnsureImageSourceArgs {
   spaceId: string;
   userId: string;
   ingestedFileId: string;
   narrative: string | null;
   description: string | null;
   conceptSlugs: string[];
+  /** Visual grammar from the vision pass — palette / typography /
+   *  composition / patterns / motion. Carried as opaque JSON; the
+   *  taste-profile aggregator + drawer renderer parse it on read.
+   *  null when this image hasn't been style-analyzed (legacy rows
+   *  or future cheap re-runs). */
+  styleAnalysis?: unknown | null;
 }
 
-async function ensureImageSource(
+export async function ensureImageSource(
   db: AnyDb,
   args: EnsureImageSourceArgs,
 ): Promise<string | null> {
@@ -324,21 +337,38 @@ async function ensureImageSource(
     (args.description && args.description.trim()) ||
     "Image reference";
 
-  return upsertLibraryObject(db, {
+  // Base snapshot — fields we ALWAYS know how to refresh. style_analysis
+  // is intentionally NOT in here: we don't want the lazy /images backfill
+  // path (which has no style data) to wipe out a real extraction.
+  const baseSnapshot: Record<string, unknown> = {
+    image_url: imageUrl,
+    narrative: args.narrative,
+    description: args.description,
+    concept_slugs: args.conceptSlugs,
+    source_ingested_file_id: args.ingestedFileId,
+  };
+
+  const objectId = await upsertLibraryObject(db, {
     spaceId: args.spaceId,
     userId: args.userId,
     objectType: "image_source",
     title,
     summary: summary.slice(0, 280),
     sourceRef: `img:${args.ingestedFileId}`,
-    contentSnapshot: {
-      image_url: imageUrl,
-      narrative: args.narrative,
-      description: args.description,
-      concept_slugs: args.conceptSlugs,
-      source_ingested_file_id: args.ingestedFileId,
-    },
+    contentSnapshot: baseSnapshot,
   });
+
+  // Only patch style_analysis when the caller actually has one — keeps the
+  // backfill path (description-only) from clobbering a prior real
+  // extraction. mergeObjectContentSnapshot does a shallow read-merge-write
+  // on content_snapshot.
+  if (objectId && args.styleAnalysis !== undefined && args.styleAnalysis !== null) {
+    await mergeObjectContentSnapshot(db, objectId, {
+      style_analysis: args.styleAnalysis,
+    });
+  }
+
+  return objectId;
 }
 
 // ── taste-prose pass ─────────────────────────────────────────────────

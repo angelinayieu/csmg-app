@@ -37,6 +37,7 @@ import {
 import { ArrowRight, Plus } from "lucide-react";
 import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
 import { OPEN_CARD_DETAIL_EVENT } from "../shapes/oc-card-shape";
+import { usePanel } from "@/lib/objective-canvas/board-panel-signal";
 
 type RelationKey = "feeds" | "depends_on" | "derived_from";
 const RELATIONS: { key: RelationKey; label: string }[] = [
@@ -359,8 +360,16 @@ export function ConnectorDragLayer({
 
   const lineColor = appleVibe.accent.primary;
 
+  // Suppress the hover "+" while a floating doc panel (e.g. Tech Spec) is up,
+  // so a connector handle never pops over a non-canvas surface.
+  const techSpecOpen = usePanel("techSpec");
+
   const showHandle =
-    !!handlePos && !dragging && !menu && toolId === "select";
+    !!handlePos &&
+    !dragging &&
+    !menu &&
+    toolId === "select" &&
+    !techSpecOpen;
 
   return (
     <>

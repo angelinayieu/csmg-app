@@ -34,6 +34,7 @@ import {
   openResolutionStudio,
   refreshSharpening,
 } from "@/components/objective/board-bus";
+import { OPEN_CARD_DETAIL_EVENT } from "@/components/objective/canvas-interactions/object-detail-drawer";
 import { slugifyConcept } from "@/lib/objective-canvas/normalize-annotations";
 import {
   runAiResolve,
@@ -66,6 +67,48 @@ export type InsightCardShape = TLBaseShape<
     sourceIds: string[];
     /** web sources backing this node (Deep Synthesize); empty otherwise. */
     citations: InsightCitation[];
+    /** Slug of the intake optimization factor this card advances. "general"
+     *  means the model couldn't tie it to a specific factor → renders as a
+     *  low-confidence chip. Empty string on legacy / Connect cards (the
+     *  chip simply hides). */
+    factorSlug: string;
+    /** Display label for the factor chip ("Onboarding friction", "Retention",
+     *  …). Stored alongside the slug so the chip renders without re-reading
+     *  prompt_sharpening. Empty string hides the chip. */
+    factorLabel: string;
+    /** library_objects.id this card is backed by. Set on Deep Synthesize
+     *  output (the route promotes hub+branches into the object layer); empty
+     *  on legacy Connect/Synthesize cards. When set, a non-modifier click
+     *  opens the object-detail drawer (full body + metadata + back-links),
+     *  the same surface oc-cards use. */
+    objectId: string;
+    /** v2 — Focus-card micro-objective this card serves (PRIMARY trace-back).
+     *  Slug from the focus card's micros[]. When present, the micro chip
+     *  REPLACES the factor chip as the eyebrow tag — micros are the local
+     *  rubric, factors are the global weighting (and ladder under the micro
+     *  via `laddersToFactorSlugs`). Empty on legacy + v1-frame synth output. */
+    microSlug: string;
+    /** v2 — Display label for the micro chip ("Signal density", …). Empty
+     *  hides the chip → falls through to the factor chip if present. */
+    microLabel: string;
+    /** v2 — Factor slugs the micro ladders into (zero or more). Render as a
+     *  small ghost subchip below the micro chip, "→ time-to-value". Empty
+     *  array hides the subchip entirely. */
+    laddersToFactorSlugs: string[];
+    /** v2 — Display labels parallel to laddersToFactorSlugs. */
+    laddersToFactorLabels: string[];
+    /** v2 — The mechanism the cross-link rests on, ≤ 12 words. Italic line
+     *  ABOVE the body. Lets the user read "what's the rule" separate from
+     *  "what's the so-what". Empty hides the line. */
+    principle: string;
+    /** v2 — 0..1 model confidence the link is real for the focus card.
+     *  Low (< 0.55) renders the card at reduced opacity so the user can
+     *  visually skim the high-confidence ones first. -1 = unset (legacy). */
+    confidence: number;
+    /** v2 — tldraw shape id of the focus card the synth was framed around.
+     *  Lets a click on the card's "Focus: …" eyebrow chip jump back to the
+     *  source. Empty on v1-frame output. */
+    focusCardId: string;
   }
 >;
 
@@ -75,6 +118,9 @@ export type InsightCardShape = TLBaseShape<
 // Synthesize cards behaving exactly as before.
 const Versions = createShapePropsMigrationIds("insight-card", {
   addRoleAndCitations: 1,
+  addFactorTraceback: 2,
+  addObjectId: 3,
+  addMicroTraceback: 4,
 });
 
 export const insightCardMigrations = createShapePropsMigrationSequence({
@@ -90,6 +136,57 @@ export const insightCardMigrations = createShapePropsMigrationSequence({
         const p = props as Record<string, unknown>;
         delete p.role;
         delete p.citations;
+      },
+    },
+    {
+      id: Versions.addFactorTraceback,
+      up(props) {
+        const p = props as Record<string, unknown>;
+        if (p.factorSlug === undefined) p.factorSlug = "";
+        if (p.factorLabel === undefined) p.factorLabel = "";
+      },
+      down(props) {
+        const p = props as Record<string, unknown>;
+        delete p.factorSlug;
+        delete p.factorLabel;
+      },
+    },
+    {
+      id: Versions.addObjectId,
+      up(props) {
+        const p = props as Record<string, unknown>;
+        if (p.objectId === undefined) p.objectId = "";
+      },
+      down(props) {
+        const p = props as Record<string, unknown>;
+        delete p.objectId;
+      },
+    },
+    {
+      // v2 frame — micro-objectives + principle + confidence + focus-card
+      // back-link. Defaults keep v1-frame and legacy cards rendering
+      // identically (microLabel = "" hides the chip; confidence -1 means
+      // unset = no opacity treatment; arrays default to []).
+      id: Versions.addMicroTraceback,
+      up(props) {
+        const p = props as Record<string, unknown>;
+        if (p.microSlug === undefined) p.microSlug = "";
+        if (p.microLabel === undefined) p.microLabel = "";
+        if (p.laddersToFactorSlugs === undefined) p.laddersToFactorSlugs = [];
+        if (p.laddersToFactorLabels === undefined) p.laddersToFactorLabels = [];
+        if (p.principle === undefined) p.principle = "";
+        if (p.confidence === undefined) p.confidence = -1;
+        if (p.focusCardId === undefined) p.focusCardId = "";
+      },
+      down(props) {
+        const p = props as Record<string, unknown>;
+        delete p.microSlug;
+        delete p.microLabel;
+        delete p.laddersToFactorSlugs;
+        delete p.laddersToFactorLabels;
+        delete p.principle;
+        delete p.confidence;
+        delete p.focusCardId;
       },
     },
   ],
@@ -108,6 +205,16 @@ export class InsightCardShapeUtil extends BaseBoxShapeUtil<InsightCardShape> {
     color: T.string,
     sourceIds: T.arrayOf(T.string),
     citations: T.arrayOf(T.object({ title: T.string, url: T.string })),
+    factorSlug: T.string,
+    factorLabel: T.string,
+    objectId: T.string,
+    microSlug: T.string,
+    microLabel: T.string,
+    laddersToFactorSlugs: T.arrayOf(T.string),
+    laddersToFactorLabels: T.arrayOf(T.string),
+    principle: T.string,
+    confidence: T.number,
+    focusCardId: T.string,
   };
 
   static override migrations = insightCardMigrations;
@@ -115,6 +222,28 @@ export class InsightCardShapeUtil extends BaseBoxShapeUtil<InsightCardShape> {
   // Auto-sized to content (full headline always shows) — no manual resize.
   override canResize = () => false;
   override canEdit = () => false;
+
+  // Non-modifier click → open the object-detail drawer (full body + metadata
+  // + back-link graph). Mirrors oc-card's onClick: modifier-clicks fall
+  // through so multi-select still works for re-converging / re-synthesizing.
+  // Only fires when this card is backed by a library_objects row (Deep
+  // Synthesize output); legacy Connect cards have no objectId, so click is
+  // a no-op — the Keep/Dismiss buttons inside the card remain the affordance.
+  override onClick = (shape: InsightCardShape) => {
+    const i = this.editor.inputs;
+    if (i.shiftKey || i.ctrlKey || i.altKey || i.metaKey) return;
+    if (!shape.props.objectId) return;
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(
+      new CustomEvent(OPEN_CARD_DETAIL_EVENT, {
+        detail: {
+          objectId: shape.props.objectId,
+          shapeId: shape.id,
+          name: shape.props.headline,
+        },
+      }),
+    );
+  };
 
   getDefaultProps(): InsightCardShape["props"] {
     return {
@@ -128,6 +257,16 @@ export class InsightCardShapeUtil extends BaseBoxShapeUtil<InsightCardShape> {
       color: "#475569",
       sourceIds: [],
       citations: [],
+      factorSlug: "",
+      factorLabel: "",
+      objectId: "",
+      microSlug: "",
+      microLabel: "",
+      laddersToFactorSlugs: [],
+      laddersToFactorLabels: [],
+      principle: "",
+      confidence: -1,
+      focusCardId: "",
     };
   }
 
@@ -156,7 +295,35 @@ function InsightCardRenderer({
   shape: InsightCardShape;
   util: InsightCardShapeUtil;
 }) {
-  const { status, kind, role, headline, body, color, citations } = shape.props;
+  const {
+    status,
+    kind,
+    role,
+    headline,
+    body,
+    color,
+    citations,
+    factorSlug,
+    factorLabel,
+    microSlug,
+    microLabel,
+    laddersToFactorLabels,
+    principle,
+    confidence,
+  } = shape.props;
+  // v2 chip routing:
+  //   - microLabel present → primary chip is the MICRO (local rubric); the
+  //     ladder factors render as a tiny ghost subchip ("→ Retention").
+  //   - microLabel absent → fall back to the v1 factor chip (single-tier),
+  //     preserving the parallel session's render for v1-frame output.
+  // Low confidence (< 0.55, but only when set: confidence > -1) fades the
+  // whole card so a quick scan separates load-bearing from speculative.
+  const hasMicro = !!microLabel;
+  const showLowConfidence = confidence >= 0 && confidence < 0.55;
+  const primaryChipLabel = hasMicro ? microLabel : factorLabel;
+  const primaryChipIsLowConfidence = hasMicro
+    ? microSlug === ""
+    : factorSlug === "general";
   const editor = util.editor;
   const proposed = status === "proposed";
   const isHub = role === "hub";
@@ -432,12 +599,26 @@ function InsightCardRenderer({
           padding: "14px 15px 12px",
           display: "flex",
           flexDirection: "column",
-          opacity: proposed ? 0.97 : 1,
+          // v2: low-confidence branches fade so a quick scan separates
+          // load-bearing links from speculative ones. Stacks with the
+          // proposed-state opacity (multiplicative-ish via min).
+          opacity: showLowConfidence
+            ? proposed
+              ? 0.7
+              : 0.75
+            : proposed
+              ? 0.97
+              : 1,
           fontFamily:
             '-apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui, sans-serif',
         }}
       >
-        {/* Eyebrow — the AI provenance tag. */}
+        {/* Eyebrow — the AI provenance tag + (when present) the optimization-
+            factor chip. The chip is the trace-back to the seed objective: it
+            tells the user which intake-defined factor this insight advances,
+            so a synth card never reads as a free-floating generality. A
+            "general" slug means the model couldn't pin it down — render at
+            reduced opacity so low-confidence reads as such at a glance. */}
         <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
           <Sparkle style={{ width: 12, height: 12, color }} strokeWidth={2.4} />
           <span
@@ -450,6 +631,40 @@ function InsightCardRenderer({
           >
             {eyebrow}
           </span>
+          {/* v2: PRIMARY chip = micro label (focus-card local rubric) when
+              present, else falls back to the v1 factor label. The micro chip
+              reads as "Signal density" — instantly tied to the focus card —
+              instead of an abstract intake factor like "Retention". */}
+          {primaryChipLabel && (
+            <span
+              title={
+                hasMicro
+                  ? `Addresses micro-objective: ${primaryChipLabel}`
+                  : primaryChipIsLowConfidence
+                    ? "No specific intake factor — low confidence"
+                    : `Addresses factor: ${primaryChipLabel}`
+              }
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                padding: "1px 6px",
+                borderRadius: 999,
+                border: `1px solid ${color}30`,
+                background: `${color}10`,
+                color: appleVibe.text.secondary,
+                fontSize: 9.5,
+                fontWeight: 600,
+                letterSpacing: "0.01em",
+                maxWidth: 140,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                opacity: primaryChipIsLowConfidence ? 0.55 : 1,
+              }}
+            >
+              {primaryChipLabel}
+            </span>
+          )}
           {proposed && (
             <span
               style={{
@@ -465,6 +680,30 @@ function InsightCardRenderer({
           )}
         </div>
 
+        {/* v2: ghost ladder subchip — "→ Retention · Time-to-value". Tells
+            the user which global optimization factors the focus-card micro
+            ladders into, without consuming a full chip row. Only shown when
+            the primary chip IS a micro (the v1 single-tier factor chip
+            already IS the global factor). */}
+        {hasMicro && laddersToFactorLabels.length > 0 && (
+          <div
+            style={{
+              marginTop: 4,
+              marginLeft: 17, // align under the eyebrow text, past the sparkle
+              fontSize: 9.5,
+              fontWeight: 500,
+              color: appleVibe.text.tertiary,
+              letterSpacing: "0.01em",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+            title={`Ladders to: ${laddersToFactorLabels.join(", ")}`}
+          >
+            → {laddersToFactorLabels.slice(0, 3).join(" · ")}
+          </div>
+        )}
+
         {/* Headline — the relationship / insight, lead element. */}
         <div
           style={{
@@ -479,7 +718,30 @@ function InsightCardRenderer({
           {headline}
         </div>
 
-        {/* Body — the "why" / the "so what". */}
+        {/* v2: principle — the mechanism the cross-link rests on, ≤ 12
+            words. Italic line above the body so the user reads "what's the
+            rule" separate from "what's the so-what". Only on v2-frame
+            output; v1 + legacy + Connect cards leave it empty. */}
+        {principle && (
+          <div
+            style={{
+              marginTop: 6,
+              fontSize: 11,
+              fontWeight: 500,
+              fontStyle: "italic",
+              lineHeight: 1.35,
+              color: appleVibe.text.tertiary,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {principle}
+          </div>
+        )}
+
+        {/* Body — the "why" / the "so what". No clamp: the card auto-grows
+            (useLayoutEffect above) so the full thought is always readable;
+            silent mid-sentence truncation was the biggest "what does this
+            even say" complaint on Deep Synthesize output. */}
         {body && (
           <div
             style={{
@@ -488,10 +750,7 @@ function InsightCardRenderer({
               fontWeight: 450,
               lineHeight: 1.42,
               color: appleVibe.text.secondary,
-              display: "-webkit-box",
-              WebkitLineClamp: citations.length > 0 ? 2 : proposed ? 3 : 4,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
+              overflowWrap: "anywhere",
             }}
           >
             {body}

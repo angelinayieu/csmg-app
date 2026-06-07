@@ -27,14 +27,21 @@ import {
   RefreshCw,
   Sparkles,
   Check,
+  Plus,
+  X,
+  Search,
+  ImageIcon,
+  ArrowUpRight,
 } from "@/lib/cute-icons";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import type {
+  StyleSynthesis,
   TasteProfileSnapshot,
   TasteSection,
   TasteVocabEntry,
 } from "@/lib/objective-canvas/taste-profile";
 import { GLOSSARY_KINDS, type GlossaryKind } from "@/lib/objective-canvas/generate-glossary";
+import { OPEN_CARD_DETAIL_EVENT } from "./object-detail-drawer";
 
 interface Props {
   spaceId: string;
@@ -44,6 +51,7 @@ export function TasteProfileView({ spaceId }: Props) {
   const [snap, setSnap] = useState<TasteProfileSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [regenerating, setRegenerating] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -106,6 +114,16 @@ export function TasteProfileView({ spaceId }: Props) {
     [spaceId],
   );
 
+  const refreshAfterImport = useCallback(
+    async (delayMs = 0) => {
+      if (delayMs > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      }
+      await regenerate();
+    },
+    [regenerate],
+  );
+
   if (loading && !snap) {
     return (
       <div style={loadingState}>
@@ -120,42 +138,61 @@ export function TasteProfileView({ spaceId }: Props) {
 
   if (!snap || snap.thin_signal) {
     return (
-      <div style={emptyState}>
-        <Sparkles
-          style={{ width: 24, height: 24, color: appleVibe.text.faint }}
-          strokeWidth={2}
-        />
-        <div style={emptyTitle}>No taste profile yet</div>
-        <p style={emptyHint}>
-          Add an objective, drop a source, or coin a few terms — then
-          generate to synthesize who you are for this work.
-        </p>
-        <button
-          type="button"
-          onClick={() => void regenerate()}
-          disabled={regenerating}
-          style={primaryCta}
-        >
-          {regenerating ? (
-            <>
-              <Loader2
-                style={{
-                  width: 12,
-                  height: 12,
-                  animation: "spin 1s linear infinite",
-                }}
-                strokeWidth={2.6}
-              />
-              Generating…
-            </>
-          ) : (
-            <>
-              <Sparkles style={{ width: 12, height: 12 }} strokeWidth={2.6} />
-              Generate
-            </>
-          )}
-        </button>
-      </div>
+      <>
+        <div style={emptyState}>
+          <Sparkles
+            style={{ width: 24, height: 24, color: appleVibe.text.faint }}
+            strokeWidth={2}
+          />
+          <div style={emptyTitle}>No taste profile yet</div>
+          <p style={emptyHint}>
+            Add an objective, drop a source, or coin a few terms — then
+            generate to synthesize who you are for this work.
+          </p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              style={ghostCta}
+            >
+              <Plus style={{ width: 12, height: 12 }} strokeWidth={2.6} />
+              Add reference
+            </button>
+            <button
+              type="button"
+              onClick={() => void regenerate()}
+              disabled={regenerating}
+              style={primaryCta}
+            >
+              {regenerating ? (
+                <>
+                  <Loader2
+                    style={{
+                      width: 12,
+                      height: 12,
+                      animation: "spin 1s linear infinite",
+                    }}
+                    strokeWidth={2.6}
+                  />
+                  Generating…
+                </>
+              ) : (
+                <>
+                  <Sparkles style={{ width: 12, height: 12 }} strokeWidth={2.6} />
+                  Generate
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+        {addOpen && (
+          <AddReferenceDialog
+            spaceId={spaceId}
+            onClose={() => setAddOpen(false)}
+            onAdded={refreshAfterImport}
+          />
+        )}
+      </>
     );
   }
 
@@ -200,6 +237,12 @@ export function TasteProfileView({ spaceId }: Props) {
 
       <VocabularySection vocabulary={snap.vocabulary} />
 
+      <VisualStyleSection
+        styleSynthesis={snap.style_synthesis}
+        pinned={!!snap.pinned.style_synthesis}
+        onPin={(p) => void patchSection("style_synthesis", undefined, p)}
+      />
+
       <ListSection
         title="Tensions"
         hint="The real tradeoffs your work surfaces. Edit to override."
@@ -209,7 +252,10 @@ export function TasteProfileView({ spaceId }: Props) {
         onPin={(p) => void patchSection("tensions", undefined, p)}
       />
 
-      <SourcesSection sources={snap.sources} />
+      <SourcesSection
+        sources={snap.sources}
+        onAdd={() => setAddOpen(true)}
+      />
 
       <ListSection
         title="No-gos"
@@ -224,6 +270,14 @@ export function TasteProfileView({ spaceId }: Props) {
         Last generated {timeAgo(snap.generated_at) ?? "—"}. Pinned sections
         stay yours across regenerations.
       </div>
+
+      {addOpen && (
+        <AddReferenceDialog
+          spaceId={spaceId}
+          onClose={() => setAddOpen(false)}
+          onAdded={refreshAfterImport}
+        />
+      )}
     </div>
   );
 }
@@ -436,44 +490,413 @@ function KindChipRow({
   );
 }
 
+// ── visual style (deterministic — aggregated from image refs) ─────────
+
+function VisualStyleSection({
+  styleSynthesis,
+  pinned,
+  onPin,
+}: {
+  styleSynthesis: StyleSynthesis;
+  pinned: boolean;
+  onPin: (p: boolean) => void;
+}) {
+  const hasSignal =
+    styleSynthesis.source_count > 0 &&
+    (styleSynthesis.dominant_palette.length > 0 ||
+      styleSynthesis.accent_palette.length > 0 ||
+      styleSynthesis.typography_voice !== "unknown" ||
+      styleSynthesis.composition_density !== "unknown" ||
+      styleSynthesis.composition_grid !== "unknown" ||
+      styleSynthesis.recurring_patterns.length > 0);
+
+  return (
+    <SectionShell
+      title="Visual style"
+      subtitle={
+        hasSignal
+          ? `${styleSynthesis.source_count} ref${
+              styleSynthesis.source_count === 1 ? "" : "s"
+            } · ${Math.round(styleSynthesis.signal_strength * 100)}% signal`
+          : "0 refs"
+      }
+      pinned={pinned}
+      onPin={onPin}
+    >
+      {!hasSignal ? (
+        <p style={emptyHint}>
+          Drop images to teach palette, typography, composition, and reusable
+          UI patterns.
+        </p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {(styleSynthesis.dominant_palette.length > 0 ||
+            styleSynthesis.accent_palette.length > 0) && (
+            <div style={paletteWrap}>
+              {styleSynthesis.dominant_palette.map((hex) => (
+                <span
+                  key={`dom-${hex}`}
+                  title={hex}
+                  style={{ ...colorSwatch, background: hex }}
+                />
+              ))}
+              {styleSynthesis.accent_palette.map((hex) => (
+                <span
+                  key={`acc-${hex}`}
+                  title={hex}
+                  style={{
+                    ...colorSwatch,
+                    background: hex,
+                    width: 18,
+                    height: 18,
+                  }}
+                />
+              ))}
+            </div>
+          )}
+
+          <div style={styleAxisGrid}>
+            <StyleAxis label="Temp" value={styleSynthesis.palette_temperature} />
+            <StyleAxis label="Type" value={styleSynthesis.typography_voice} />
+            <StyleAxis label="Density" value={styleSynthesis.composition_density} />
+            <StyleAxis label="Grid" value={styleSynthesis.composition_grid} />
+          </div>
+
+          {styleSynthesis.recurring_patterns.length > 0 && (
+            <div>
+              <div style={chipRowLabel}>Recurring patterns</div>
+              <div style={chipWrap}>
+                {styleSynthesis.recurring_patterns.map((p) => (
+                  <span key={p} style={quietChipStyle}>
+                    {p}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {styleSynthesis.motion_cues.length > 0 && (
+            <div>
+              <div style={chipRowLabel}>Motion cues</div>
+              <div style={chipWrap}>
+                {styleSynthesis.motion_cues.map((m) => (
+                  <span key={m} style={quietChipStyle}>
+                    {m}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </SectionShell>
+  );
+}
+
+function StyleAxis({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={styleAxisCell}>
+      <span style={styleAxisLabel}>{label}</span>
+      <span style={styleAxisValue}>{formatAxisValue(value)}</span>
+    </div>
+  );
+}
+
+function formatAxisValue(value: string): string {
+  if (!value || value === "unknown") return "Unknown";
+  return value
+    .split("_")
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 // ── sources (deterministic) ──────────────────────────────────────────
 
 function SourcesSection({
   sources,
+  onAdd,
 }: {
   sources: TasteProfileSnapshot["sources"];
+  onAdd: () => void;
 }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? sources.filter((s) => {
+        const hay = [
+          s.name,
+          s.sourceUrl ?? "",
+          ...(s.conceptSlugs ?? []),
+          ...(s.patterns ?? []),
+        ]
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(q);
+      })
+    : sources;
+
   if (sources.length === 0) {
     return (
-      <SectionShell title="Sources" subtitle="0">
-        <p style={emptyHint}>
-          Drop an image to add a source. Its concepts will appear here.
-        </p>
+      <SectionShell title="Moodboard" subtitle="0 refs">
+        <div style={emptyMoodboard}>
+          <div style={emptyTitle}>No visual references</div>
+          <button type="button" onClick={onAdd} style={primaryCta}>
+            <Plus style={{ width: 12, height: 12 }} strokeWidth={2.6} />
+            Add reference
+          </button>
+        </div>
       </SectionShell>
     );
   }
   return (
-    <SectionShell title="Sources" subtitle={`${sources.length}`}>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-        {sources.map((s) => (
-          <div key={s.ingestedFileId} style={sourceTile} title={s.name}>
+    <SectionShell title="Moodboard" subtitle={`${sources.length} refs`}>
+      <div style={moodboardToolbar}>
+        <label style={searchBox}>
+          <Search style={{ width: 12, height: 12, color: appleVibe.text.faint }} strokeWidth={2.4} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search refs"
+            style={searchInput}
+          />
+        </label>
+        <button type="button" onClick={onAdd} style={addMiniBtn} title="Add reference">
+          <Plus style={{ width: 13, height: 13 }} strokeWidth={2.7} />
+        </button>
+      </div>
+
+      <div style={moodboardGrid}>
+        {filtered.map((s) => (
+          <button
+            key={s.ingestedFileId}
+            type="button"
+            style={sourceTile}
+            title={s.name}
+            onClick={() => {
+              if (!s.objectId) return;
+              window.dispatchEvent(
+                new CustomEvent(OPEN_CARD_DETAIL_EVENT, {
+                  detail: { objectId: s.objectId },
+                }),
+              );
+            }}
+          >
             {s.thumbUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={s.thumbUrl} alt={s.name} style={sourceThumb} />
             ) : (
               <div style={{ ...sourceThumb, background: appleVibe.surface.chip }} />
             )}
-            <div style={sourceCaption}>{s.name}</div>
-            {s.conceptSlugs.length > 0 && (
-              <div style={sourceCount}>
-                +{s.conceptSlugs.length} concept
-                {s.conceptSlugs.length === 1 ? "" : "s"}
+            <div style={sourceTileBody}>
+              <div style={sourceCaption}>{s.name}</div>
+              {s.palette.length > 0 && (
+                <div style={sourcePalette}>
+                  {s.palette.map((hex) => (
+                    <span
+                      key={`${s.ingestedFileId}-${hex}`}
+                      title={hex}
+                      style={{ ...sourceSwatch, background: hex }}
+                    />
+                  ))}
+                </div>
+              )}
+              <div style={sourceMetaRow}>
+                {s.sourceType === "url" || s.sourceUrl ? (
+                  <span style={sourceCount}>URL</span>
+                ) : (
+                  <span style={sourceCount}>Image</span>
+                )}
+                {s.conceptSlugs.length > 0 && (
+                  <span style={sourceCount}>
+                    {s.conceptSlugs.length} concept
+                    {s.conceptSlugs.length === 1 ? "" : "s"}
+                  </span>
+                )}
               </div>
-            )}
-          </div>
+              {(s.patterns.length > 0 || s.conceptSlugs.length > 0) && (
+                <div style={sourceTagRow}>
+                  {[...s.patterns, ...s.conceptSlugs].slice(0, 3).map((tag) => (
+                    <span key={tag} style={sourceTag}>
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </button>
         ))}
       </div>
+      {filtered.length === 0 && <p style={emptyHint}>No matching references.</p>}
     </SectionShell>
+  );
+}
+
+function AddReferenceDialog({
+  spaceId,
+  onClose,
+  onAdded,
+}: {
+  spaceId: string;
+  onClose: () => void;
+  onAdded: (delayMs?: number) => Promise<void>;
+}) {
+  const [mode, setMode] = useState<"file" | "url">("file");
+  const [file, setFile] = useState<File | null>(null);
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function uploadFile(selected: File) {
+    const form = new FormData();
+    form.append("file", selected);
+    form.append("space_id", spaceId);
+    const ingest = await fetch("/api/ingest", { method: "POST", body: form });
+    const ingested = (await ingest.json()) as {
+      ingested_file_id?: string;
+      error?: string;
+      code?: string;
+      awaiting_vision?: boolean;
+    };
+    if (!ingest.ok || !ingested.ingested_file_id) {
+      throw new Error(ingested.error || "Upload failed");
+    }
+    if (ingested.awaiting_vision) {
+      const visionForm = new FormData();
+      visionForm.append("ingested_file_id", ingested.ingested_file_id);
+      visionForm.append("file", selected);
+      const vision = await fetch("/api/ingest/vision-extract", {
+        method: "POST",
+        body: visionForm,
+      });
+      if (!vision.ok) {
+        const j = (await vision.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(j?.error || "Image analysis failed");
+      }
+    }
+  }
+
+  async function addUrlSnapshot() {
+    const res = await fetch("/api/ingest/url-snapshot", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        spaceId,
+        url,
+        fullPage: true,
+      }),
+    });
+    const j = (await res.json().catch(() => null)) as
+      | { error?: string; detail?: string }
+      | null;
+    if (!res.ok) throw new Error(j?.detail || j?.error || "URL capture failed");
+  }
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (mode === "file") {
+        if (!file) throw new Error("Choose an image first");
+        await uploadFile(file);
+        await onAdded();
+      } else {
+        if (!url.trim()) throw new Error("Paste a URL first");
+        await addUrlSnapshot();
+        await onAdded(5500);
+      }
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add reference");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={modalScrim} onPointerDown={onClose}>
+      <div style={addDialog} onPointerDown={(e) => e.stopPropagation()}>
+        <div style={dialogHeader}>
+          <div>
+            <div style={pageEyebrow}>Moodboard</div>
+            <div style={dialogTitle}>Add reference</div>
+          </div>
+          <button type="button" onClick={onClose} style={iconBtn} title="Close">
+            <X style={{ width: 14, height: 14 }} strokeWidth={2.5} />
+          </button>
+        </div>
+
+        <div style={segmentedControl}>
+          <button
+            type="button"
+            onClick={() => setMode("file")}
+            style={mode === "file" ? segmentActive : segmentBtn}
+          >
+            <ImageIcon style={{ width: 12, height: 12 }} strokeWidth={2.5} />
+            Image
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("url")}
+            style={mode === "url" ? segmentActive : segmentBtn}
+          >
+            <ArrowUpRight style={{ width: 12, height: 12 }} strokeWidth={2.5} />
+            URL
+          </button>
+        </div>
+
+        {mode === "file" ? (
+          <label
+            style={dropZone}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              const dropped = e.dataTransfer.files?.[0] ?? null;
+              if (dropped) setFile(dropped);
+            }}
+          >
+            <ImageIcon style={{ width: 18, height: 18, color: appleVibe.text.faint }} strokeWidth={2.2} />
+            <span style={dropTitle}>{file ? file.name : "Drop or browse image"}</span>
+            <input
+              type="file"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+          </label>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://www.apple.com"
+              style={inputStyle}
+            />
+            <p style={dialogHint}>
+              Captures style cues from the page screenshot.
+            </p>
+          </div>
+        )}
+
+        {error && <div style={errorText}>{error}</div>}
+
+        <div style={dialogActions}>
+          <button type="button" onClick={onClose} style={ghostCta} disabled={busy}>
+            Cancel
+          </button>
+          <button type="button" onClick={() => void submit()} style={primaryCta} disabled={busy}>
+            {busy ? (
+              <Loader2
+                style={{ width: 12, height: 12, animation: "spin 1s linear infinite" }}
+                strokeWidth={2.6}
+              />
+            ) : (
+              <Plus style={{ width: 12, height: 12 }} strokeWidth={2.6} />
+            )}
+            Add
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -845,34 +1268,202 @@ const chipStyle: CSSProperties = {
   border: `1px solid ${appleVibe.stroke.hairline}`,
 };
 
-const sourceTile: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 3,
-  width: 84,
+const quietChipStyle: CSSProperties = {
+  ...chipStyle,
+  background: appleVibe.surface.chip,
+  color: appleVibe.text.secondary,
 };
 
-const sourceThumb: CSSProperties = {
-  width: 84,
-  height: 64,
-  objectFit: "cover",
+const paletteWrap: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+};
+
+const colorSwatch: CSSProperties = {
+  width: 24,
+  height: 24,
   borderRadius: 8,
   border: `1px solid ${appleVibe.stroke.soft}`,
+  boxShadow: appleVibe.shadow.chip,
+  flex: "0 0 auto",
 };
 
-const sourceCaption: CSSProperties = {
-  fontSize: 10.5,
-  color: appleVibe.text.secondary,
+const styleAxisGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 6,
+};
+
+const styleAxisCell: CSSProperties = {
+  minWidth: 0,
+  padding: "6px 8px",
+  borderRadius: 8,
+  background: appleVibe.surface.chip,
+  border: `1px solid ${appleVibe.stroke.hairline}`,
+};
+
+const styleAxisLabel: CSSProperties = {
+  display: "block",
+  fontSize: 9.5,
+  color: appleVibe.text.faint,
+  fontFamily: appleVibe.font.stack,
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+};
+
+const styleAxisValue: CSSProperties = {
+  display: "block",
+  marginTop: 2,
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: appleVibe.text.primary,
   fontFamily: appleVibe.font.stack,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
 };
 
+const emptyMoodboard: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: 8,
+};
+
+const moodboardToolbar: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  marginBottom: 8,
+};
+
+const searchBox: CSSProperties = {
+  minWidth: 0,
+  flex: 1,
+  display: "flex",
+  alignItems: "center",
+  gap: 5,
+  padding: "5px 8px",
+  borderRadius: 8,
+  border: `1px solid ${appleVibe.stroke.soft}`,
+  background: appleVibe.surface.base,
+};
+
+const searchInput: CSSProperties = {
+  minWidth: 0,
+  flex: 1,
+  border: "none",
+  outline: "none",
+  background: "transparent",
+  color: appleVibe.text.primary,
+  fontSize: 11.5,
+  fontFamily: appleVibe.font.stack,
+};
+
+const addMiniBtn: CSSProperties = {
+  width: 28,
+  height: 28,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  borderRadius: 8,
+  border: `1px solid ${appleVibe.stroke.soft}`,
+  background: appleVibe.surface.chip,
+  color: appleVibe.text.primary,
+  cursor: "pointer",
+};
+
+const moodboardGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 8,
+};
+
+const sourceTile: CSSProperties = {
+  minWidth: 0,
+  display: "flex",
+  flexDirection: "column",
+  gap: 0,
+  padding: 0,
+  textAlign: "left",
+  border: `1px solid ${appleVibe.stroke.soft}`,
+  borderRadius: 8,
+  background: appleVibe.surface.base,
+  overflow: "hidden",
+  cursor: "pointer",
+  boxShadow: appleVibe.shadow.chip,
+};
+
+const sourceThumb: CSSProperties = {
+  width: "100%",
+  aspectRatio: "1.42 / 1",
+  objectFit: "cover",
+  display: "block",
+  background: appleVibe.surface.chip,
+};
+
+const sourceTileBody: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 5,
+  padding: 7,
+};
+
+const sourceCaption: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  lineHeight: 1.25,
+  color: appleVibe.text.primary,
+  fontFamily: appleVibe.font.stack,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const sourcePalette: CSSProperties = {
+  display: "flex",
+  gap: 3,
+};
+
+const sourceSwatch: CSSProperties = {
+  width: 13,
+  height: 13,
+  borderRadius: 4,
+  border: `1px solid ${appleVibe.stroke.hairline}`,
+};
+
+const sourceMetaRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 5,
+  flexWrap: "wrap",
+};
+
 const sourceCount: CSSProperties = {
   fontSize: 9.5,
   color: appleVibe.text.faint,
   fontFamily: appleVibe.font.stack,
+};
+
+const sourceTagRow: CSSProperties = {
+  display: "flex",
+  gap: 3,
+  flexWrap: "wrap",
+};
+
+const sourceTag: CSSProperties = {
+  maxWidth: "100%",
+  padding: "1px 5px",
+  borderRadius: 6,
+  border: `1px solid ${appleVibe.stroke.hairline}`,
+  background: appleVibe.surface.chip,
+  color: appleVibe.text.tertiary,
+  fontSize: 9.5,
+  fontFamily: appleVibe.font.stack,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
 };
 
 const listStyle: CSSProperties = {
@@ -932,4 +1523,139 @@ const emptyHint: CSSProperties = {
   color: appleVibe.text.tertiary,
   maxWidth: 280,
   fontFamily: appleVibe.font.stack,
+};
+
+const modalScrim: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 1000,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 18,
+  background: "rgba(18, 20, 24, 0.22)",
+  backdropFilter: "blur(8px)",
+};
+
+const addDialog: CSSProperties = {
+  width: "min(380px, 100%)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+  padding: 14,
+  borderRadius: 12,
+  border: `1px solid ${appleVibe.stroke.soft}`,
+  background: appleVibe.surface.card,
+  boxShadow: appleVibe.shadow.card,
+};
+
+const dialogHeader: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 12,
+};
+
+const dialogTitle: CSSProperties = {
+  marginTop: 2,
+  fontSize: 15,
+  fontWeight: 650,
+  color: appleVibe.text.primary,
+  fontFamily: appleVibe.font.display,
+};
+
+const iconBtn: CSSProperties = {
+  width: 28,
+  height: 28,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  borderRadius: 8,
+  border: `1px solid ${appleVibe.stroke.soft}`,
+  background: appleVibe.surface.base,
+  color: appleVibe.text.secondary,
+  cursor: "pointer",
+};
+
+const segmentedControl: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 4,
+  padding: 3,
+  borderRadius: 9,
+  background: appleVibe.surface.chip,
+  border: `1px solid ${appleVibe.stroke.hairline}`,
+};
+
+const segmentBtn: CSSProperties = {
+  minWidth: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 5,
+  padding: "6px 8px",
+  borderRadius: 7,
+  border: "none",
+  background: "transparent",
+  color: appleVibe.text.tertiary,
+  fontSize: 11.5,
+  fontWeight: 600,
+  fontFamily: appleVibe.font.stack,
+  cursor: "pointer",
+};
+
+const segmentActive: CSSProperties = {
+  ...segmentBtn,
+  background: appleVibe.surface.card,
+  color: appleVibe.text.primary,
+  boxShadow: appleVibe.shadow.chip,
+};
+
+const dropZone: CSSProperties = {
+  minHeight: 118,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  padding: 16,
+  borderRadius: 10,
+  border: `1px dashed ${appleVibe.stroke.medium}`,
+  background: appleVibe.surface.base,
+  cursor: "pointer",
+};
+
+const dropTitle: CSSProperties = {
+  maxWidth: "100%",
+  fontSize: 12,
+  fontWeight: 600,
+  color: appleVibe.text.secondary,
+  fontFamily: appleVibe.font.stack,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const dialogHint: CSSProperties = {
+  margin: 0,
+  fontSize: 11,
+  color: appleVibe.text.faint,
+  fontFamily: appleVibe.font.stack,
+};
+
+const errorText: CSSProperties = {
+  padding: "7px 9px",
+  borderRadius: 8,
+  border: "1px solid rgba(190, 18, 60, 0.22)",
+  background: "rgba(190, 18, 60, 0.06)",
+  color: "#be123c",
+  fontSize: 11.5,
+  lineHeight: 1.35,
+  fontFamily: appleVibe.font.stack,
+};
+
+const dialogActions: CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 7,
 };

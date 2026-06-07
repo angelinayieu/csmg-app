@@ -115,6 +115,11 @@ export function ConvergeDivergePopup({
         flexDirection: "column",
         gap: 8,
         alignItems: flip ? "flex-end" : "flex-start",
+        // Pin the rail width so the right-edge (flipped) anchor hugs the card
+        // even when the verbs are collapsed — otherwise the container shrinks
+        // to the 40px circle and `flex-end` floats the buttons ~92px left of
+        // the card's left edge (the recurring "buttons drift away" glitch).
+        width: EXPANDED,
         fontFamily: appleVibe.font.stack,
       }}
     >

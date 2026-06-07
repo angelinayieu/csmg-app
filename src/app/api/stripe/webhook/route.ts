@@ -36,19 +36,39 @@ export async function POST(request: Request) {
     const credits = parseInt(session.metadata?.credits ?? "0", 10);
     const packId = session.metadata?.packId ?? "unknown";
 
-    if (!userId || credits <= 0) {
-      console.error("[Stripe Webhook] Invalid metadata:", session.metadata);
+    if (!userId) {
+      console.error("[Stripe Webhook] Missing userId metadata:", session.metadata);
       return NextResponse.json({ error: "Invalid metadata" }, { status: 400 });
     }
 
     const supabase = createServiceClient();
 
-    try {
-      const newBalance = await addCredits(supabase, userId, credits, `purchase_${packId}`);
-      console.info(`[Stripe Webhook] Added ${credits} credits to user ${userId}. New balance: ${newBalance}`);
-    } catch (err) {
-      console.error("[Stripe Webhook] Failed to add credits:", err);
-      return NextResponse.json({ error: "Failed to add credits" }, { status: 500 });
+    // Persist the Stripe customer id on the profile so the billing portal +
+    // future subscriptions reuse the same customer. Works for BOTH one-time
+    // pack checkouts (mode=payment) and subscription checkouts (mode=subscription).
+    const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+    if (customerId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any)
+        .from("profiles")
+        .update({ stripe_customer_id: customerId })
+        .eq("id", userId)
+        .then(() => {}, (err: unknown) => {
+          console.warn("[Stripe Webhook] Failed to persist stripe_customer_id:", err);
+        });
+    }
+
+    // Credit grant only fires when this session bought a credit pack — the
+    // subscription path has credits === 0 and is handled by the subscription
+    // lifecycle events below.
+    if (credits > 0) {
+      try {
+        const newBalance = await addCredits(supabase, userId, credits, `purchase_${packId}`);
+        console.info(`[Stripe Webhook] Added ${credits} credits to user ${userId}. New balance: ${newBalance}`);
+      } catch (err) {
+        console.error("[Stripe Webhook] Failed to add credits:", err);
+        return NextResponse.json({ error: "Failed to add credits" }, { status: 500 });
+      }
     }
   }
 
@@ -70,6 +90,20 @@ export async function POST(request: Request) {
       try {
         const supabase = createServiceClient();
         await setUserPlan(supabase, userId, resolved.plan, resolved.weekly);
+        // Stamp the subscription + customer ids so the portal route can find
+        // them and the credits page can show "Manage subscription".
+        const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer?.id ?? null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase as any)
+          .from("profiles")
+          .update({
+            stripe_subscription_id: sub.id,
+            ...(customerId ? { stripe_customer_id: customerId } : {}),
+          })
+          .eq("id", userId)
+          .then(() => {}, (err: unknown) => {
+            console.warn("[Stripe Webhook] Failed to persist subscription id:", err);
+          });
         console.info(
           `[Stripe Webhook] Set ${userId} → plan ${resolved.plan} (${resolved.weekly} rounds/wk)`,
         );
@@ -88,6 +122,14 @@ export async function POST(request: Request) {
       try {
         const supabase = createServiceClient();
         await setUserPlan(supabase, userId, "free", FREE_WEEKLY_ROUNDS);
+        // Clear the subscription id but keep the customer id so the portal
+        // still resolves (lets ex-subscribers download invoices, resubscribe).
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase as any)
+          .from("profiles")
+          .update({ stripe_subscription_id: null })
+          .eq("id", userId)
+          .then(() => {}, () => {});
         console.info(`[Stripe Webhook] Downgraded ${userId} → free`);
       } catch (err) {
         console.error("[Stripe Webhook] Failed to downgrade plan:", err);

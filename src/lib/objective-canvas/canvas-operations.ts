@@ -149,7 +149,7 @@ export const CANVAS_OPERATIONS: CanvasOperation[] = [
     label: "Make plan",
     intent: "Turn this into an actionable plan",
     contract: "text",
-    augmentMode: "plan",
+    endpoint: "/api/canvas/make-plan",
     requiresLlm: true,
     wired: true,
   },
@@ -485,6 +485,10 @@ async function runIdeaOp(
       webSearch: opts.webSearch,
       // Honored by /api/canvas/custom-op (the user's instruction).
       prompt: opts.prompt,
+      // Honored by /api/canvas/make-plan. Other native op routes ignore it.
+      spaceId: opts.spaceId,
+      cardId: target.shapeId,
+      sourceKind: target.sourceKind,
     }),
   );
   if (!res.ok) throw await transportErrorFor(res);

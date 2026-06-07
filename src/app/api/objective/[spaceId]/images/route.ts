@@ -6,6 +6,7 @@
 
 import { NextResponse } from "next/server";
 import { safeAuth } from "@/lib/api-helpers";
+import { ensureImageSource } from "@/lib/objective-canvas/materialize-image-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     )
     .eq("space_id", spaceId)
     .eq("user_id", user.id)
-    .eq("source_type", "file")
+    .in("source_type", ["file", "url"])
     .like("mime_type", "image/%")
     .not("image_url", "is", null)
     .order("created_at", { ascending: true })
@@ -55,10 +56,15 @@ export async function GET(_req: Request, ctx: Ctx) {
 
   const typedRows = (rows ?? []) as ImageRow[];
 
-  // Lazy backfill: for analyzed rows missing image_object_id, look up an
-  // existing image_source library_object by source_ref='img:<id>' (a
-  // sibling vision-extract may have written it after this row). When
-  // found, patch the FK so subsequent reads skip this branch.
+  // Lazy backfill for analyzed rows missing image_object_id. Three-step:
+  //   (1) look up an existing image_source library_object by
+  //       source_ref='img:<id>' — a sibling vision-extract may have
+  //       written it after this row's last update.
+  //   (2) for rows STILL missing one (uploaded before ensureImageSource
+  //       landed), CREATE the image_source row inline via ensureImageSource.
+  //       This is a pure DB upsert — safe in a GET path, no LLM call.
+  //   (3) patch ingested_files.image_object_id so the next read short-
+  //       circuits.
   const needsBackfill = typedRows.filter(
     (r) => !r.image_object_id && r.vision_completed_at,
   );
@@ -77,7 +83,24 @@ export async function GET(_req: Request, ctx: Ctx) {
         bySourceRef.set(o.source_ref, o.id);
       }
       for (const r of needsBackfill) {
-        const objectId = bySourceRef.get(`img:${r.id}`);
+        // (1) existing row found.
+        let objectId = bySourceRef.get(`img:${r.id}`) ?? null;
+        // (2) no row yet — create it. Safe: pure upsert, no LLM call.
+        if (!objectId) {
+          try {
+            objectId = await ensureImageSource(db, {
+              spaceId,
+              userId: user.id,
+              ingestedFileId: r.id,
+              narrative: null,
+              description: r.image_description ?? null,
+              conceptSlugs: [],
+            });
+          } catch {
+            objectId = null;
+          }
+        }
+        // (3) patch the FK so subsequent reads skip this branch.
         if (objectId) {
           r.image_object_id = objectId;
           try {

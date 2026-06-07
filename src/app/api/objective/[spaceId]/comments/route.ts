@@ -119,7 +119,9 @@ export async function POST(
 
   // Author identity snapshot — what the card chip will render. Mirrors the
   // voice-note pattern so we don't have to re-fetch on every render.
-  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const meta =
+    ((user as { user_metadata?: Record<string, unknown> }).user_metadata ??
+      {}) as Record<string, unknown>;
   const authorName =
     (typeof meta.full_name === "string" && meta.full_name) ||
     (typeof meta.name === "string" && meta.name) ||

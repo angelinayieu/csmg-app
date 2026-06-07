@@ -15,7 +15,7 @@
 // divide by the zoom. Composed with the sharpening connectors in
 // whiteboard-base BOARD_COMPONENTS.
 
-import { useEditor, useValue, type Editor } from "tldraw";
+import { useEditor, useValue, type Editor, type TLShapeId } from "tldraw";
 import type { CommentCardShape } from "../shapes/comment-card-shape";
 
 const STROKE_QUIET = "rgba(99,102,241,0.32)"; // soft indigo, mostly invisible
@@ -71,7 +71,7 @@ function computeSegments(editor: Editor): Seg[] {
     if (!targets || targets.length === 0) continue;
     const isHot = selected.has(c.id) || hovered === c.id;
     for (const tId of targets) {
-      const tb = boundsById.get(tId);
+      const tb = boundsById.get(tId as TLShapeId);
       if (!tb) continue;
       // Strand from the comment's edge facing the target, to the target's
       // edge facing the comment — symmetric, so it always looks connected.
@@ -90,7 +90,7 @@ function computeSegments(editor: Editor): Seg[] {
         d: `M ${from.x} ${from.y} C ${from.x + dx} ${from.y + dy * 0.2}, ${to.x - dx} ${to.y - dy * 0.2}, ${to.x} ${to.y}`,
         from,
         to,
-        hot: isHot || selected.has(tId) || hovered === tId,
+        hot: isHot || selected.has(tId as TLShapeId) || hovered === tId,
       });
     }
   }

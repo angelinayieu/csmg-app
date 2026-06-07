@@ -52,6 +52,8 @@ export function PricingClient({
   currentPlan: string | null;
 }) {
   const [buying, setBuying] = useState<string | null>(null);
+  const [subscribing, setSubscribing] = useState<PlanId | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
   const [billing, setBilling] = useState<"monthly" | "annual">("annual");
   // Credit picker selection — defaults to the marked-popular tier so the
   // primary CTA reads as the recommended choice.
@@ -70,16 +72,37 @@ export function PricingClient({
     Math.round((1 - perCreditNum / BASELINE_PER_CREDIT) * 100),
   );
 
-  function choosePlan(id: PlanId) {
+  async function choosePlan(id: PlanId) {
+    setPlanError(null);
     if (id === "free") {
       window.location.href = isLoggedIn ? "/app" : "/auth/signup";
       return;
     }
     if (!isLoggedIn) {
+      // Carry the chosen plan through auth — see /auth/signup which folds
+      // `?plan=` into `next=` so the user lands at /app/credits and the
+      // post-auth bootstrap fires the subscribe flow.
       window.location.href = `/auth/signup?plan=${id}&billing=${billing}`;
       return;
     }
-    document.getElementById("topup")?.scrollIntoView({ behavior: "smooth" });
+    setSubscribing(id);
+    try {
+      const res = await fetch("/api/stripe/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planId: id }),
+      });
+      const data = await res.json();
+      if (res.ok && data.url) {
+        window.location.href = data.url;
+        return;
+      }
+      setPlanError(data?.error ?? "Could not start subscription checkout.");
+    } catch {
+      setPlanError("Network error — try again.");
+    } finally {
+      setSubscribing(null);
+    }
   }
 
   async function buyPack(packId: string) {
@@ -195,6 +218,18 @@ export function PricingClient({
 
         {/* ── Plans ── */}
         <section className="mx-auto max-w-[1080px] px-6">
+          {planError && (
+            <div
+              className="mx-auto mb-5 max-w-[640px] rounded-2xl px-4 py-3 text-[13px] font-medium"
+              style={{
+                background: "rgba(194,89,59,0.08)",
+                border: `1px solid rgba(194,89,59,0.22)`,
+                color: CLAY_DEEP,
+              }}
+            >
+              {planError}
+            </div>
+          )}
           <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-3">
             {PLANS.map((plan, idx) => {
               const popular = !!plan.popular;
@@ -320,7 +355,7 @@ export function PricingClient({
 
                   <button
                     onClick={() => choosePlan(plan.id)}
-                    disabled={isCurrent}
+                    disabled={isCurrent || subscribing !== null}
                     className="mt-6 w-full rounded-full py-2.5 text-[14px] font-bold transition-all hover:opacity-95 active:scale-[0.99] disabled:cursor-default disabled:opacity-100"
                     style={
                       isCurrent
@@ -343,7 +378,11 @@ export function PricingClient({
                             }
                     }
                   >
-                    {isCurrent ? "Your plan" : plan.cta}
+                    {isCurrent
+                      ? "Your plan"
+                      : subscribing === plan.id
+                        ? "Redirecting…"
+                        : plan.cta}
                   </button>
                 </div>
               );

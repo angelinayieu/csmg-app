@@ -76,7 +76,6 @@ const HERO_WORDS = [
   "messy files",
   "100 tabs",
   "a voice note",
-  "tangled thoughts",
 ];
 
 /** Fluid word-rotator — swaps + animates the active word in (mount keyframe),
@@ -131,8 +130,8 @@ const FLOATING_ANCHORS: Anchor[] = [
   { top: "43%", left: "-3%", rot: 3, z: 3, drift: 3, scale: 1.0 }, // 3 · L mid FRONT — Research Project
   { top: "30%", right: "-3%", rot: 5, z: 3, drift: 7, scale: 1.2 }, // 4 · R mid FRONT — Product Development (BIG · emphasised)
   { top: "41%", right: "9%", rot: -4, z: 1, drift: 4, scale: 0.82, depth: true }, // 5 · R mid BEHIND — Reading Notes (depth)
-  { top: "70%", left: "6%", rot: 4, z: 2, drift: 5, scale: 0.88 }, // 6 · lower-left — Team Retrospective (out + down to clear the centred chip row, still uncropped)
-  { top: "71%", right: "5%", rot: -5, z: 2, drift: 1, scale: 0.86 }, // 7 · lower-right — Career Pivot
+  { top: "62%", left: "6%", rot: 4, z: 2, drift: 5, scale: 0.84 }, // 6 · lower-left — Team Retrospective (raised + slightly smaller so drop-shadow clears the hero-stage clip)
+  { top: "63%", right: "5%", rot: -5, z: 2, drift: 1, scale: 0.82 }, // 7 · lower-right — Career Pivot
 ];
 
 /** Open the hash-driven AuthModal (mounted below) on signup. */
@@ -182,6 +181,15 @@ function ConnectSources() {
     <section className="relative z-10 px-6 pb-20 pt-2">
       {/* Connector dropping in from the hero above, into the capability group. */}
       <div className="mx-auto h-6 w-px" style={{ background: "linear-gradient(to bottom, rgba(15,23,42,0) 0%, rgba(15,23,42,0.16) 100%)" }} />
+
+      {/* Bold tagline introducing the capability group — frames the three
+          things the product does as one "power-up" rather than a feature list. */}
+      <h2
+        className="mx-auto mb-4 text-center text-[clamp(18px,1.8vw,22px)] font-bold tracking-[-0.01em]"
+        style={{ color: INK, fontFamily: appleVibe.font.display }}
+      >
+        All in 1 idea exploration power-up
+      </h2>
 
       {/* Capability tray — a frosted glass pill GROUPING the three things
           akiboe does, so the dainty connector + ripples below read as flowing
@@ -427,16 +435,13 @@ export function LandingV2({
   /** "flat" = solid #F7F8FA. "whiteboard" = adds the faint tldraw dot grid. */
   surface?: "flat" | "whiteboard";
 }) {
-  // "start" drops you onto a whiteboard compose bar in place; typing + Enter
-  // stashes a free-text "create" intake and opens signup — after auth /app
-  // resumes it on a real board.
-  const [composing, setComposing] = useState(false);
-  const [prompt, setPrompt] = useState("");
-  // Once they actually start typing, the hero morphs into a whiteboard the way
-  // MinimalHome's objective chatbox does: the marketing copy + card swarm
-  // recede and a dot-grid board surface rises, so it reads as "you're on the
-  // board now." Enter → signup → /app resumes and the operations unfurl.
-  const typing = composing && prompt.trim().length > 0;
+  // "start" sends the user straight to signup; after auth the pending-intake
+  // runner opens their draft whiteboard so they type their prompt into the
+  // board's chatbox card (same surface as the in-app first-keystroke flow).
+  function startFromLanding() {
+    stashPendingIntake({ kind: "land-on-board" });
+    openSignup();
+  }
 
   function pickTemplate(id: string) {
     if (id === "product_development") {
@@ -450,13 +455,6 @@ export function LandingV2({
     } else {
       stashPendingIntake({ kind: "template", templateId: id });
     }
-    openSignup();
-  }
-
-  function submitPrompt() {
-    const text = prompt.trim();
-    if (!text) return;
-    stashPendingIntake({ kind: "create", prompt: text, depth: "standard" });
     openSignup();
   }
 
@@ -529,143 +527,41 @@ export function LandingV2({
             "radial-gradient(56% 48% at 50% 42%, rgba(255,255,255,0.96) 0%, rgba(255,255,255,0) 72%)",
         }}
       >
-      {/* Whiteboard surface — fades in the moment they start typing, turning
-          the hero into the board they're composing on (mirrors MinimalHome's
-          objective chatbox morph). Sits above the dimmed swarm, below the
-          chatbox (main z-40). */}
-      <div
-        aria-hidden
-        className={`pointer-events-none absolute inset-0 z-[12] transition-opacity duration-500 ${
-          typing ? "opacity-100" : "opacity-0"
-        }`}
-        style={{
-          backgroundColor: "#F7F8FA",
-          backgroundImage:
-            "radial-gradient(circle, rgba(15,23,42,0.10) 1.2px, transparent 1.5px)",
-          backgroundSize: "24px 24px",
-        }}
-      />
-      <LandingHeader
-        active="Home"
-        subtitle="#1 AI whiteboard space to improve quality of thought"
-      />
+      <LandingHeader active="Home" />
 
-      {/* ── Hero (centre column). Rises ABOVE the swarm while composing so the
-          whiteboard input is never occluded by the floating cards. ── */}
-      <main
-        className={`relative flex flex-1 flex-col items-center justify-center px-6 pb-2 ${
-          composing ? "z-40" : "z-10"
-        }`}
-      >
-        {/* Marketing headline — recedes once they start typing so the board
-            (and their own words in the chatbox) become the whole focus. Kept
-            in layout (opacity, not display) so the chatbox doesn't jump. */}
-        <div
-          className={`flex flex-col items-center transition-all duration-500 ${
-            typing ? "pointer-events-none -translate-y-3 opacity-0" : "opacity-100"
-          }`}
-        >
-          <h1
-            className="text-center text-[clamp(34px,4.8vw,54px)] font-extrabold leading-[1.02]"
-            style={{ fontFamily: appleVibe.font.display, letterSpacing: "-0.025em" }}
-          >
-            <span style={{ color: appleVibe.text.faint }}>From</span>{" "}
-            <HeroRotator words={HERO_WORDS} />
-          </h1>
-
-          {/* Negative margin pulls the headings toward the mark (4:3 box slack). */}
-          <div className="mx-auto -my-5 w-full max-w-[372px]">
+      {/* ── Hero (centre column). Starburst mark, headline, subtitle, CTA. ── */}
+      <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pb-2">
+        <div className="flex flex-col items-center">
+          {/* Mark sits ABOVE the headline at a compact size. */}
+          <div className="mx-auto mb-2 w-full max-w-[220px]">
             <Starburst3D />
           </div>
 
           <h1
-            className="text-center text-[clamp(34px,4.8vw,54px)] font-extrabold leading-[1.02]"
+            className="text-center text-[clamp(26px,3.4vw,42px)] font-extrabold leading-[1.05]"
             style={{ color: INK, fontFamily: appleVibe.font.display, letterSpacing: "-0.025em" }}
           >
-            <span style={{ color: appleVibe.text.faint }}>to</span>{" "}
-            <span style={{ color: INK }}>
-              value{" "}
-              <span
-                className="underline decoration-[3px] underline-offset-[7px]"
-                style={{ textDecorationColor: "#C2593B" }}
-              >
-                asap
-              </span>
-            </span>
-            <span style={{ color: "#C2593B" }}>.</span>
+            Whiteboard of agentic teams
           </h1>
+
+          <p
+            className="mt-2.5 text-center text-[clamp(14px,1.3vw,17px)]"
+            style={{ color: appleVibe.text.secondary, fontFamily: appleVibe.font.display }}
+          >
+            the thinkers, researchers &amp; makers
+          </p>
         </div>
 
-        {!composing ? (
-          <>
-            <button
-              type="button"
-              onClick={() => setComposing(true)}
-              className="start-cta mt-7 inline-flex items-center gap-2.5 rounded-full px-10 py-3 text-[16px] font-semibold text-white"
-            >
-              start
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-                <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-
-            <div className="mt-3.5 text-[12.5px] tracking-[0.06em]" style={{ color: appleVibe.text.faint }}>
-              <span className="font-normal">sync</span>{" "}
-              <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>tabs</span>{" "}
-              <span className="font-normal">and</span>{" "}
-              <span className="font-bold" style={{ color: appleVibe.text.tertiary }}>google drive</span>
-            </div>
-          </>
-        ) : (
-          // Whiteboard compose bar — typing here + Enter stashes the idea and
-          // opens signup (you "save your board" by signing in).
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              submitPrompt();
-            }}
-            className="mt-7 w-full max-w-[520px]"
-          >
-            <div className="flex items-center gap-2 rounded-full border border-black/[0.07] bg-white px-2.5 py-2 shadow-[0_22px_50px_-24px_rgba(11,18,40,0.45),inset_0_1px_0_rgba(255,255,255,0.9)]">
-              <span
-                aria-hidden
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full"
-                style={{ color: appleVibe.text.faint }}
-              >
-                <svg width="17" height="17" viewBox="0 0 20 20" fill="none">
-                  <path
-                    d="M14.5 6.5 8.7 12.3a2 2 0 0 0 2.8 2.8l5.3-5.3a3.6 3.6 0 0 0-5-5l-6 6a5.2 5.2 0 0 0 7.4 7.4l4.3-4.3"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </span>
-              <input
-                autoFocus
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Type an idea, question, or research goal…"
-                className="min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-slate-400"
-                style={{ color: INK }}
-              />
-              <button
-                type="submit"
-                aria-label="Start"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-transform hover:scale-105 active:scale-95"
-                style={{ background: INK }}
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-                  <path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-            </div>
-            <div className="mt-3 text-center text-[12px]" style={{ color: appleVibe.text.faint }}>
-              press <span className="font-semibold" style={{ color: appleVibe.text.tertiary }}>enter</span> — you&apos;ll sign in to save your board
-            </div>
-          </form>
-        )}
+        <button
+          type="button"
+          onClick={startFromLanding}
+          className="start-cta mt-6 inline-flex items-center gap-2.5 rounded-full px-10 py-3 text-[16px] font-semibold text-white"
+        >
+          start
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+            <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
       </main>
 
       {/* ── Floating template swarm ──
@@ -674,11 +570,7 @@ export function LandingV2({
           cards opt back in, so the centred CTA stays clickable straight through.
           Cards live inside a centred max-width band so they hug the hero on
           wide monitors instead of drifting to the edges. */}
-      <div
-        className={`pointer-events-none absolute inset-0 z-20 flex justify-center px-4 transition-opacity duration-500 ${
-          typing ? "opacity-0" : composing ? "opacity-20" : "opacity-100"
-        }`}
-      >
+      <div className="pointer-events-none absolute inset-0 z-20 flex justify-center px-4">
         <div className="relative h-full w-full max-w-[1200px]">
           {cards.map((card, i) => (
             <SwarmCard

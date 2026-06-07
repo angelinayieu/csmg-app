@@ -176,8 +176,11 @@ function CreditsInner() {
   const [bal, setBal] = useState<BalanceResponse | null>(null);
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [portalError, setPortalError] = useState<string | null>(null);
   const searchParams = useSearchParams();
   const justPurchased = searchParams.get("success") === "1";
+  const justSubscribed = searchParams.get("subscribed") === "1";
 
   useEffect(() => {
     fetch("/api/credits/balance", { cache: "no-store" })
@@ -189,6 +192,38 @@ function CreditsInner() {
       .then(setUsage)
       .catch(() => {});
   }, []);
+
+  // ── Post-auth subscribe handoff ──
+  // /auth/signup folds `?plan=` into `next=/app/credits?plan=X`. When we
+  // land with that param, fire the subscribe flow once so the user
+  // doesn't have to click again. Runs at most once per page load.
+  const incomingPlan = searchParams.get("plan");
+  useEffect(() => {
+    if (incomingPlan !== "standard" && incomingPlan !== "pro") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/stripe/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ planId: incomingPlan }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (res.ok && data.url) {
+          window.location.href = data.url;
+          return;
+        }
+        // Stash the configuration error on the portal-error slot so the user
+        // sees why the auto-redirect didn't fire (typically: env price id
+        // missing). The subscription panel renders portalError already.
+        setPortalError(data?.error ?? "Could not start subscription checkout.");
+      } catch {
+        if (!cancelled) setPortalError("Network error — try again.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [incomingPlan]);
 
   async function handleBuy(packId: string) {
     setLoading(packId);
@@ -203,6 +238,27 @@ function CreditsInner() {
       else setLoading(null);
     } catch {
       setLoading(null);
+    }
+  }
+
+  // Open the Stripe Customer Portal — lets the user swap plan, update card,
+  // cancel, download invoices. 409 means "no Stripe customer yet" (never paid
+  // for anything); surface that as a soft hint rather than a hard error.
+  async function handleManage() {
+    setPortalLoading(true);
+    setPortalError(null);
+    try {
+      const res = await fetch("/api/stripe/billing-portal", { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.url) {
+        window.location.href = data.url;
+        return;
+      }
+      setPortalError(data?.error ?? "Could not open billing portal.");
+    } catch {
+      setPortalError("Network error — try again.");
+    } finally {
+      setPortalLoading(false);
     }
   }
 
@@ -238,6 +294,15 @@ function CreditsInner() {
         >
           <Check size={14} color="#16a34a" />
           <span><b style={{ fontWeight: 650 }}>Top-up complete.</b> Your credits are ready.</span>
+        </div>
+      )}
+      {justSubscribed && (
+        <div
+          className="mt-5 flex items-center gap-2.5 rounded-2xl px-4 py-3"
+          style={{ background: "rgba(22,163,74,0.08)", border: "1px solid rgba(22,163,74,0.18)", color: "#15803d", fontSize: 13 }}
+        >
+          <Check size={14} color="#16a34a" />
+          <span><b style={{ fontWeight: 650 }}>Subscription active.</b> Weekly allowance refreshes every Monday.</span>
         </div>
       )}
 
@@ -372,6 +437,112 @@ function CreditsInner() {
             <div className="py-6 text-center" style={{ fontSize: 12.5, color: sun.faint }}>
               No moves yet this week — your activity will bloom here.
             </div>
+          )}
+        </div>
+      </section>
+
+      {/* ── SUBSCRIPTION ── */}
+      <section
+        className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+        style={{
+          borderRadius: 22,
+          background: sun.card,
+          border: `1px solid ${sun.sandLine}`,
+          boxShadow: "0 1px 0 rgba(255,255,255,0.9) inset, 0 14px 34px -22px rgba(120,70,40,0.22)",
+          padding: 20,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: sun.inkSoft }}>Subscription</div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span
+              className="capitalize"
+              style={{ fontSize: 18, fontWeight: 700, color: sun.ink, lineHeight: 1.1 }}
+            >
+              {plan} plan
+            </span>
+            <span style={{ fontSize: 12, color: sun.inkSoft }}>
+              · {weekly || 10} rounds refill weekly
+            </span>
+          </div>
+          {plan === "free" ? (
+            <div style={{ fontSize: 12, color: sun.faint, marginTop: 4 }}>
+              Upgrade to Standard or Pro for a bigger weekly allowance.
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: sun.faint, marginTop: 4 }}>
+              Manage payment, swap plan, or cancel anytime.
+            </div>
+          )}
+          {portalError && (
+            <div
+              className="mt-2 rounded-lg px-2.5 py-1.5"
+              style={{
+                background: "rgba(194,89,59,0.08)",
+                color: sun.coralDeep,
+                fontSize: 11.5,
+                fontWeight: 550,
+              }}
+            >
+              {portalError}
+            </div>
+          )}
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          {plan === "free" ? (
+            <a
+              href="/pricing"
+              className="transition-all"
+              style={{
+                borderRadius: 13,
+                padding: "9px 16px",
+                fontSize: 13,
+                fontWeight: 600,
+                background: sun.coral,
+                color: "#fff",
+                whiteSpace: "nowrap",
+              }}
+            >
+              See plans
+            </a>
+          ) : (
+            <>
+              <a
+                href="/pricing"
+                className="transition-all"
+                style={{
+                  borderRadius: 13,
+                  padding: "9px 14px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  background: "rgba(27,26,24,0.04)",
+                  border: `1px solid ${sun.sandLine}`,
+                  color: sun.ink,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Change plan
+              </a>
+              <button
+                type="button"
+                onClick={handleManage}
+                disabled={portalLoading}
+                className="transition-all"
+                style={{
+                  borderRadius: 13,
+                  padding: "9px 14px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  background: sun.coral,
+                  color: "#fff",
+                  cursor: portalLoading ? "default" : "pointer",
+                  opacity: portalLoading ? 0.7 : 1,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {portalLoading ? "Opening…" : "Manage"}
+              </button>
+            </>
           )}
         </div>
       </section>

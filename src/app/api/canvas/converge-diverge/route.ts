@@ -339,26 +339,27 @@ export async function POST(request: Request) {
         maxTokens: 1600,
         temperature,
         provider,
-        // Anthropic: Sonnet-4-6 (was opus-4-1, which returned degenerate output
-        // for this schema → "Empty"). OpenAI fallback uses its json_schema
-        // default (gpt-4o), which honors the same RESPONSE_SCHEMA.
+        // OpenAI uses its json_schema default (gpt-4o), which honors the
+        // RESPONSE_SCHEMA. Anthropic fallback pins Sonnet-4-6 (opus-4-1 returned
+        // degenerate output for this schema → "Empty").
         model: provider === "anthropic" ? BEST_FAST_CLAUDE_MODEL : undefined,
         responseSchema: schema,
       });
-    // Provider failover: if Anthropic's KEY is out of *provider* credits (a
-    // billing state independent of the user's app credits), fall back to OpenAI
-    // so the verb still works instead of dead-ending on "Out of credits". Only a
-    // credit/quota error triggers the swap; any other error propagates. If BOTH
-    // providers are dry, the OpenAI credit error propagates → the route's 402.
+    // Provider failover: if OpenAI's KEY is out of *provider* credits (a
+    // billing state independent of the user's app credits), fall back to
+    // Anthropic so the verb still works instead of dead-ending on "Out of
+    // credits". Only a credit/quota error triggers the swap; any other error
+    // propagates. If BOTH providers are dry, the Anthropic credit error
+    // propagates → the route's 402.
     let result: unknown;
     try {
-      result = await genWith("anthropic");
+      result = await genWith("openai");
     } catch (primaryErr) {
       if (!detectCreditError(primaryErr).isCredit) throw primaryErr;
       console.warn(
-        "[/api/canvas/converge-diverge] anthropic credit/quota error — falling back to OpenAI",
+        "[/api/canvas/converge-diverge] openai credit/quota error — falling back to Anthropic",
       );
-      result = await genWith("openai");
+      result = await genWith("anthropic");
     }
 
     const r = result as {

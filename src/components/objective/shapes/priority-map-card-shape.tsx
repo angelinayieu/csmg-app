@@ -216,12 +216,15 @@ function PriorityMapRenderer({ shape }: { shape: PriorityMapCardShape }) {
           What to optimize for · tap a tile to fork it
         </div>
 
-        {/* 2-column grid — title-only tiles, no descriptions at rest */}
+        {/* Single-column tiles — long salience phrases (e.g. "matching them
+            with nearby people who share similar interests") need the full card
+            width to wrap without truncating. A 2-col layout chopped them to
+            ~26 chars per row, which read as broken content on generation. */}
         <div
           style={{
             flex: 1,
             display: "grid",
-            gridTemplateColumns: "1fr 1fr",
+            gridTemplateColumns: "1fr",
             gridAutoRows: "1fr",
             gap: 6,
             minHeight: 0,
@@ -286,12 +289,15 @@ function PriorityMapRenderer({ shape }: { shape: PriorityMapCardShape }) {
                     style={{
                       flex: 1,
                       minWidth: 0,
-                      fontSize: 12,
+                      fontSize: 11.5,
+                      lineHeight: 1.25,
                       fontWeight: 650,
                       color: appleVibe.text.primary,
                       overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
+                      display: "-webkit-box",
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: "vertical",
+                      wordBreak: "break-word",
                     }}
                   >
                     {s.phrase}

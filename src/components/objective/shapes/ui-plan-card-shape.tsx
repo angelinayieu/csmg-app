@@ -9,12 +9,13 @@
 // reads spec.title / spec.overview / spec.target_users / spec.ui_plan / spec.features,
 // so a thin stub is enough.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
   T,
   stopEventPropagation,
+  useEditor,
   type RecordProps,
   type TLBaseShape,
   type TLResizeInfo,
@@ -122,9 +123,12 @@ export class UiPlanCardShapeUtil extends BaseBoxShapeUtil<UiPlanCardShape> {
 }
 
 function UiPlanCardRenderer({ shape }: { shape: UiPlanCardShape }) {
-  const { title, variantLabel, overview, uiPlanJson, sourceText, status } = shape.props;
+  const { title, variantLabel, overview, uiPlanJson, sourceText, status, objectId } =
+    shape.props;
   const accent = appleVibe.accent.primary;
+  const editor = useEditor();
   const [building, setBuilding] = useState(false);
+  const promotingRef = useRef(false);
 
   const plan = (() => {
     if (!uiPlanJson) return null;
@@ -137,6 +141,78 @@ function UiPlanCardRenderer({ shape }: { shape: UiPlanCardShape }) {
   const screens = plan?.screens ?? [];
   const components = plan?.component_inventory ?? [];
   const dl = plan?.design_language;
+
+  // Self-promote when ready without a backing library_object. Handles plan
+  // cards that landed before the whiteboard's promote-after-ready logic
+  // (or whose promote failed transiently) — once this fires, the click→
+  // detail-rail + drag-connector both work.
+  useEffect(() => {
+    if (status !== "ready" || objectId || promotingRef.current) return;
+    if (!uiPlanJson) return;
+    const match =
+      typeof window !== "undefined"
+        ? window.location.pathname.match(/\/objective\/([^/?#]+)/)
+        : null;
+    const spaceId = match?.[1];
+    if (!spaceId) return;
+    promotingRef.current = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/objective/${spaceId}/ui-plan/promote`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shapeId: shape.id,
+            title,
+            variantLabel,
+            overview,
+            sourceText,
+            uiPlanJson,
+          }),
+        });
+        if (!res.ok) return;
+        const json = (await res.json()) as { objectId?: string };
+        const id = json?.objectId;
+        if (!id) return;
+        if (!editor.getShape(shape.id)) return;
+        editor.updateShape<UiPlanCardShape>({
+          id: shape.id,
+          type: "ui-plan-card",
+          props: { objectId: id },
+        });
+      } catch {
+        promotingRef.current = false;
+      }
+    })();
+  }, [
+    status,
+    objectId,
+    uiPlanJson,
+    shape.id,
+    title,
+    variantLabel,
+    overview,
+    sourceText,
+    editor,
+  ]);
+
+  // React-level onClick survives the body's stopEventPropagation (which
+  // only blocks tldraw-shape-level gestures). Putting it on the outer
+  // wrapper means clicking ANY visible area (header / body / footer
+  // whitespace) opens the detail rail when the card has been promoted.
+  function openDetail(e: React.MouseEvent) {
+    if (!objectId) return;
+    if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+    // Don't intercept a click that's heading to the Build-prototype button.
+    const target = e.target as HTMLElement | null;
+    if (target && target.closest("button")) return;
+    e.stopPropagation();
+    window.dispatchEvent(
+      new CustomEvent("objective-board:open-card-detail", {
+        detail: { objectId },
+      }),
+    );
+  }
 
   function buildPrototype(e: React.MouseEvent) {
     e.stopPropagation();
@@ -176,6 +252,8 @@ function UiPlanCardRenderer({ shape }: { shape: UiPlanCardShape }) {
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
     >
       <div
+        onClick={openDetail}
+        title={objectId ? "Open plan details" : "Plan still drafting…"}
         style={{
           width: "100%",
           height: "100%",
@@ -187,6 +265,7 @@ function UiPlanCardRenderer({ shape }: { shape: UiPlanCardShape }) {
           border: `1px solid ${accent}33`,
           boxShadow: `0 1px 2px rgba(11,18,40,0.05), 0 18px 42px -20px ${accent}55, 0 8px 22px -10px rgba(11,18,40,0.14)`,
           fontFamily: appleVibe.font.stack,
+          cursor: objectId ? "pointer" : "default",
         }}
       >
         {/* Header — drag handle. */}

@@ -62,7 +62,8 @@ export function composeFromSnapshot(snapshot: unknown): TasteDesignContext {
   const profile = normalizeForCompose(snapshot);
   const designMd = renderDesignMd(profile);
   const tailwindConfig = renderTailwindConfig(profile);
-  const hasContent = designMd.trim().length > 0;
+  const hasContent =
+    designMd.trim().length > 0 || tailwindConfig.trim().length > 0;
   return { designMd, tailwindConfig, hasContent };
 }
 
@@ -77,6 +78,16 @@ interface ComposeInput {
   noGos: string[];
   sourceConceptSlugs: string[];
   sourceNarratives: string[];
+  styleDominantPalette: string[];
+  styleAccentPalette: string[];
+  stylePaletteTemperature: string;
+  styleTypographyVoice: string;
+  styleCompositionDensity: string;
+  styleCompositionGrid: string;
+  styleRecurringPatterns: string[];
+  styleMotionCues: string[];
+  styleSignalStrength: number;
+  styleSourceCount: number;
 }
 
 /** Normalize a TasteProfileSnapshot (or anything snapshot-shaped) to the flat
@@ -89,11 +100,35 @@ export function normalizeForCompose(raw: unknown): ComposeInput {
     Array.isArray(o.grounded) &&
     typeof o.voiceTone === "string"
   ) {
-    return o as unknown as ComposeInput;
+    const flat = o as unknown as Partial<ComposeInput>;
+    return {
+      voiceTone: flat.voiceTone ?? "",
+      voiceStyle: flat.voiceStyle ?? "",
+      coined: flat.coined ?? [],
+      grounded: flat.grounded ?? [],
+      tensions: flat.tensions ?? [],
+      noGos: flat.noGos ?? [],
+      sourceConceptSlugs: flat.sourceConceptSlugs ?? [],
+      sourceNarratives: flat.sourceNarratives ?? [],
+      styleDominantPalette: flat.styleDominantPalette ?? [],
+      styleAccentPalette: flat.styleAccentPalette ?? [],
+      stylePaletteTemperature: flat.stylePaletteTemperature ?? "unknown",
+      styleTypographyVoice: flat.styleTypographyVoice ?? "unknown",
+      styleCompositionDensity: flat.styleCompositionDensity ?? "unknown",
+      styleCompositionGrid: flat.styleCompositionGrid ?? "unknown",
+      styleRecurringPatterns: flat.styleRecurringPatterns ?? [],
+      styleMotionCues: flat.styleMotionCues ?? [],
+      styleSignalStrength: flat.styleSignalStrength ?? 0,
+      styleSourceCount: flat.styleSourceCount ?? 0,
+    };
   }
   const voice = (o.voice as Record<string, unknown>) ?? {};
   const vocab = (o.vocabulary as Record<string, unknown>) ?? {};
   const sources = Array.isArray(o.sources) ? (o.sources as unknown[]) : [];
+  const style =
+    o.style_synthesis && typeof o.style_synthesis === "object"
+      ? (o.style_synthesis as Record<string, unknown>)
+      : {};
   const termsOf = (bucket: unknown): string[] =>
     Array.isArray(bucket)
       ? (bucket as unknown[])
@@ -116,6 +151,15 @@ export function normalizeForCompose(raw: unknown): ComposeInput {
           .filter(Boolean)
           .slice(0, max)
       : [];
+  const hexList = (raw: unknown, max: number): string[] =>
+    Array.isArray(raw)
+      ? (raw as unknown[])
+          .filter(
+            (x): x is string =>
+              typeof x === "string" && /^#[0-9a-f]{6}$/.test(x),
+          )
+          .slice(0, max)
+      : [];
   const sourceConceptSlugs = sources
     .flatMap((s) => {
       if (!s || typeof s !== "object") return [];
@@ -134,6 +178,35 @@ export function normalizeForCompose(raw: unknown): ComposeInput {
     noGos: stringList(o.no_gos, 4),
     sourceConceptSlugs,
     sourceNarratives: [],
+    styleDominantPalette: hexList(style.dominant_palette, 4),
+    styleAccentPalette: hexList(style.accent_palette, 2),
+    stylePaletteTemperature:
+      typeof style.palette_temperature === "string"
+        ? style.palette_temperature
+        : "unknown",
+    styleTypographyVoice:
+      typeof style.typography_voice === "string"
+        ? style.typography_voice
+        : "unknown",
+    styleCompositionDensity:
+      typeof style.composition_density === "string"
+        ? style.composition_density
+        : "unknown",
+    styleCompositionGrid:
+      typeof style.composition_grid === "string"
+        ? style.composition_grid
+        : "unknown",
+    styleRecurringPatterns: stringList(style.recurring_patterns, 6),
+    styleMotionCues: stringList(style.motion_cues, 4),
+    styleSignalStrength:
+      typeof style.signal_strength === "number" &&
+      Number.isFinite(style.signal_strength)
+        ? Math.max(0, Math.min(1, style.signal_strength))
+        : 0,
+    styleSourceCount:
+      typeof style.source_count === "number" && style.source_count > 0
+        ? Math.floor(style.source_count)
+        : 0,
   };
 }
 
@@ -191,15 +264,62 @@ function renderDesignMd(p: ComposeInput): string {
     );
   }
 
+  const visualStyle = renderVisualStyleBlock(p);
+  if (visualStyle) sections.push(visualStyle);
+
   if (!sections.length) return "";
   return `# DESIGN.md (taste profile for this space)\n\n${sections.join(
     "\n\n",
   )}\n\nWhen the brief is silent, default to these.`;
 }
 
+function renderVisualStyleBlock(p: ComposeInput): string {
+  if (p.styleSourceCount <= 0) return "";
+  const lines: string[] = [];
+  if (p.styleDominantPalette.length) {
+    lines.push(`- Dominant palette: ${p.styleDominantPalette.join(", ")}`);
+  }
+  if (p.styleAccentPalette.length) {
+    lines.push(`- Accent palette: ${p.styleAccentPalette.join(", ")}`);
+  }
+  const axes = [
+    p.stylePaletteTemperature !== "unknown"
+      ? `temperature=${p.stylePaletteTemperature}`
+      : "",
+    p.styleTypographyVoice !== "unknown"
+      ? `type=${p.styleTypographyVoice}`
+      : "",
+    p.styleCompositionDensity !== "unknown"
+      ? `density=${p.styleCompositionDensity}`
+      : "",
+    p.styleCompositionGrid !== "unknown" ? `grid=${p.styleCompositionGrid}` : "",
+  ].filter(Boolean);
+  if (axes.length) lines.push(`- Visual axes: ${axes.join(", ")}`);
+  if (p.styleRecurringPatterns.length) {
+    lines.push(`- Recurring UI patterns: ${p.styleRecurringPatterns.join(", ")}`);
+  }
+  if (p.styleMotionCues.length) {
+    lines.push(`- Motion cues: ${p.styleMotionCues.join(", ")}`);
+  }
+  if (!lines.length) return "";
+  return `## Visual style (from ${p.styleSourceCount} analyzed reference${
+    p.styleSourceCount === 1 ? "" : "s"
+  })\n${lines.join("\n")}`;
+}
+
+function hasStrongVisualStyle(p: ComposeInput): boolean {
+  return (
+    p.styleSignalStrength >= 0.6 &&
+    p.styleSourceCount >= 3 &&
+    p.styleDominantPalette.length >= 3
+  );
+}
+
 /** Emit a tailwind.config.ts code block keyed off the trusted brand tokens
  *  in appleVibe, with voice tone surfaced as a top comment so the model can
- *  reason over it. We do NOT derive colors from natural language. */
+ *  reason over it. Natural language never creates colors; only analyzed
+ *  image references can override the palette, and only above the confidence
+ *  gate in hasStrongVisualStyle(). */
 function renderTailwindConfig(p: ComposeInput): string {
   // If there's nothing taste-bearing AND we'd just emit the bare brand
   // tokens, return empty so we don't bloat the prompt.
@@ -208,7 +328,8 @@ function renderTailwindConfig(p: ComposeInput): string {
     p.voiceStyle ||
     p.coined.length ||
     p.tensions.length ||
-    p.noGos.length;
+    p.noGos.length ||
+    p.styleSourceCount > 0;
   if (!hasAnyTaste) return "";
 
   const voiceComment = p.voiceTone
@@ -219,17 +340,42 @@ function renderTailwindConfig(p: ComposeInput): string {
     ? `// Anti-patterns: ${p.noGos.join(" · ").slice(0, 240)}`
     : "";
 
+  const strongVisual = hasStrongVisualStyle(p);
+  const referenceComment =
+    p.styleSourceCount > 0
+      ? `// Visual references: ${p.styleSourceCount} analyzed, signal=${p.styleSignalStrength.toFixed(
+          2,
+        )}${strongVisual ? " (palette override active)" : " (brand palette retained)"}`
+      : "";
+
+  const referenceAccent =
+    p.styleAccentPalette[0] ??
+    p.styleDominantPalette[2] ??
+    appleVibe.accent.primary;
+  const referenceAccentHover =
+    p.styleAccentPalette[1] ??
+    p.styleDominantPalette[3] ??
+    appleVibe.accent.primaryHover;
+
   // Brand tokens — copied from appleVibe so the prototype can reach them by
   // semantic name. Stage colors omitted (room-internal, not surface taste).
+  // When the image-derived style clears the confidence gate, the main surface
+  // and accent tokens shift to that empirical reference palette.
   const json = JSON.stringify(
     {
       theme: {
         extend: {
           colors: {
             surface: {
-              base: appleVibe.surface.base,
-              card: appleVibe.surface.card,
-              chip: appleVibe.surface.chip,
+              base: strongVisual
+                ? p.styleDominantPalette[0]
+                : appleVibe.surface.base,
+              card: strongVisual
+                ? p.styleDominantPalette[1]
+                : appleVibe.surface.card,
+              chip: strongVisual
+                ? p.styleDominantPalette[2]
+                : appleVibe.surface.chip,
             },
             text: {
               primary: appleVibe.text.primary,
@@ -238,8 +384,12 @@ function renderTailwindConfig(p: ComposeInput): string {
               faint: appleVibe.text.faint,
             },
             accent: {
-              DEFAULT: appleVibe.accent.primary,
-              hover: appleVibe.accent.primaryHover,
+              DEFAULT: strongVisual ? referenceAccent : appleVibe.accent.primary,
+              hover: strongVisual ? referenceAccentHover : appleVibe.accent.primaryHover,
+            },
+            reference: {
+              dominant: p.styleDominantPalette,
+              accent: p.styleAccentPalette,
             },
             stroke: {
               hairline: appleVibe.stroke.hairline,
@@ -271,7 +421,9 @@ function renderTailwindConfig(p: ComposeInput): string {
 
   return `\`\`\`ts
 // tailwind.config.ts — derived from this space's taste-profile.
-${voiceComment}${noGoComment ? `\n${noGoComment}` : ""}
+${voiceComment}${noGoComment ? `\n${noGoComment}` : ""}${
+    referenceComment ? `\n${referenceComment}` : ""
+  }
 
 import type { Config } from "tailwindcss";
 

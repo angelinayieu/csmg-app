@@ -600,8 +600,9 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
       "speed_to_value, differentiation, buildability, downstream_leverage, " +
       "risk_acceptable, evidence_strength. Adapt phrasing to the idea but keep " +
       "the spirit. For every MVP variation, score it 1–5 on EVERY criterion you " +
-      "defined (each score must appear in the candidate's scores map keyed by " +
-      "criterion.name), compute a 0–100 weighted_score, and call out strengths, " +
+      "defined (the candidate's `scores` array must contain one entry per " +
+      "criterion, with `criterion` matching criterion.name exactly and `score` " +
+      "in 1–5), compute a 0–100 weighted_score, and call out strengths, " +
       "weaknesses, risks, an evidence_strength (low/medium/high), and a " +
       "confidence 0–100. Name tradeoffs that no candidate dominates on. Name a " +
       "winner from the candidates list — recommendation will confirm or override " +
@@ -631,10 +632,12 @@ const ENGINES: Record<SpecForgeEngineId, EngineSpec> = {
         candidates: arr(
           obj({
             name: str,
-            scores: {
-              type: "object",
-              additionalProperties: { type: "number" },
-            },
+            scores: arr(
+              obj({
+                criterion: str,
+                score: num,
+              }),
+            ),
             weighted_score: num,
             strengths: strArr,
             weaknesses: strArr,

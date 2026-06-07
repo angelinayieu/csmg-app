@@ -21,6 +21,159 @@ import { usePanel, setPanel } from "@/lib/objective-canvas/board-panel-signal";
 
 export const OPEN_CARD_DETAIL_EVENT = "objective-board:open-card-detail";
 
+// ── MicrosSection ──
+// The per-card success rubric (3-5 micros derived from the seed objective).
+// MINIMAL by design: just label + ladder arrow. No why-text, no signals, no
+// confidence numbers, no edit affordance. The user reads what they NEED to
+// know — what this card needs to do, and which top-level factor it serves.
+// Anything more lives in the route's response if a power-user wants it.
+//
+// First open hits the route with `cacheOnly: true` so the panel renders
+// instantly (no LLM call). If empty, a single "Derive" pill kicks off the
+// objective-keyed derive (~2s Sonnet call, then auto-render).
+interface MinimalMicro {
+  slug: string;
+  label: string;
+  laddersTo: string[];
+}
+
+function MicrosSection({
+  spaceId,
+  objectId,
+  objectType,
+}: {
+  spaceId: string;
+  objectId: string;
+  objectType: string;
+}) {
+  const enabled = ["feature", "variable", "mechanism"].includes(objectType);
+  const [micros, setMicros] = useState<MinimalMicro[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  // slug → label for the ladder arrow. Populated from the route response
+  // (which echoes the space's factors) so we don't fetch sharpening twice.
+  const [factorLabel, setFactorLabel] = useState<Map<string, string>>(
+    () => new Map(),
+  );
+
+  // First open: cache-only read. Free (no LLM) and instant.
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    fetch(`/api/objective/${spaceId}/card-micro-objectives`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: objectId, cacheOnly: true }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!alive) return;
+        if (j && Array.isArray(j.micros)) setMicros(j.micros);
+        if (j && Array.isArray(j.factors)) {
+          setFactorLabel(
+            new Map(
+              (j.factors as { slug: string; label: string }[]).map((f) => [
+                f.slug,
+                f.label,
+              ]),
+            ),
+          );
+        }
+      })
+      .catch(() => {
+        /* leave null — render the empty "Derive" affordance */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [enabled, spaceId, objectId]);
+
+  async function derive() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch(
+        `/api/objective/${spaceId}/card-micro-objectives`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cardId: objectId }),
+        },
+      );
+      if (res.ok) {
+        const j = (await res.json()) as {
+          micros?: MinimalMicro[];
+          factors?: { slug: string; label: string }[];
+        };
+        setMicros(Array.isArray(j.micros) ? j.micros : []);
+        if (Array.isArray(j.factors)) {
+          setFactorLabel(
+            new Map(j.factors.map((f) => [f.slug, f.label])),
+          );
+        }
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!enabled) return null;
+
+  // Cache-only fetch hasn't returned yet OR returned empty → show derive pill.
+  const isEmpty = micros !== null && micros.length === 0;
+  const isLoading = micros === null;
+
+  return (
+    <section style={{ marginTop: 14 }}>
+      <div style={microsHeaderRow}>
+        <div style={sectionLabel}>
+          Micros{micros && micros.length ? ` · ${micros.length}` : ""}
+        </div>
+        {micros && micros.length > 0 && (
+          <button
+            type="button"
+            onClick={derive}
+            disabled={busy}
+            style={microsRefreshBtn}
+            title="Re-derive — used after editing the card's title or body"
+          >
+            {busy ? "…" : "↻"}
+          </button>
+        )}
+      </div>
+      {isLoading && (
+        <div style={microsHint}>…</div>
+      )}
+      {isEmpty && (
+        <button
+          type="button"
+          onClick={derive}
+          disabled={busy}
+          style={microsDerivePill}
+        >
+          {busy ? "Deriving…" : "Derive"}
+        </button>
+      )}
+      {micros && micros.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+          {micros.map((m) => {
+            const ladders = m.laddersTo
+              .map((s) => factorLabel.get(s) || s)
+              .filter(Boolean);
+            return (
+              <div key={m.slug} style={microRow}>
+                <span style={microLabelText}>{m.label}</span>
+                {ladders.length > 0 && (
+                  <span style={microLadderText}>→ {ladders.join(" · ")}</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 interface ObjectLinkRef {
   id: string;
   relation: string;
@@ -468,10 +621,16 @@ export function ObjectDetailDrawer({
       ? Math.round(obj.evaluation.confidence * 100)
       : null;
   // Which of the user's defined terms shaped this card (receipt on the output).
-  const tasteHits = obj ? tasteHitsFor(`${name} ${body}`, glossary) : [];
   // This object's OWN concept as a glossary term (by slug) — the target of the
   // "make it yours" capture. Objects seed the glossary, so this usually hits.
   const objSlug = obj ? slugifyConcept(name) : "";
+  // Drop the chip whose term IS the card title — title already shows in the
+  // header + the "defined in your words" row; a third copy is just noise.
+  const tasteHits = obj
+    ? tasteHitsFor(`${name} ${body}`, glossary).filter(
+        (h) => !objSlug || slugifyConcept(h.term) !== objSlug,
+      )
+    : [];
   const matchedTerm =
     obj && objSlug
       ? (glossary.find(
@@ -567,6 +726,15 @@ export function ObjectDetailDrawer({
                 </section>
               )}
 
+              {/* Micros — the per-card success rubric. Renders only for
+                  feature / variable / mechanism rows (gated inside the
+                  component) so insight / image / context cards stay clean. */}
+              <MicrosSection
+                spaceId={spaceId}
+                objectId={obj.id}
+                objectType={obj.object_type}
+              />
+
               {/* Active taste capture — pin what this concept means to YOU. The
                   missing "write" side of define-once: one action makes the term
                   yours everywhere AI reasons + travels to your other spaces. */}
@@ -614,7 +782,11 @@ export function ObjectDetailDrawer({
                       style={{ width: 12, height: 12, color: appleVibe.accent.primary, flexShrink: 0 }}
                       strokeWidth={2.4}
                     />
-                    <span>“{matchedTerm.term}” is defined in your words</span>
+                    <span>
+                      {slugifyConcept(matchedTerm.term) === objSlug
+                        ? "Defined in your words"
+                        : `“${matchedTerm.term}” is defined in your words`}
+                    </span>
                   </div>
                 ) : (
                   <button
@@ -871,7 +1043,10 @@ export function ObjectDetailDrawer({
     <div onPointerDown={(e) => e.stopPropagation()} style={rail}>
         {/* header */}
         <div style={header}>
-          <Boxes style={{ width: 15, height: 15, color: appleVibe.text.secondary }} strokeWidth={2.2} />
+          <Boxes
+            style={{ width: 15, height: 15, marginTop: 2, color: appleVibe.text.secondary, flexShrink: 0 }}
+            strokeWidth={2.2}
+          />
           <span style={titleStyle}>{name}</span>
           <button type="button" title="Close" onClick={onClose} style={closeBtn}>
             <X style={{ width: 16, height: 16 }} strokeWidth={2.2} />
@@ -1197,10 +1372,10 @@ export function ObjectDetailMount({ spaceId, editor }: { spaceId: string; editor
 // above board chrome (z 90) but below true modals (Resolution Studio z 200).
 const rail: CSSProperties = {
   position: "fixed",
-  // Clear the unified top-right pill bar (BoardTopRightBar lives at top:16,
-  // ~32-38px tall) plus a visible breathing-room gap so the bar reads as its
-  // own row above this drawer. Matches the Library rail's RAIL_TOP=96.
-  top: 96,
+  // Sits just under the top-right pill bar (BoardTopRightBar at top:16) so the
+  // drawer reclaims vertical space — the title wraps to two lines, so the
+  // header needs the headroom.
+  top: 64,
   right: 16,
   bottom: 16,
   zIndex: 90,
@@ -1275,21 +1450,24 @@ function relChip(active: boolean): CSSProperties {
 }
 const header: CSSProperties = {
   display: "flex",
-  alignItems: "center",
+  alignItems: "flex-start",
   gap: 8,
   padding: "13px 14px 11px",
   borderBottom: "1px solid var(--glass-border)",
 };
 const titleStyle: CSSProperties = {
-  fontSize: 14.5,
+  fontSize: 15.5,
   fontWeight: 700,
   letterSpacing: "-0.01em",
+  lineHeight: 1.25,
   color: appleVibe.text.primary,
   minWidth: 0,
   flex: 1,
+  display: "-webkit-box",
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: "vertical",
   overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
+  wordBreak: "break-word",
 };
 const closeBtn: CSSProperties = {
   display: "inline-flex",
@@ -1308,6 +1486,62 @@ const scroll: CSSProperties = { flex: 1, overflowY: "auto", padding: "12px 16px 
 // Embedded variant — the Library rail's catalog body already pads at
 // "0 12px 14px", so match that to keep the gutter consistent when forking.
 const scrollEmbedded: CSSProperties = { flex: 1, overflowY: "auto", padding: "10px 12px 14px", minHeight: 0 };
+
+// ── Micros section styles ──
+// Minimal by intent: section label + a list of one-line rows (label · ladder).
+// No icons, no background fills, no edit chrome. Matches the spacing of the
+// surrounding sections so it visually fades into the rest of the drawer.
+const microsHeaderRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 6,
+};
+const microsRefreshBtn: CSSProperties = {
+  border: "none",
+  background: "transparent",
+  cursor: "pointer",
+  fontSize: 12,
+  fontWeight: 600,
+  color: appleVibe.text.tertiary,
+  padding: "0 4px",
+  lineHeight: 1,
+};
+const microsHint: CSSProperties = {
+  marginTop: 6,
+  fontSize: 12,
+  color: appleVibe.text.tertiary,
+};
+const microsDerivePill: CSSProperties = {
+  marginTop: 6,
+  display: "inline-flex",
+  alignItems: "center",
+  height: 22,
+  padding: "0 12px",
+  borderRadius: appleVibe.radius.pill,
+  border: `1px solid ${appleVibe.stroke.hairline}`,
+  background: appleVibe.surface.chip,
+  color: appleVibe.text.primary,
+  fontSize: 11.5,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+const microRow: CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  gap: 8,
+  fontSize: 12.5,
+  lineHeight: 1.4,
+  color: appleVibe.text.primary,
+};
+const microLabelText: CSSProperties = {
+  fontWeight: 600,
+  color: appleVibe.text.primary,
+};
+const microLadderText: CSSProperties = {
+  fontSize: 11,
+  color: appleVibe.text.tertiary,
+};
 const emptyRow: CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "16px 2px", color: appleVibe.text.tertiary, fontSize: 12.5 };
 const typePill: CSSProperties = {
   display: "inline-flex",

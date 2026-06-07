@@ -10,7 +10,13 @@
 "use client";
 
 import "tldraw/tldraw.css";
-import { Tldraw, getSnapshot, type Editor } from "tldraw";
+import {
+  Tldraw,
+  createShapeId,
+  getSnapshot,
+  type Editor,
+  type TLShapePartial,
+} from "tldraw";
 import { useEffect, useRef, useState } from "react";
 import {
   BoardHistoryLauncher,
@@ -18,6 +24,7 @@ import {
 } from "@/components/objective/canvas-interactions/board-history";
 
 type Mode = "populated" | "empty";
+type MockShapeColor = "blue" | "violet" | "orange" | "green" | "light-red";
 
 // A few mock versions — mix of autosaves + one manual "Saved" so the row
 // redesign (time-led, soft-chip active row, "Saved" tag) is on display.
@@ -167,14 +174,14 @@ function shape(
   y: number,
   w: number,
   h: number,
-  color: string,
-) {
+  color: MockShapeColor,
+): TLShapePartial {
   return {
-    id: `shape:${id}` as `shape:${string}`,
-    type: "geo",
+    id: createShapeId(id),
+    type: "geo" as const,
     x,
     y,
-    props: { geo: "rectangle", w, h, color, fill: "solid" },
+    props: { geo: "rectangle" as const, w, h, color, fill: "solid" as const },
   };
 }
 

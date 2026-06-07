@@ -46,40 +46,102 @@ function borderToward(b: Box, t: { x: number; y: number }): { x: number; y: numb
   return { x: cx + dx * s, y: cy + dy * s };
 }
 
+/** Build a smooth S between two boxes' nearest borders. Shared by the group and
+ *  single-shape passes — same look, same dominant-axis control points. */
+function curveBetween(ab: Box, bb: Box): Seg {
+  const sCenter = { x: ab.x + ab.w / 2, y: ab.y + ab.h / 2 };
+  const fCenter = { x: bb.x + bb.w / 2, y: bb.y + bb.h / 2 };
+  const from = borderToward(ab, fCenter);
+  const to = borderToward(bb, sCenter);
+  const vertical = Math.abs(to.y - from.y) >= Math.abs(to.x - from.x);
+  const k = 0.5;
+  const c1 = vertical
+    ? { x: from.x, y: from.y + (to.y - from.y) * k }
+    : { x: from.x + (to.x - from.x) * k, y: from.y };
+  const c2 = vertical
+    ? { x: to.x, y: to.y - (to.y - from.y) * k }
+    : { x: to.x - (to.x - from.x) * k, y: to.y };
+  return {
+    id: "",
+    d: `M ${from.x} ${from.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${to.x} ${to.y}`,
+    from,
+    to,
+  };
+}
+
+/** Shape types this overlay must NOT draw a single-source connector for. The
+ *  sharpening fork (sharpening → heatmap / priority / insight-card) is owned by
+ *  SharpeningConnectorsOverlay; the resolve-pill merge wires are owned by the
+ *  real flow-connector reactor. Drawing duplicates here would double-line. */
+const SINGLE_SHAPE_EXCLUDE = new Set([
+  "ambiguity-heatmap-card",
+  "priority-map-card",
+  "insight-card",
+  "resolve-pill",
+  "flow-connector",
+  "sys-frame",
+  "prompt-sharpening",
+  "objective-card",
+  "room-card",
+  // The chatbox card is the seed of the board, not a fork result.
+  "chatbox-card",
+]);
+
 function computeSegments(editor: Editor): Seg[] {
   const segs: Seg[] = [];
-  for (const f of editor.getCurrentPageShapes()) {
+  const allShapes = editor.getCurrentPageShapes();
+
+  // ── Pass 1 ── source → fork-group FRAME. The set's underlay carries the
+  // connector for every card in it — one wire per group, not N.
+  // Track which shape ids are "framed" so the single-shape pass below skips them.
+  const framedMembers = new Set<string>();
+  for (const f of allShapes) {
     if (f.type !== "sys-frame") continue;
-    const meta = f.meta as { forkGroup?: boolean; sourceShapeId?: string };
-    if (!meta?.forkGroup || !meta.sourceShapeId) continue;
+    const meta = f.meta as {
+      forkGroup?: boolean;
+      sourceShapeId?: string;
+      memberIds?: unknown;
+    };
+    if (!meta?.forkGroup) continue;
+    if (Array.isArray(meta.memberIds)) {
+      for (const id of meta.memberIds as string[]) framedMembers.add(id);
+    }
+    if (!meta.sourceShapeId) continue;
     const src = editor.getShape(meta.sourceShapeId as TLShapeId);
     if (!src) continue; // source deleted → drop the connector
     const sb = editor.getShapePageBounds(src.id);
     const fb = editor.getShapePageBounds(f.id);
     if (!sb || !fb) continue;
-
-    const sCenter = { x: sb.x + sb.w / 2, y: sb.y + sb.h / 2 };
-    const fCenter = { x: fb.x + fb.w / 2, y: fb.y + fb.h / 2 };
-    const from = borderToward(sb, fCenter);
-    const to = borderToward(fb, sCenter);
-
-    // Pull control points along the dominant axis for a clean S-curve.
-    const vertical = Math.abs(to.y - from.y) >= Math.abs(to.x - from.x);
-    const k = 0.5;
-    const c1 = vertical
-      ? { x: from.x, y: from.y + (to.y - from.y) * k }
-      : { x: from.x + (to.x - from.x) * k, y: from.y };
-    const c2 = vertical
-      ? { x: to.x, y: to.y - (to.y - from.y) * k }
-      : { x: to.x - (to.x - from.x) * k, y: to.y };
-
-    segs.push({
-      id: `forkgroup-${f.id}`,
-      d: `M ${from.x} ${from.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${to.x} ${to.y}`,
-      from,
-      to,
-    });
+    const c = curveBetween(
+      { x: sb.x, y: sb.y, w: sb.w, h: sb.h },
+      { x: fb.x, y: fb.y, w: fb.w, h: fb.h },
+    );
+    segs.push({ ...c, id: `forkgroup-${f.id}` });
   }
+
+  // ── Pass 2 ── source → SINGLE shape. The HARD RULE: anything generated from
+  // another card carries its origin in `meta.sourceShapeId` and gets a visible
+  // wire to that origin. Group-framed members are skipped (pass 1 covers them);
+  // a small exclusion list keeps overlay families that own their own wire from
+  // double-drawing.
+  for (const s of allShapes) {
+    if (SINGLE_SHAPE_EXCLUDE.has(s.type)) continue;
+    if (framedMembers.has(String(s.id))) continue;
+    const meta = s.meta as { sourceShapeId?: string };
+    const srcId = meta?.sourceShapeId;
+    if (!srcId || srcId === String(s.id)) continue;
+    const src = editor.getShape(srcId as TLShapeId);
+    if (!src) continue;
+    const sb = editor.getShapePageBounds(src.id);
+    const tb = editor.getShapePageBounds(s.id);
+    if (!sb || !tb) continue;
+    const c = curveBetween(
+      { x: sb.x, y: sb.y, w: sb.w, h: sb.h },
+      { x: tb.x, y: tb.y, w: tb.w, h: tb.h },
+    );
+    segs.push({ ...c, id: `forkone-${s.id}` });
+  }
+
   return segs;
 }
 

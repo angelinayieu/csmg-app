@@ -19,7 +19,8 @@ export default async function NotebookRoute({
   const user = await getAuthUser();
   if (!user) redirect("/auth/login");
 
-  const db = await createClient();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = (await createClient()) as any;
   const { data: space } = await db
     .from("spaces")
     .select("id, user_id, name, archived")

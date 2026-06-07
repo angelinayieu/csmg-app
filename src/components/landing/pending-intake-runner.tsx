@@ -144,47 +144,37 @@ export function PendingIntakeRunner({ surfaceFor }: Props) {
 
     const run = async () => {
       try {
-        if (intake.kind === "create") {
-          const { res, json } = await callApi("/api/intake/bootstrap", {
-            text: intake.prompt,
-            reasoningDepth: intake.depth,
-          });
-
-          if (res.status === 402) {
-            setError({
-              kind: "credits",
-              balance: typeof json.balance === "number" ? json.balance : 0,
-              required: typeof json.required === "number" ? json.required : 0,
-            });
-            return;
-          }
+        if (intake.kind === "create" || intake.kind === "land-on-board") {
+          // Find-or-create the user's hidden draft objective space and
+          // route straight to the whiteboard. For "create" (legacy path)
+          // also stash the prompt under the per-space sessionStorage key
+          // so the chatbox-card boots seeded. "land-on-board" is the
+          // current landing CTA flow — user types their prompt INTO the
+          // board, so no seed is stashed.
+          const { res, json } = await callApi("/api/objective/draft", {});
           if (res.status === 401) {
             setError({ kind: "auth" });
             return;
           }
           if (!res.ok || typeof json.spaceId !== "string") {
             throw new Error(
-              (json.error as string) ?? `Bootstrap failed (${res.status})`,
+              (json.error as string) ?? `Draft create failed (${res.status})`,
             );
           }
-          // Landing-page → authed handoff: land on the Synthesis Lab
-          // (the universal entry surface). The run id rides through
-          // ?run= so the lab's live-synthesis hook picks up the
-          // in-flight chain immediately.
-          const dest =
-            typeof json.runId === "string" && json.runId.length > 0
-              ? `/app/space/${json.spaceId}/triple-lab?run=${json.runId}`
-              : `/app/space/${json.spaceId}/triple-lab`;
+          const draftId = json.spaceId;
+          if (intake.kind === "create") {
+            try {
+              window.sessionStorage.setItem(
+                `intake:seed:${draftId}`,
+                intake.prompt,
+              );
+            } catch {
+              /* sessionStorage unavailable — board still loads, just no seed */
+            }
+          }
           if (!cancelled) {
             clearPendingIntake();
-            router.push(dest);
-            // The destination route owns its own bootstrap splash
-            // (WhiteboardBootstrapSplash). Drop our veil now so the
-            // user isn't staring at "Bootstrapping…" while Next.js
-            // compiles the destination route in dev (can take 15-20s
-            // because router.push doesn't resolve until SSR finishes).
-            // The pathname-watch effect above is a no-op once running
-            // is null.
+            router.push(`/app/objective/${draftId}`);
             setRunning(null);
           }
           return;

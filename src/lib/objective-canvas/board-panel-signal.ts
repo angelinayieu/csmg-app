@@ -13,12 +13,17 @@
 
 import { useSyncExternalStore } from "react";
 
-export type BoardPanel = "powerups" | "library" | "style";
+// `techSpec` is the floating Tech Spec document. Unlike the three top-right
+// launcher panels (powerups/library/style) it does NOT share their slot — it
+// floats centered and coexists with the library rail (which pushes it aside),
+// so opening it must not close the others.
+export type BoardPanel = "powerups" | "library" | "style" | "techSpec";
 
 const state: Record<BoardPanel, boolean> = {
   powerups: false,
   library: false,
   style: false,
+  techSpec: false,
 };
 const subs = new Set<() => void>();
 
@@ -28,9 +33,9 @@ export function isPanelOpen(p: BoardPanel): boolean {
 
 export function setPanel(p: BoardPanel, open: boolean): void {
   if (state[p] === open) return;
-  // All three anchor directly below the unified bar at the top-right, so only
-  // one is live at a time — opening any closes the others (no overlap).
-  if (open) {
+  // The three right-edge launcher panels share a slot — opening one closes
+  // the others. Tech Spec floats independently and stays out of that mutex.
+  if (open && p !== "techSpec") {
     state.powerups = false;
     state.library = false;
     state.style = false;

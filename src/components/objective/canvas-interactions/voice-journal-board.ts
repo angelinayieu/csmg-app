@@ -44,6 +44,19 @@ function anchorPoint(editor: Editor): { x: number; y: number } {
   return { x: vp.center.x, y: vp.center.y };
 }
 
+/** The card a voice/journal artifact should fork OUT of — the objective card
+ *  (canonical seed of the board). Stringified id, "" if absent. The group-fork
+ *  overlay reads meta.sourceShapeId to draw the visible "forked from here" wire,
+ *  enforcing the hard rule that everything generated from another card carries a
+ *  connector back to its source. */
+function sourceForVoiceArtifact(editor: Editor): string {
+  const shapes = editor.getCurrentPageShapes();
+  const seed =
+    shapes.find((s) => s.type === "objective-card") ??
+    shapes.find((s) => s.type === "room-card");
+  return seed ? String(seed.id) : "";
+}
+
 export function deployVoiceNoteOnBoard(
   editor: Editor,
   d: VoiceNoteCardDetail,
@@ -106,6 +119,7 @@ export function deployVoiceNoteOnBoard(
       expanded: false,
       color: d.color || VOICE_NOTE_COLOR,
     },
+    meta: { sourceShapeId: sourceForVoiceArtifact(editor) },
   });
   editor.select(id);
   editor.centerOnPoint(
@@ -191,6 +205,7 @@ export function deployJournalOnBoard(
       open: false,
       color: d.color || JOURNAL_COLOR,
     },
+    meta: { sourceShapeId: sourceForVoiceArtifact(editor) },
   });
   editor.select(id);
 }

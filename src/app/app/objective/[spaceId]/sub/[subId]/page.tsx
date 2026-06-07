@@ -88,12 +88,21 @@ interface Sub {
 
 export default async function SubObjectiveRoomPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ spaceId: string; subId: string }>;
+  searchParams?: Promise<{ full?: string }>;
 }) {
   const { spaceId, subId } = await params;
   const user = await getAuthUser();
   if (!user) redirect("/auth/login");
+
+  // Legacy room view (SubObjectiveRoomHeader breadcrumb + lanes / entities /
+  // edges) is retired with the old build — see project_old_build_deprecation.
+  // Default route resolves to the new minimal board; ?full=1 keeps the
+  // legacy escape hatch alive for anyone still pinning a direct URL.
+  const sp = await searchParams;
+  if (sp?.full !== "1") redirect(`/app/objective/${spaceId}`);
 
   const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

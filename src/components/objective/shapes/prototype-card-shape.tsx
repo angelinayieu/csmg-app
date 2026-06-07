@@ -3,9 +3,14 @@
 // ── PrototypeCardShape ──
 //
 // The interactive Claude prototype on the board: a self-contained HTML/CSS+JS
-// UI (DOMPurify v3.4.8 sanitized server-side) rendered LIVE in a T1
-// sandboxed iframe (sandbox="allow-scripts" — null-origin; can't read parent,
-// can't fetch APIs, can't unset its own sandbox). Inline scripts are PERMITTED
+// UI (sanitize-html-T1 sanitized server-side) rendered LIVE in a T1
+// sandboxed iframe (sandbox="allow-scripts allow-forms allow-modals
+// allow-popups"). Still NULL ORIGIN because allow-same-origin is OMITTED —
+// can't read parent cookies, can't fetch APIs (CSP also forbids it), can't
+// unset its own sandbox. The extra flags unlock the patterns Opus reaches
+// for by default — form submits, alert/confirm/prompt, target=_blank links
+// — so the prototype actually behaves like a real product surface instead
+// of dying silently on the first alert(). Inline scripts are PERMITTED
 // for real interactivity; external resources blocked at three layers:
 // sanitizer + sandbox + injected CSP meta.
 // Built from a TechSpec via "Build prototype", then iterated in place
@@ -13,20 +18,29 @@
 // header is the drag handle; the iframe + feedback box stop propagation so
 // they're interactive without fighting tldraw.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
   T,
   stopEventPropagation,
+  useEditor,
   type RecordProps,
   type TLBaseShape,
   type TLResizeInfo,
   resizeBox,
 } from "tldraw";
-import { Loader2, Wand2, AlertCircle, SendHorizontal } from "lucide-react";
+import {
+  Loader2,
+  Wand2,
+  AlertCircle,
+  SendHorizontal,
+  LayoutGrid,
+  Minimize2,
+} from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { TasteReceipt } from "@/components/objective/canvas-interactions/taste-receipt";
+import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
 
 export const PROTOTYPE_REFINE_EVENT = "objective-board:prototype-refine";
 
@@ -48,6 +62,12 @@ export type PrototypeCardShape = TLBaseShape<
     version: number;
     /** Stringified TechSpec — context the refine route grounds against. */
     specJson: string;
+    /** When true, render a horizontal row of mini-iframes (one per spec
+     *  screen) instead of the single full-size iframe. */
+    screensExpanded: boolean;
+    /** Snapshot of w/h at expand time, restored on collapse. */
+    prevW: number;
+    prevH: number;
   }
 >;
 
@@ -61,6 +81,9 @@ export class PrototypeCardShapeUtil extends BaseBoxShapeUtil<PrototypeCardShape>
     status: T.literalEnum("generating", "ready", "error"),
     version: T.number,
     specJson: T.string,
+    screensExpanded: T.boolean,
+    prevW: T.number,
+    prevH: T.number,
   };
 
   override canResize = () => true;
@@ -79,6 +102,9 @@ export class PrototypeCardShapeUtil extends BaseBoxShapeUtil<PrototypeCardShape>
       status: "generating",
       version: 0,
       specJson: "",
+      screensExpanded: false,
+      prevW: 0,
+      prevH: 0,
     };
   }
 
@@ -91,10 +117,139 @@ export class PrototypeCardShapeUtil extends BaseBoxShapeUtil<PrototypeCardShape>
   }
 }
 
+// ── Multi-screen expansion ───────────────────────────────────────
+//
+// The prototype HTML is a single self-contained document with its OWN
+// navigation. We don't know whether it uses hash routing, JS state, or
+// data-attrs — so when the user clicks "View screens" we render N
+// copies of the iframe, each with a small BOOTSTRAP SCRIPT spliced in
+// just before </body>. The script runs after the prototype's own JS
+// boots, then tries several universal strategies in order to navigate
+// to the target screen — succeeds for hash-routed, data-routed, and
+// text-labeled-button apps without the prototype knowing about us.
+
+const MINI_W = 280; // each mini-iframe column width when expanded
+const MINI_GAP = 12;
+const SIDE_PAD = 12;
+
+/** Splice a bootstrap nav script just before </body>. Pure string op; no
+ *  re-sanitize needed (the sanitizer ran server-side on the original; the
+ *  injected script is a known constant string we author). The script tries:
+ *    (1) a `window.__navigateTo` hook (best — opt-in from generated code)
+ *    (2) location.hash = name (works for hash-routed prototypes)
+ *    (3) click an element matching [data-screen=name] / [data-route=name]
+ *        / [data-tab=name] / [href="#name"] — works for declarative routes
+ *    (4) click the first <button>/<a>/<[role=tab]> whose visible text
+ *        equals the screen name (case-insensitive) — works for the
+ *        common "tab bar" UI patterns the model spits out
+ *  All steps soft-fail; a prototype that can't find the screen just shows
+ *  its default route. */
+function injectScreenNavigator(html: string, screenName: string): string {
+  // JSON-encode to safely embed inside a <script> string literal.
+  const target = JSON.stringify(screenName);
+  const boot = `<script>(function(){
+  function go(){
+    var name=${target};
+    try{ if(typeof window.__navigateTo==="function"){ window.__navigateTo(name); return; } }catch(e){}
+    try{
+      var slugA=name.toLowerCase().replace(/\\s+/g,"-").replace(/[^a-z0-9-]/g,"");
+      var slugB=name.toLowerCase().replace(/\\s+/g,"");
+      location.hash=slugA;
+    }catch(e){}
+    try{
+      var sel=[
+        '[data-screen='+JSON.stringify(name)+']',
+        '[data-route='+JSON.stringify(name)+']',
+        '[data-tab='+JSON.stringify(name)+']',
+        '[data-view='+JSON.stringify(name)+']'
+      ];
+      for(var i=0;i<sel.length;i++){
+        var el=document.querySelector(sel[i]);
+        if(el && typeof el.click==="function"){ el.click(); return; }
+      }
+    }catch(e){}
+    try{
+      var nodes=document.querySelectorAll('button, a, [role=tab], [role=menuitem]');
+      var want=name.trim().toLowerCase();
+      for(var j=0;j<nodes.length;j++){
+        var t=(nodes[j].textContent||"").trim().toLowerCase();
+        if(t===want || t.indexOf(want)===0){
+          try{ nodes[j].click(); return; }catch(e){}
+        }
+      }
+    }catch(e){}
+  }
+  if(document.readyState==="complete"||document.readyState==="interactive"){
+    setTimeout(go,40);
+  } else {
+    window.addEventListener("DOMContentLoaded", function(){ setTimeout(go,40); });
+  }
+})();</script>`;
+  // Splice before </body> if present, else append.
+  const idx = html.search(/<\/body\s*>/i);
+  if (idx >= 0) return html.slice(0, idx) + boot + html.slice(idx);
+  return html + boot;
+}
+
+/** Pull screen list from the persisted spec. Soft-fail to []. */
+function readScreens(specJson: string): { name: string; purpose: string }[] {
+  if (!specJson) return [];
+  try {
+    const spec = JSON.parse(specJson) as TechSpec;
+    const screens = spec?.ui_plan?.screens;
+    if (!Array.isArray(screens)) return [];
+    return screens
+      .filter((s) => s && typeof s.name === "string" && s.name.trim())
+      .map((s) => ({
+        name: s.name.trim(),
+        purpose: typeof s.purpose === "string" ? s.purpose : "",
+      }));
+  } catch {
+    return [];
+  }
+}
+
 function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
-  const { title, html, status, version } = shape.props;
+  const { title, html, status, version, specJson, screensExpanded, prevW, prevH } =
+    shape.props;
   const accent = appleVibe.accent.primary;
+  const editor = useEditor();
   const [feedback, setFeedback] = useState("");
+  const screens = useMemo(() => readScreens(specJson), [specJson]);
+  const canExpand = status === "ready" && !!html && screens.length >= 2;
+
+  function toggleScreens(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!canExpand && !screensExpanded) return;
+    if (!screensExpanded) {
+      // Expand: grow the shape to fit N mini-iframes + remember w/h.
+      const next = Math.min(screens.length, 5);
+      const targetW =
+        next * MINI_W + (next - 1) * MINI_GAP + SIDE_PAD * 2;
+      editor.updateShape<PrototypeCardShape>({
+        id: shape.id,
+        type: "prototype-card",
+        props: {
+          screensExpanded: true,
+          prevW: shape.props.w,
+          prevH: shape.props.h,
+          w: targetW,
+          h: Math.max(shape.props.h, 480),
+        },
+      });
+    } else {
+      // Collapse: restore w/h if we have a snapshot.
+      editor.updateShape<PrototypeCardShape>({
+        id: shape.id,
+        type: "prototype-card",
+        props: {
+          screensExpanded: false,
+          w: prevW > 0 ? prevW : 420,
+          h: prevH > 0 ? prevH : 540,
+        },
+      });
+    }
+  }
 
   function sendFeedback() {
     const text = feedback.trim();
@@ -166,6 +321,45 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
               v{version}
             </span>
           )}
+
+          {/* View screens toggle — only when the prototype is ready AND
+              the spec has ≥2 screens. Sits at the far right of the header.
+              stopEventPropagation on pointerdown so tldraw doesn't start a
+              drag from the click. */}
+          {(canExpand || screensExpanded) && (
+            <button
+              type="button"
+              onPointerDown={stopEventPropagation}
+              onClick={toggleScreens}
+              title={
+                screensExpanded
+                  ? "Collapse back to one view"
+                  : `Expand all ${Math.min(screens.length, 5)} screens side-by-side`
+              }
+              style={{
+                marginLeft: version > 0 && status === "ready" ? 6 : "auto",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "4px 9px",
+                borderRadius: 999,
+                border: `1px solid ${appleVibe.stroke.soft}`,
+                background: screensExpanded ? accent : "#fff",
+                color: screensExpanded ? "white" : appleVibe.text.secondary,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+                fontFamily: appleVibe.font.stack,
+              }}
+            >
+              {screensExpanded ? (
+                <Minimize2 style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+              ) : (
+                <LayoutGrid style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+              )}
+              {screensExpanded ? "Collapse" : "View screens"}
+            </button>
+          )}
         </div>
 
         {/* Taste receipt — which terms / source images the prototype honors.
@@ -179,15 +373,77 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
 
         {/* Body — the live prototype, a skeleton, or an error. */}
         <div style={{ position: "relative", flex: 1, minHeight: 0, background: "#fff" }}>
-          {status === "ready" && html ? (
+          {status === "ready" && html && screensExpanded ? (
+            <div
+              onPointerDown={stopEventPropagation}
+              onWheelCapture={(e) => e.stopPropagation()}
+              style={{
+                width: "100%",
+                height: "100%",
+                overflowX: "auto",
+                overflowY: "hidden",
+                display: "flex",
+                gap: MINI_GAP,
+                padding: SIDE_PAD,
+                background: appleVibe.surface.chip,
+                boxSizing: "border-box",
+              }}
+            >
+              {screens.slice(0, 5).map((s, i) => (
+                <div
+                  key={`${i}-${s.name}`}
+                  style={{
+                    flex: `0 0 ${MINI_W}px`,
+                    height: "100%",
+                    display: "flex",
+                    flexDirection: "column",
+                    background: "#fff",
+                    borderRadius: 12,
+                    border: `1px solid ${appleVibe.stroke.soft}`,
+                    overflow: "hidden",
+                    boxShadow: "0 1px 0 rgba(255,255,255,0.6) inset, 0 8px 24px -18px rgba(11,18,40,0.18)",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "6px 10px",
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      letterSpacing: 0.2,
+                      textTransform: "uppercase",
+                      color: appleVibe.text.tertiary,
+                      borderBottom: `1px solid ${appleVibe.stroke.hairline}`,
+                      background: "#fff",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={s.purpose || s.name}
+                  >
+                    {s.name}
+                  </div>
+                  <iframe
+                    title={`${title} – ${s.name}`}
+                    srcDoc={injectScreenNavigator(html, s.name)}
+                    sandbox="allow-scripts allow-forms allow-modals allow-popups"
+                    style={{ width: "100%", flex: 1, border: "none", display: "block", background: "#fff" }}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : status === "ready" && html ? (
             <iframe
               title={`${title} prototype`}
               srcDoc={html}
-              // T1: allow inline scripts but NOT same-origin — the doc loads
-              // at a null origin, can't read parent cookies, can't fetch our
-              // APIs, can't escape the sandbox. sanitizeHtmlT1 also wedges a
-              // deny-all CSP meta at the top of <head> as the second layer.
-              sandbox="allow-scripts"
+              // T1: allow scripts + forms + modals + popups, but NOT
+              // same-origin — the doc loads at a null origin, can't read
+              // parent cookies, can't fetch our APIs, can't escape the
+              // sandbox. sanitizeHtmlT1 also wedges a deny-all CSP meta at
+              // the top of <head> as the second layer; the extra flags
+              // unlock alert/confirm/prompt + form submit + target=_blank
+              // (the patterns Opus uses without thinking) so prototypes
+              // don't silently die on the first localStorage/alert call.
+              sandbox="allow-scripts allow-forms allow-modals allow-popups"
               onPointerDown={stopEventPropagation}
               onWheelCapture={(e) => e.stopPropagation()}
               style={{ width: "100%", height: "100%", border: "none", display: "block" }}

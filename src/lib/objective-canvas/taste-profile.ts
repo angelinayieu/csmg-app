@@ -33,7 +33,8 @@ export type TasteSection =
   | "vocabulary"
   | "tensions"
   | "sources"
-  | "no_gos";
+  | "no_gos"
+  | "style_synthesis";
 
 export interface TasteVoice {
   /** 2-4 word tone tag — "Direct, technical, MVP-first". */
@@ -61,10 +62,50 @@ export interface TasteVocab {
 
 export interface TasteSource {
   ingestedFileId: string;
+  objectId: string | null;
   name: string;
   thumbUrl: string | null;
+  sourceUrl: string | null;
+  sourceType: string | null;
   /** Concept slugs this source contributed. */
   conceptSlugs: string[];
+  /** Per-source visual cues, shown on the moodboard tile. */
+  palette: string[];
+  patterns: string[];
+}
+
+/** Visual style aggregated across the space's analyzed image references.
+ *  Pure rollup of per-image image_source.content_snapshot.style_analysis —
+ *  no LLM cost. Drives the "Visual style (from your references)" block
+ *  in DESIGN.md and the palette override in tailwind.config.ts that the
+ *  prototype generator reads. signal_strength gates whether the override
+ *  fires: too few references → keep brand defaults. */
+export interface StyleSynthesis {
+  /** 3-4 hex codes ordered by aggregate prominence. */
+  dominant_palette: string[];
+  /** ≤2 hex codes pulled from per-image accent lists. */
+  accent_palette: string[];
+  palette_temperature: "warm" | "neutral" | "cool" | "mixed" | "unknown";
+  typography_voice:
+    | "humanist"
+    | "geometric"
+    | "monospaced"
+    | "serif"
+    | "mixed"
+    | "unknown";
+  composition_density: "sparse" | "balanced" | "dense" | "unknown";
+  composition_grid: "rigid" | "loose" | "asymmetric" | "unknown";
+  /** Patterns present in ≥2 of the source images, ordered by frequency. */
+  recurring_patterns: string[];
+  /** Motion cues that appear across ≥2 sources. */
+  motion_cues: string[];
+  /** 0-1 confidence — combines ref count + per-axis agreement. The
+   *  prototype generator only overrides the brand palette when this
+   *  clears 0.6 (≥3 broadly-agreeing references). */
+  signal_strength: number;
+  /** How many image_source rows actually contributed (had a non-empty
+   *  style_analysis). Drives the "from N references" label in the UI. */
+  source_count: number;
 }
 
 /** The full content_snapshot stashed on the taste_profile row. */
@@ -74,6 +115,9 @@ export interface TasteProfileSnapshot {
   tensions: string[];
   sources: TasteSource[];
   no_gos: string[];
+  /** Aggregated visual style from analyzed references. Pure rollup, no
+   *  LLM cost. Empty when no image_source rows have style_analysis yet. */
+  style_synthesis: StyleSynthesis;
   /** Section-level pins. A pinned section is preserved verbatim on
    *  regenerate; only un-pinned sections are re-synthesized. */
   pinned: Partial<Record<TasteSection, boolean>>;
@@ -88,12 +132,26 @@ const EMPTY_VOICE: TasteVoice = {
   style: "",
 };
 
+export const EMPTY_STYLE_SYNTHESIS: StyleSynthesis = {
+  dominant_palette: [],
+  accent_palette: [],
+  palette_temperature: "unknown",
+  typography_voice: "unknown",
+  composition_density: "unknown",
+  composition_grid: "unknown",
+  recurring_patterns: [],
+  motion_cues: [],
+  signal_strength: 0,
+  source_count: 0,
+};
+
 const EMPTY_SNAPSHOT: TasteProfileSnapshot = {
   voice: EMPTY_VOICE,
   vocabulary: { coined: [], grounded: [], ai: [] },
   tensions: [],
   sources: [],
   no_gos: [],
+  style_synthesis: EMPTY_STYLE_SYNTHESIS,
   pinned: {},
   generated_at: new Date(0).toISOString(),
   thin_signal: true,
@@ -177,20 +235,43 @@ interface ImageSourceRow {
   id: string;
   source_name: string | null;
   image_url: string | null;
+  source_url?: string | null;
+  source_type?: string | null;
+  image_object_id?: string | null;
   image_concepts: unknown;
+  style_analysis?: unknown;
+}
+
+function readSourcePalette(styleAnalysis: unknown): string[] {
+  if (!styleAnalysis || typeof styleAnalysis !== "object") return [];
+  const palette = (styleAnalysis as RawStyleAnalysis).palette;
+  const dominant = Array.isArray(palette?.dominant) ? palette.dominant : [];
+  const accent = Array.isArray(palette?.accent) ? palette.accent : [];
+  return [...dominant, ...accent].filter(isHex).slice(0, 4);
+}
+
+function readSourcePatterns(styleAnalysis: unknown): string[] {
+  if (!styleAnalysis || typeof styleAnalysis !== "object") return [];
+  const patterns = (styleAnalysis as RawStyleAnalysis).patterns;
+  return readStringArray(patterns, 4);
 }
 
 /** Map analyzed images → TasteSource[]. */
 export function readSources(images: ImageSourceRow[]): TasteSource[] {
   return images.slice(0, 12).map((img) => ({
     ingestedFileId: img.id,
+    objectId: img.image_object_id ?? null,
     name: img.source_name?.trim() || "Untitled image",
     thumbUrl: img.image_url,
+    sourceUrl: img.source_url ?? null,
+    sourceType: img.source_type ?? null,
     conceptSlugs: Array.isArray(img.image_concepts)
       ? (img.image_concepts as unknown[]).filter(
           (s): s is string => typeof s === "string",
         )
       : [],
+    palette: readSourcePalette(img.style_analysis),
+    patterns: readSourcePatterns(img.style_analysis),
   }));
 }
 
@@ -387,12 +468,23 @@ export function normalizeSnapshot(raw: unknown): TasteProfileSnapshot {
           .map((s) => ({
             ingestedFileId:
               typeof s.ingestedFileId === "string" ? s.ingestedFileId : "",
+            objectId: typeof s.objectId === "string" ? s.objectId : null,
             name: typeof s.name === "string" ? s.name : "Untitled",
             thumbUrl: typeof s.thumbUrl === "string" ? s.thumbUrl : null,
+            sourceUrl: typeof s.sourceUrl === "string" ? s.sourceUrl : null,
+            sourceType: typeof s.sourceType === "string" ? s.sourceType : null,
             conceptSlugs: Array.isArray(s.conceptSlugs)
               ? (s.conceptSlugs as unknown[]).filter(
                   (x): x is string => typeof x === "string",
                 )
+              : [],
+            palette: Array.isArray(s.palette)
+              ? (s.palette as unknown[]).filter(isHex).slice(0, 4)
+              : [],
+            patterns: Array.isArray(s.patterns)
+              ? (s.patterns as unknown[])
+                  .filter((x): x is string => typeof x === "string")
+                  .slice(0, 4)
               : [],
           }))
           .filter((s) => s.ingestedFileId)
@@ -402,6 +494,7 @@ export function normalizeSnapshot(raw: unknown): TasteProfileSnapshot {
           (s): s is string => typeof s === "string",
         )
       : [],
+    style_synthesis: normalizeStyleSynthesis(o.style_synthesis),
     pinned:
       o.pinned && typeof o.pinned === "object"
         ? (o.pinned as Partial<Record<TasteSection, boolean>>)
@@ -435,3 +528,383 @@ function normalizeVocabBucket(raw: unknown): TasteVocabEntry[] {
 }
 
 export { SOURCE_REF as TASTE_PROFILE_SOURCE_REF, PROFILE_TITLE as TASTE_PROFILE_TITLE };
+
+// ── style_synthesis aggregator ──────────────────────────────────────
+//
+// Pure rollup of per-image style_analysis into a per-space visual style
+// profile. No LLM cost. Idempotent. Two-pass:
+//   pass 1: walk image_source.content_snapshot.style_analysis blobs
+//           and collect: palette pool (with prominence weights),
+//           per-enum vote counts, per-pattern occurrence counts
+//   pass 2: derive: palette (frequency-bucketed top-k after dedup by
+//           perceptual distance), enums (majority vote or "mixed"
+//           on no clear winner), patterns (any with count ≥ 2),
+//           signal_strength (count × agreement)
+//
+// Defensive throughout — a malformed per-image blob is just skipped, no
+// throw.
+
+interface RawStyleAnalysis {
+  palette?: {
+    dominant?: unknown;
+    accent?: unknown;
+    temperature?: unknown;
+    contrast?: unknown;
+  };
+  typography?: {
+    weight_range?: unknown;
+    scale_contrast?: unknown;
+    voice?: unknown;
+  };
+  composition?: {
+    density?: unknown;
+    grid?: unknown;
+    hierarchy?: unknown;
+  };
+  patterns?: unknown;
+  motion_cues?: unknown;
+}
+
+/** Read style_analysis off each row's content_snapshot. Soft-skips any
+ *  row whose snapshot is malformed or whose analysis is empty. */
+export function extractStyleAnalyses(
+  rows: Array<{ content_snapshot?: unknown }>,
+): RawStyleAnalysis[] {
+  const out: RawStyleAnalysis[] = [];
+  for (const r of rows) {
+    const snap = r?.content_snapshot;
+    if (!snap || typeof snap !== "object") continue;
+    const sa = (snap as Record<string, unknown>).style_analysis;
+    if (!sa || typeof sa !== "object") continue;
+    out.push(sa as RawStyleAnalysis);
+  }
+  return out;
+}
+
+const HEX_RE = /^#[0-9a-f]{6}$/;
+
+function isHex(v: unknown): v is string {
+  return typeof v === "string" && HEX_RE.test(v);
+}
+
+function readStringArray(v: unknown, cap: number): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+    .map((x) => x.trim())
+    .slice(0, cap);
+}
+
+/** Cheap perceptual-distance check on two #rrggbb hex codes. Squared RGB
+ *  Euclidean — good enough to bucket "near-duplicate" colors without
+ *  pulling in a Lab converter. Threshold tuned so e.g. #fafafa and
+ *  #ffffff collapse but accent reds stay distinct from primary blues. */
+function hexDistanceSq(a: string, b: string): number {
+  const ar = parseInt(a.slice(1, 3), 16);
+  const ag = parseInt(a.slice(3, 5), 16);
+  const ab = parseInt(a.slice(5, 7), 16);
+  const br = parseInt(b.slice(1, 3), 16);
+  const bg = parseInt(b.slice(3, 5), 16);
+  const bb = parseInt(b.slice(5, 7), 16);
+  return (ar - br) ** 2 + (ag - bg) ** 2 + (ab - bb) ** 2;
+}
+const NEAR_DUP_THRESHOLD_SQ = 900; // ~ΔE 30 in plain RGB space
+
+/** Pick the top-K hex codes by aggregate weight, collapsing near-duplicates.
+ *  Each input is { hex, weight }; near-duplicates merge into the heavier
+ *  one. Returns up to `k` codes ordered by collapsed weight desc. */
+function pickTopColors(
+  input: Array<{ hex: string; weight: number }>,
+  k: number,
+): string[] {
+  const merged: Array<{ hex: string; weight: number }> = [];
+  for (const c of input) {
+    const dup = merged.find(
+      (m) => hexDistanceSq(m.hex, c.hex) < NEAR_DUP_THRESHOLD_SQ,
+    );
+    if (dup) {
+      if (c.weight > dup.weight) dup.hex = c.hex;
+      dup.weight += c.weight;
+    } else {
+      merged.push({ hex: c.hex, weight: c.weight });
+    }
+  }
+  merged.sort((a, b) => b.weight - a.weight);
+  return merged.slice(0, k).map((c) => c.hex);
+}
+
+/** Vote-count → winner or "mixed". `mixedWhen` is the relative gap (top
+ *  vs runner-up) below which the result is "mixed" instead of the leader.
+ *  Default 0.4 — leader needs ≥40% margin to claim the axis. */
+function majorityVote<T extends string>(
+  votes: Map<T, number>,
+  fallback: T,
+  mixedValue: T,
+  mixedWhen = 0.4,
+): { winner: T; agreement: number } {
+  const entries = Array.from(votes.entries())
+    .filter(([k]) => k !== ("unknown" as T))
+    .sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return { winner: fallback, agreement: 0 };
+  const total = entries.reduce((s, [, v]) => s + v, 0);
+  if (total === 0) return { winner: fallback, agreement: 0 };
+  const [topKey, topCount] = entries[0];
+  const runnerUp = entries[1]?.[1] ?? 0;
+  const lead = (topCount - runnerUp) / total;
+  if (entries.length > 1 && lead < mixedWhen) {
+    return { winner: mixedValue, agreement: lead };
+  }
+  return { winner: topKey, agreement: topCount / total };
+}
+
+/** Map a hex code's R+G+B contribution into a rough temperature vote. Used
+ *  as a tiebreaker when no per-image temperature axis was emitted. */
+function inferTempFromHex(hex: string): "warm" | "neutral" | "cool" {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  if (max - min < 18) return "neutral";
+  if (r >= b + 24) return "warm";
+  if (b >= r + 24) return "cool";
+  return "neutral";
+}
+
+/** The aggregator. Pure given input rows. Returns EMPTY_STYLE_SYNTHESIS
+ *  when no row contributed an analysis. */
+export function aggregateStyleSynthesis(
+  rows: Array<{ content_snapshot?: unknown }>,
+): StyleSynthesis {
+  const analyses = extractStyleAnalyses(rows);
+  if (analyses.length === 0) return EMPTY_STYLE_SYNTHESIS;
+
+  // Palette: weighted vote. Dominant entries weight 2× over accent entries.
+  // Order-in-list weight ramps: a 1st-position color counts more than 4th.
+  const dominantPool: Array<{ hex: string; weight: number }> = [];
+  const accentPool: Array<{ hex: string; weight: number }> = [];
+  for (const a of analyses) {
+    const dominant = Array.isArray(a.palette?.dominant) ? a.palette.dominant : [];
+    dominant.forEach((h, i) => {
+      if (isHex(h)) dominantPool.push({ hex: h, weight: 2 * (4 - Math.min(i, 3)) });
+    });
+    const accent = Array.isArray(a.palette?.accent) ? a.palette.accent : [];
+    accent.forEach((h, i) => {
+      if (isHex(h)) accentPool.push({ hex: h, weight: 4 - Math.min(i, 3) });
+    });
+  }
+  const dominant_palette = pickTopColors(dominantPool, 4);
+  const accent_palette = pickTopColors(accentPool, 2);
+
+  // Per-axis votes.
+  const tempVotes = new Map<
+    "warm" | "neutral" | "cool" | "mixed" | "unknown",
+    number
+  >();
+  const voiceVotes = new Map<
+    | "humanist"
+    | "geometric"
+    | "monospaced"
+    | "serif"
+    | "mixed"
+    | "unknown",
+    number
+  >();
+  const densityVotes = new Map<
+    "sparse" | "balanced" | "dense" | "unknown",
+    number
+  >();
+  const gridVotes = new Map<
+    "rigid" | "loose" | "asymmetric" | "unknown",
+    number
+  >();
+  const patternCounts = new Map<string, number>();
+  const motionCounts = new Map<string, number>();
+
+  for (const a of analyses) {
+    const t = a.palette?.temperature;
+    if (typeof t === "string") tempVotes.set(t as never, (tempVotes.get(t as never) ?? 0) + 1);
+    const v = a.typography?.voice;
+    if (typeof v === "string") voiceVotes.set(v as never, (voiceVotes.get(v as never) ?? 0) + 1);
+    const d = a.composition?.density;
+    if (typeof d === "string") densityVotes.set(d as never, (densityVotes.get(d as never) ?? 0) + 1);
+    const g = a.composition?.grid;
+    if (typeof g === "string") gridVotes.set(g as never, (gridVotes.get(g as never) ?? 0) + 1);
+    for (const p of readStringArray(a.patterns, 6)) {
+      patternCounts.set(p, (patternCounts.get(p) ?? 0) + 1);
+    }
+    for (const m of readStringArray(a.motion_cues, 4)) {
+      motionCounts.set(m, (motionCounts.get(m) ?? 0) + 1);
+    }
+  }
+
+  // Tiebreaker on temperature: if the model said "unknown" everywhere but
+  // we picked a clear dominant palette, infer from hex.
+  let { winner: palette_temperature, agreement: tempAgree } = majorityVote(
+    tempVotes,
+    "unknown",
+    "mixed",
+  );
+  if (palette_temperature === "unknown" && dominant_palette.length > 0) {
+    const inferred = new Map<"warm" | "neutral" | "cool", number>();
+    for (const hex of dominant_palette) {
+      const t = inferTempFromHex(hex);
+      inferred.set(t, (inferred.get(t) ?? 0) + 1);
+    }
+    const sorted = Array.from(inferred.entries()).sort((a, b) => b[1] - a[1]);
+    if (sorted.length > 0) palette_temperature = sorted[0][0];
+  }
+
+  const { winner: typography_voice, agreement: voiceAgree } = majorityVote(
+    voiceVotes,
+    "unknown",
+    "mixed",
+  );
+  const { winner: composition_density, agreement: densityAgree } = majorityVote(
+    densityVotes,
+    "unknown",
+    "balanced",
+    0.3,
+  );
+  const { winner: composition_grid, agreement: gridAgree } = majorityVote(
+    gridVotes,
+    "unknown",
+    "loose",
+    0.3,
+  );
+
+  // Recurring patterns: anything appearing in ≥2 sources, ordered by count.
+  const recurring_patterns = Array.from(patternCounts.entries())
+    .filter(([, c]) => c >= 2 || (analyses.length === 1 && c >= 1))
+    .sort((a, b) => b[1] - a[1])
+    .map(([p]) => p)
+    .slice(0, 6);
+
+  // Motion: same recurrence rule.
+  const motion_cues = Array.from(motionCounts.entries())
+    .filter(([, c]) => c >= 2 || (analyses.length === 1 && c >= 1))
+    .sort((a, b) => b[1] - a[1])
+    .map(([m]) => m)
+    .slice(0, 4);
+
+  // signal_strength: count × agreement.
+  //   n=1 → 0.30  ·  n=2 → 0.55  ·  n=3 → 0.75  ·  n≥4 → 0.90
+  //   × mean(temp,voice,density,grid agreement) clamped to [0.5,1]
+  const n = analyses.length;
+  const countScore =
+    n === 0 ? 0 : n === 1 ? 0.3 : n === 2 ? 0.55 : n === 3 ? 0.75 : 0.9;
+  const agreements = [tempAgree, voiceAgree, densityAgree, gridAgree].filter(
+    (x) => x > 0,
+  );
+  const agreementScore =
+    agreements.length === 0
+      ? 0.7
+      : Math.max(
+          0.5,
+          Math.min(1, agreements.reduce((s, x) => s + x, 0) / agreements.length),
+        );
+  const signal_strength = Math.round(countScore * agreementScore * 100) / 100;
+
+  return {
+    dominant_palette,
+    accent_palette,
+    palette_temperature,
+    typography_voice,
+    composition_density,
+    composition_grid,
+    recurring_patterns,
+    motion_cues,
+    signal_strength,
+    source_count: n,
+  };
+}
+
+/** Defensive parser — accepts whatever's on the persisted snapshot. */
+export function normalizeStyleSynthesis(raw: unknown): StyleSynthesis {
+  if (!raw || typeof raw !== "object") return EMPTY_STYLE_SYNTHESIS;
+  const o = raw as Record<string, unknown>;
+  const dominant = Array.isArray(o.dominant_palette)
+    ? (o.dominant_palette as unknown[]).filter(isHex).slice(0, 4)
+    : [];
+  const accent = Array.isArray(o.accent_palette)
+    ? (o.accent_palette as unknown[]).filter(isHex).slice(0, 2)
+    : [];
+  const temp =
+    typeof o.palette_temperature === "string" &&
+    ["warm", "neutral", "cool", "mixed", "unknown"].includes(o.palette_temperature)
+      ? (o.palette_temperature as StyleSynthesis["palette_temperature"])
+      : "unknown";
+  const voice =
+    typeof o.typography_voice === "string" &&
+    [
+      "humanist",
+      "geometric",
+      "monospaced",
+      "serif",
+      "mixed",
+      "unknown",
+    ].includes(o.typography_voice)
+      ? (o.typography_voice as StyleSynthesis["typography_voice"])
+      : "unknown";
+  const density =
+    typeof o.composition_density === "string" &&
+    ["sparse", "balanced", "dense", "unknown"].includes(o.composition_density)
+      ? (o.composition_density as StyleSynthesis["composition_density"])
+      : "unknown";
+  const grid =
+    typeof o.composition_grid === "string" &&
+    ["rigid", "loose", "asymmetric", "unknown"].includes(o.composition_grid)
+      ? (o.composition_grid as StyleSynthesis["composition_grid"])
+      : "unknown";
+  const signal =
+    typeof o.signal_strength === "number" && Number.isFinite(o.signal_strength)
+      ? Math.max(0, Math.min(1, o.signal_strength))
+      : 0;
+  const count =
+    typeof o.source_count === "number" && o.source_count >= 0
+      ? Math.floor(o.source_count)
+      : 0;
+  return {
+    dominant_palette: dominant,
+    accent_palette: accent,
+    palette_temperature: temp,
+    typography_voice: voice,
+    composition_density: density,
+    composition_grid: grid,
+    recurring_patterns: Array.isArray(o.recurring_patterns)
+      ? (o.recurring_patterns as unknown[])
+          .filter((s): s is string => typeof s === "string")
+          .slice(0, 6)
+      : [],
+    motion_cues: Array.isArray(o.motion_cues)
+      ? (o.motion_cues as unknown[])
+          .filter((s): s is string => typeof s === "string")
+          .slice(0, 4)
+      : [],
+    signal_strength: signal,
+    source_count: count,
+  };
+}
+
+/** Convenience: read all image_source rows for a space and aggregate.
+ *  Soft-fail to EMPTY_STYLE_SYNTHESIS on any DB error. */
+export async function aggregateStyleSynthesisForSpace(
+  db: AnyDb,
+  spaceId: string,
+): Promise<StyleSynthesis> {
+  try {
+    const { data } = await db
+      .from("library_objects")
+      .select("content_snapshot")
+      .eq("space_id", spaceId)
+      .eq("object_type", "image_source");
+    const rows = (data as Array<{ content_snapshot?: unknown }> | null) ?? [];
+    return aggregateStyleSynthesis(rows);
+  } catch (err) {
+    console.warn(
+      "[taste-profile] aggregateStyleSynthesisForSpace failed (soft):",
+      err,
+    );
+    return EMPTY_STYLE_SYNTHESIS;
+  }
+}

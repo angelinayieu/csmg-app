@@ -270,10 +270,13 @@ export function ObjectiveCanvasShell({
       ).detail;
       const roomId = detail?.roomId;
       if (!roomId) return;
-      // The objective opens as a NODE now (ObjectiveNode drawer), not the
-      // legacy sub-objective picker. Ignore the "__obj" room intent in minimal
-      // mode; the old picker stays reachable only via ?full=1.
-      if (roomId === "__obj" && minimal) return;
+      // In minimal mode the entire legacy room view (entities/edges lanes +
+      // SubObjectiveRoomHeader breadcrumb) is retired — the route now redirects
+      // back to the board. Don't navigate at all so the user never sees the
+      // transient white "active rooms" chrome on the way out. Cards on the
+      // board own their own detail surface (oc-card → OPEN_CARD_DETAIL_EVENT
+      // → ObjectDetailMount); the room → room-window dance is full-mode only.
+      if (minimal) return;
       const idx =
         roomId === "__obj" ? 0 : rooms.findIndex((r) => r.id === roomId);
       if (idx >= 0) navTo(idx, detail?.focusEntityId);

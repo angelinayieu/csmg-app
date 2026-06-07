@@ -1,6 +1,6 @@
 "use client";
 
-// ── Tech Spec Panel — full-screen page for a SpecForge TechSpec ──────
+// ── Tech Spec Panel — floating spec document over the board ──────────
 //
 // Document-first read-out of a TechSpec (the SpecForge-native spec):
 // overview → problem/users/goals → architecture → data model → features →
@@ -8,10 +8,18 @@
 // agent-build-spec-panel.tsx (same chrome + typography tokens) so the app
 // keeps one spec-document look. Copy markdown / Download .md / Close, plus
 // a "Build prototype" CTA that hands off to the prototype stage.
+//
+// Layout: this is a floating glass card, NOT a full-screen overlay. It
+// clears the BoardTopRightBar above and the bottom toolbar below so all
+// board chrome reads as the same surface. When the Library rail opens it
+// pushes the card aside (right edge slides in) — both panels coexist.
+// Registers itself in board-panel-signal under "techSpec" so the connector
+// "+" handle suppresses while a doc is up (no plus floating over text).
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Check, Copy, Download, X, Wand2 } from "lucide-react";
 import type { TechSpec } from "@/lib/objective-canvas/tech-spec/types";
+import { setPanel, usePanel } from "@/lib/objective-canvas/board-panel-signal";
 
 const C = {
   ink: "rgba(15,23,42,0.92)",
@@ -140,10 +148,42 @@ export function TechSpecPanel({
 
   const dl = spec.ui_plan.design_language;
 
+  // Tell the rest of the board this panel is up — connector "+" handle hides
+  // while it's open so a plus-button never floats over the document.
+  const libraryOpen = usePanel("library");
+  useEffect(() => {
+    setPanel("techSpec", true);
+    return () => setPanel("techSpec", false);
+  }, []);
+
+  // Float below the top-right bar (top:16, ~36px tall, +20px breathing room)
+  // and above the bottom toolbar. When the Library rail (right:16, w:384) is
+  // open, slide our right edge to clear it (16 + 384 + 12 gutter = 412).
+  // Side margins clear the left BoardNavBar pill as well.
+  const TOP_CLEAR = 72;
+  const BOTTOM_CLEAR = 72;
+  const SIDE_CLEAR = 84;
+  const LIBRARY_PUSH = 412;
+
   return (
     <div
-      className="fixed inset-0 z-50 overflow-y-auto"
-      style={{ background: C.bg, fontFamily: FONT }}
+      className="overflow-y-auto"
+      style={{
+        position: "fixed",
+        top: TOP_CLEAR,
+        bottom: BOTTOM_CLEAR,
+        left: SIDE_CLEAR,
+        right: libraryOpen ? LIBRARY_PUSH : SIDE_CLEAR,
+        zIndex: 40,
+        background: C.bg,
+        fontFamily: FONT,
+        borderRadius: 18,
+        border: `1px solid ${C.rule}`,
+        boxShadow:
+          "inset 0 1px 0 rgba(255,255,255,0.6), 0 30px 70px -22px rgba(11,18,40,0.32)",
+        transition:
+          "right var(--dur-normal, 0.22s) var(--ease-spring-soft, cubic-bezier(0.32,0.72,0,1))",
+      }}
     >
       {/* Header */}
       <div
@@ -152,6 +192,8 @@ export function TechSpecPanel({
           background: "rgba(250,250,250,0.92)",
           borderBottom: `1px solid ${C.rule}`,
           backdropFilter: "blur(12px)",
+          borderTopLeftRadius: 18,
+          borderTopRightRadius: 18,
         }}
       >
         <div

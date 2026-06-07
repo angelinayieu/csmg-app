@@ -13,7 +13,12 @@ export type ReasoningDepth = "quick" | "standard" | "deep";
 export type PendingIntakeInput =
   | { kind: "create"; prompt: string; depth: ReasoningDepth }
   | { kind: "ask"; prompt: string }
-  | { kind: "template"; templateId: string };
+  | { kind: "template"; templateId: string }
+  // Landing "start" button: skip composing on the marketing page entirely.
+  // After signup the runner just opens the user's draft whiteboard so they
+  // type their prompt INTO the board's chatbox card (same surface as the
+  // in-app first-keystroke flow).
+  | { kind: "land-on-board" };
 
 export type PendingIntake = PendingIntakeInput & { stashedAt: number };
 

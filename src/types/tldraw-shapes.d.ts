@@ -1076,6 +1076,13 @@ declare module "@tldraw/tlschema" {
       status: "generating" | "ready" | "error";
       version: number;
       specJson: string;
+      /** When true, the body renders a horizontal row of mini-iframes,
+       *  one per spec.ui_plan.screens, each best-effort-navigated to its
+       *  screen. Toggled by the header "View screens" button. */
+      screensExpanded: boolean;
+      /** Snapshot of w/h at expand time, restored on collapse. */
+      prevW: number;
+      prevH: number;
     };
     // T2 — multi-file React prototype rendered in Sandpack (claude-artifact-
     // runner template). Distinct from prototype-card (T0/T1, HTML) because the

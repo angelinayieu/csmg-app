@@ -153,6 +153,11 @@ import { OperationLane } from "./canvas-interactions/operation-lane";
 import { SpecForgeDetailPanel } from "./canvas-interactions/specforge-detail-panel";
 import { ConvergeDivergePopup } from "./canvas-interactions/converge-diverge-popup";
 import {
+  ClusterRecommendationsMount,
+  RUN_RECOMMENDED_OP_EVENT,
+  type RunRecommendedOpDetail,
+} from "./canvas-interactions/cluster-recommendations-overlay";
+import {
   FORGE_REQUEST_EVENT,
   FORGE_STATE_EVENT,
 } from "./canvas-interactions/powerup-rail";
@@ -851,9 +856,13 @@ export function WhiteboardBase({
   );
 
   // ── Live collaboration wiring ──────────────────────────────────
-  // Identity + shared-flag come from /members. Collaboration spins up only
-  // when the board is shared with ≥1 other participant; otherwise the hook
-  // is a complete no-op (zero change to the solo case).
+  // Identity comes from /members. We subscribe to the presence channel as
+  // soon as the user is confirmed to have board access — not only when the
+  // members list already has ≥2 people. Otherwise the OWNER, who is alone
+  // when they open the board before an invitee accepts, would never spin up
+  // the channel and would silently miss every peer who joins later (no
+  // avatar, no cursor). The hook itself gates cursor + shape broadcasts on
+  // peer presence so solo boards stay nearly free on the wire.
   const [collabIdentity, setCollabIdentity] = useState<BoardIdentity | null>(
     null,
   );
@@ -894,7 +903,12 @@ export function WhiteboardBase({
           role: m.myRole,
         });
         setCollabRole(m.myRole);
-        setCollabEnabled(Boolean(m.shared));
+        // /members already verified board access, so any returned role means
+        // "subscribe". Don't gate on m.shared — that was a snapshot of "≥1
+        // other member at fetch time" and would lock the owner out of every
+        // invitee who accepts AFTER the page mounts. The hook itself stays
+        // quiet on the wire until presence shows someone else.
+        setCollabEnabled(true);
       } catch {
         /* soft-fail — board still works solo */
       }
@@ -1301,6 +1315,41 @@ export function WhiteboardBase({
     }
     window.addEventListener(DECOMPOSE_INTO_CARDS_EVENT, onDecompose);
     return () => window.removeEventListener(DECOMPOSE_INTO_CARDS_EVENT, onDecompose);
+  }, [spaceId]);
+
+  // RUN_RECOMMENDED_OP_EVENT — the click handler in the cluster
+  // recommendations overlay dispatches this with {opId, hubShapeId,
+  // hubObjectId, branchObjectIds, factorSlug, factorLabel}. We resolve the
+  // hub shape to an OperationTarget and run it through the same
+  // executeCardOperation path the verbs use, so the cluster's recommended
+  // move drops its result cards just like a manually-triggered op would.
+  // Soft: a missing shape (cluster deleted) or unknown op is a no-op.
+  useEffect(() => {
+    async function onRunRecommended(e: Event) {
+      const ed = editorRef.current;
+      if (!ed) return;
+      const detail = (e as CustomEvent<RunRecommendedOpDetail>)?.detail;
+      if (!detail?.opId || !detail.hubShapeId) return;
+      const shape = ed.getShape(detail.hubShapeId as TLShapeId);
+      if (!shape) return;
+      const target = shapeToScanTarget(shape);
+      if (!target) return;
+      try {
+        const s = getAiSettings();
+        await executeCardOperation(ed, target, detail.opId, {
+          temperature: s.temperature,
+          depth: s.depth,
+          questionCount: s.complexity,
+          webSearch: s.webSearch,
+          spaceId,
+        });
+      } catch (err) {
+        console.warn("[board] recommended op failed (soft):", err);
+      }
+    }
+    window.addEventListener(RUN_RECOMMENDED_OP_EVENT, onRunRecommended);
+    return () =>
+      window.removeEventListener(RUN_RECOMMENDED_OP_EVENT, onRunRecommended);
   }, [spaceId]);
 
   function exitUnfurl() {
@@ -2148,6 +2197,71 @@ function cardPayload(s: TLShape): BoardCardPayload {
   }
   const p = (s as InsightCardShape).props;
   return { title: p.headline };
+}
+
+/** Extract a card's headline + body + role for the v2 deep-synth focus-card
+ *  frame. Returns null for chrome (notes/text/geo) — those are noise as a
+ *  focus card. Mirrors shapeToScanTarget's per-shape mapping, but splits
+ *  title/body rather than concatenating them. The role string is what the
+ *  micro-objectives deriver sees ("feature" / "room" / "card" / …) so a
+ *  Feature card gets feature-shaped micros, not generic. */
+function extractFocusCardContent(
+  s: TLShape,
+): { headline: string; body: string; role: string } | null {
+  const asStr = (v: unknown): string =>
+    typeof v === "string" ? v.trim() : "";
+  if (s.type === "artifact-card") {
+    const p = (s as ArtifactCardShape).props;
+    return {
+      headline: asStr(p.title),
+      body: asStr(p.subtitle),
+      role: typeof p.kind === "string" ? (p.kind as string) : "feature",
+    };
+  }
+  if (s.type === "room-card") {
+    const p = (s as RoomCardShape).props;
+    return {
+      headline: asStr(p.title),
+      body: "",
+      role: "room",
+    };
+  }
+  if (s.type === "oc-card") {
+    const p = (s as OcCardShape).props;
+    return {
+      headline: asStr(p.name),
+      body: asStr(p.body),
+      role: typeof p.kind === "string" ? (p.kind as string) : "card",
+    };
+  }
+  if (s.type === "insight-card") {
+    const p = (s as InsightCardShape).props;
+    return {
+      headline: asStr(p.headline),
+      body: asStr(p.body),
+      role: "insight",
+    };
+  }
+  return null;
+}
+
+/** Pick the focus card for a Deep Synthesize run. Priority: oc-card
+ *  (Feature/Variable — the new object layer) > artifact-card (legacy
+ *  Feature) > insight-card (synthesis output as a focus is uncommon
+ *  but supported) > room-card. Notes / text don't qualify — synth
+ *  around them collapses to the v1 frame. Returns null when the
+ *  selection has no qualifying card. */
+function pickFocusEntry<
+  T extends { id: string; kind: string; headline: string; body: string; role: string },
+>(entries: T[]): T | null {
+  const byKind = (k: string) => entries.find((e) => e.kind === k) ?? null;
+  return (
+    byKind("oc-card") ??
+    byKind("artifact-card") ??
+    byKind("insight-card") ??
+    byKind("room-card") ??
+    null
+  );
 }
 
 /** Project a board card into a library-saveable descriptor, or null when
@@ -3186,11 +3300,32 @@ function BoardOverlay({
       // Broader "idea" selection for Deep Synthesize — post-its + text +
       // cards (anything shapeToScanTarget reads), in selection order so the
       // numbered list sent to the LLM maps back to shape ids for tethering.
-      const deepEntries: { id: TLShapeId; kind: string; text: string }[] = [];
+      // v2 frame: each card-typed entry carries its split headline + body +
+      // role so the route can frame synthesis AROUND the selected focus
+      // card and derive its micro-objectives. Notes/text default to text-as-
+      // headline (they don't qualify as focus, but stay in the selection).
+      const deepEntries: {
+        id: TLShapeId;
+        kind: string;
+        text: string;
+        headline: string;
+        body: string;
+        role: string;
+      }[] = [];
       for (const s of selected) {
         const t = shapeToScanTarget(s);
-        if (t) deepEntries.push({ id: s.id, kind: s.type, text: t.text });
+        if (!t) continue;
+        const focus = extractFocusCardContent(s);
+        deepEntries.push({
+          id: s.id,
+          kind: s.type,
+          text: t.text,
+          headline: focus?.headline ?? t.text.slice(0, 80),
+          body: focus?.body ?? "",
+          role: focus?.role ?? s.type,
+        });
       }
+      const focusEntry = pickFocusEntry(deepEntries);
       // Converge/Diverge popup — beside the selection (single OR lasso) whenever
       // ≥1 scannable card is selected and none is mid-edit. Anchor = the
       // selection's bounding box in screen coords; target = the aggregate.
@@ -3228,7 +3363,21 @@ function BoardOverlay({
         cdTarget,
         boardScanText,
         deepIds: deepEntries.map((e) => e.id),
-        deepPayloads: deepEntries.map((e) => ({ kind: e.kind, text: e.text })),
+        // v2.1 — send the tldraw shape id with each payload so the route
+        // can resolve it to its library_objects row and enrich the
+        // synthesis context (micros / notes / sources / link graph).
+        deepPayloads: deepEntries.map((e) => ({
+          kind: e.kind,
+          text: e.text,
+          shapeId: e.id as string,
+        })),
+        // v2 frame data — sent alongside the selection so the route can
+        // derive (or reuse cached) micro-objectives for the focus card.
+        // Empty strings collapse to v1 (factors-as-direct-rubric) frame.
+        focusCardId: (focusEntry?.id as string) ?? "",
+        focusCardHeadline: focusEntry?.headline ?? "",
+        focusCardBody: focusEntry?.body ?? "",
+        focusCardRole: focusEntry?.role ?? "",
       };
     },
     [editor],
@@ -3425,17 +3574,43 @@ function BoardOverlay({
       const res = await fetch(`/api/objective/${spaceId}/deep-synthesize`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ selection: payloads }),
+        body: JSON.stringify({
+          selection: payloads,
+          // v2 frame — when a card is in the selection, the route uses its
+          // micro-objectives as the rubric. When nothing card-like is
+          // selected (only notes/text), focusCardId is empty and the route
+          // silently falls back to the v1 factor-only frame.
+          focusCardId: view.focusCardId,
+          focusCardHeadline: view.focusCardHeadline,
+          focusCardBody: view.focusCardBody,
+          focusCardRole: view.focusCardRole,
+        }),
       });
       if (!res.ok) throw new Error(`deep-synthesize failed: ${res.status}`);
       const data = (await res.json()) as {
-        hub: { headline: string; body: string };
+        hub: {
+          headline: string;
+          body: string;
+          dominantFactor?: string;
+          dominantMicro?: string;
+        };
         branches: SynthesisBranch[];
+        factorIndex?: Record<string, { label: string; kind: string }>;
+        microIndex?: Record<
+          string,
+          { label: string; laddersTo: string[]; confidence: number }
+        >;
+        focusCardId?: string | null;
+        objectIds?: { hub: string | null; branches: (string | null)[] };
       };
       forkSynthesisMap(editor, {
         map: { hub: data.hub, branches: data.branches },
         sourceIds,
         color: appleVibe.accent.primary,
+        factorIndex: data.factorIndex,
+        objectIds: data.objectIds,
+        microIndex: data.microIndex,
+        focusCardId: data.focusCardId ?? view.focusCardId ?? "",
       });
     } catch (err) {
       console.warn("[board] deep synthesize failed:", err);
@@ -3513,6 +3688,13 @@ function BoardOverlay({
       {/* Object detail drawer — listens for OPEN_CARD_DETAIL_EVENT (oc-card
           double-click + Library clicks) → metadata + object-graph modal. */}
       <ObjectDetailMount spaceId={spaceId} editor={editor} />
+      {/* Cluster recommendations overlay — when a generation op drops a
+          cluster (Deep Synthesize today; decompose/make_plan soon) it fires
+          CLUSTER_GENERATED_EVENT. This mount catches it, fetches the
+          /cluster-next-move recommendation, and floats a translucent glass
+          hover above the cluster with the primary "now what" move + 2
+          secondary chips. Click → RUN_RECOMMENDED_OP_EVENT (caught below). */}
+      <ClusterRecommendationsMount spaceId={spaceId} editor={editor} />
       {/* Drag-to-connect: "+" handle on a hovered card → drag to another card
           → relation menu → persisted object_link + bound arrow. Group-aware
           (drags the whole multi-selection when the source is part of it). */}
@@ -3570,7 +3752,14 @@ function BoardOverlay({
           const anchor = view.cdAnchor!;
           const target = view.cdTarget!;
           return (
+            // Key on the source shape id so switching the selection mounts a
+            // FRESH popup with its own busy state — the prior card's diverge /
+            // converge keeps running in the background (executeCardOperation
+            // captures the source shape upfront and deploys results anchored
+            // to it), and the new card can fire its own verb immediately
+            // instead of being blocked by the previous card's spinner.
             <ConvergeDivergePopup
+              key={target.shapeId ?? "cd-popup"}
               anchor={anchor}
               onRun={(opId, temperature) => {
                 const s = getAiSettings();
@@ -3606,7 +3795,6 @@ function BoardOverlay({
         <SpecForgeSourceLaneConnector
           sourceShapeId={forgeSourceShapeId}
           laneRef={laneRef}
-          editor={editor}
         />
       )}
 

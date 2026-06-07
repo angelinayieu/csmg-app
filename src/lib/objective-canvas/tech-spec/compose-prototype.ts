@@ -28,7 +28,16 @@ import type { TechSpec } from "./types";
 const OPUS_MODEL = BEST_CLAUDE_MODEL;
 
 const BASE_RULES =
-  "Hard rules: ONE self-contained <!DOCTYPE html> document with inline <style> and (optional) inline <script>. INLINE JavaScript is now PERMITTED — use it to wire interactivity via addEventListener (never inline on* attributes; they will be stripped). NO external resources of any kind — no CDN, no remote scripts, no web fonts, no image URLs (data: URLs are fine for SVG). The runtime CSP blocks all network access; remote refs will silently fail. Make it feel REAL: concrete copy and realistic placeholder data (never lorem ipsum), the key components from the UI plan, and rich interactivity (real state, animations, keyboard nav). Honor the design language (glass tier, density, motion intent, accent, hero pattern) and surface at least one non-happy-path state (empty/loading) somewhere. Return ONLY the HTML document — no prose, no markdown fence.";
+  "Hard rules: ONE self-contained <!DOCTYPE html> document with inline <style> and (optional) inline <script>. INLINE JavaScript is now PERMITTED — use it to wire interactivity via addEventListener (never inline on* attributes; they will be stripped). " +
+  "RUNTIME SANDBOX (CRITICAL — read carefully). The page runs in a null-origin sandboxed iframe with a strict CSP. The following ALL fail and WILL crash your script if reached at the top level, so subsequent addEventListener calls never register and the whole prototype becomes un-clickable: " +
+  "(a) localStorage / sessionStorage / IndexedDB — throw SecurityError. Keep ALL state in plain JS variables (`let state = {...}`) or in-memory data structures only. " +
+  "(b) fetch / XMLHttpRequest / WebSocket / EventSource — all blocked by CSP `connect-src 'none'`. Do not call them; ship realistic seed data inline as a JS array/object literal. " +
+  "(c) Cookies / `document.cookie` — null origin, no-op. " +
+  "(d) `window.open` to remote URLs — blocked. Use in-page navigation only. " +
+  "(e) NO external resources of any kind — no CDN, no remote scripts, no web fonts (font-src is 'none'), no image URLs (data: URLs are fine for SVG; remote img src will silently 404). " +
+  "If you must touch any of the above defensively, wrap it in try/catch so the rest of the script keeps running. " +
+  "ALLOWED: alert/confirm/prompt, <form> submit handlers (preventDefault as usual), target=_blank links, addEventListener on any element, requestAnimationFrame, setTimeout/setInterval, CSS transitions/animations. " +
+  "Make it feel REAL: concrete copy and realistic placeholder data (never lorem ipsum), the key components from the UI plan, and rich interactivity (real state, animations, keyboard nav). Honor the design language (glass tier, density, motion intent, accent, hero pattern) and surface at least one non-happy-path state (empty/loading) somewhere. Return ONLY the HTML document — no prose, no markdown fence.";
 
 const TASTE_RULE =
   "When a DESIGN.md and/or tailwind.config.ts block is provided below, treat them as the project-level taste contract. The user's vocabulary terms (marked \"yours\") must appear verbatim where natural; their anti-patterns must not appear at all; the brand color/radius/shadow tokens in tailwind.config.ts must shape the inline <style> block (use the same hex values, no purple/Inter clichés unless the contract explicitly calls for them).";

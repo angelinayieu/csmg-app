@@ -103,20 +103,37 @@ export function deployOcCards(
 
   const vp = editor.getViewportPageBounds();
 
-  // Baseline: drop the cluster BELOW the objective + sharpening head cards so it
-  // reads as a downstream layer (not piling on top of them).
-  const headBottoms = editor
-    .getCurrentPageShapes()
-    .filter(
-      (s) =>
-        s.type === "objective-card" ||
-        s.type === "room-card" ||
-        s.type === "prompt-sharpening",
-    )
-    .map((s) => editor.getShapePageBounds(s.id)?.maxY)
-    .filter((v): v is number => typeof v === "number");
-  const preferredTop =
-    headBottoms.length > 0 ? Math.max(...headBottoms) + GAP_BELOW : vp.center.y;
+  // Baseline: drop the cluster BELOW the action node that forked it (the
+  // resolve-pill, the objective card — passed in opts.sourceShapeId), so the
+  // decomposition visually FORKS DOWN out of the thing the user pressed. The
+  // user can drag the pill anywhere on the board — the cluster has to spawn
+  // beneath ITS current position, not the stale objective/sharpening row.
+  // Fallback: max bottom of head cards, so legacy callers without a
+  // sourceShapeId still get a sensible "below the heading" placement.
+  const sourceBottom = opts?.sourceShapeId
+    ? editor.getShapePageBounds(opts.sourceShapeId as TLShapeId)?.maxY
+    : undefined;
+  let preferredTop: number;
+  let anchorMidX = vp.center.x;
+  if (typeof sourceBottom === "number") {
+    preferredTop = sourceBottom + GAP_BELOW;
+    const srcMid = editor.getShapePageBounds(opts!.sourceShapeId as TLShapeId)
+      ?.midX;
+    if (typeof srcMid === "number") anchorMidX = srcMid;
+  } else {
+    const headBottoms = editor
+      .getCurrentPageShapes()
+      .filter(
+        (s) =>
+          s.type === "objective-card" ||
+          s.type === "room-card" ||
+          s.type === "prompt-sharpening",
+      )
+      .map((s) => editor.getShapePageBounds(s.id)?.maxY)
+      .filter((v): v is number => typeof v === "number");
+    preferredTop =
+      headBottoms.length > 0 ? Math.max(...headBottoms) + GAP_BELOW : vp.center.y;
+  }
 
   // Hybrid push-then-yield: reserve a clear region for the WHOLE systems graph,
   // pushing earlier generations aside or relocating the cluster — never on top.
@@ -128,7 +145,7 @@ export function deployOcCards(
   const spot = reserveSpace(
     editor,
     { w: layout.sinkX + 16, h: graphH },
-    { anchorMidX: vp.center.x, preferredTop, gap: GAP_BELOW },
+    { anchorMidX, preferredTop, gap: GAP_BELOW },
   );
   const anchorX = spot.x + 8;
   const anchorY = spot.y;

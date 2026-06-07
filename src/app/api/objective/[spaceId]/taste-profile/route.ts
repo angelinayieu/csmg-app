@@ -19,6 +19,8 @@ import {
   synthesizeTasteSections,
   bucketVocabulary,
   readSources,
+  aggregateStyleSynthesisForSpace,
+  EMPTY_STYLE_SYNTHESIS,
   type TasteProfileSnapshot,
   type TasteSection,
   type TasteVoice,
@@ -112,7 +114,9 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
   // 3. Analyzed images (the sources)
   const { data: imageRows } = await db
     .from("ingested_files")
-    .select("id, source_name, image_url, image_concepts, image_narrative")
+    .select(
+      "id, source_name, source_type, source_url, image_url, image_concepts, image_narrative, image_object_id",
+    )
     .eq("space_id", spaceId)
     .like("mime_type", "image/%")
     .not("vision_completed_at", "is", null)
@@ -120,10 +124,57 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
   const images = (imageRows ?? []) as Array<{
     id: string;
     source_name: string | null;
+    source_type: string | null;
+    source_url: string | null;
     image_url: string | null;
     image_concepts: unknown;
     image_narrative: string | null;
+    image_object_id: string | null;
+    style_analysis?: unknown;
   }>;
+
+  // Pull the backing image_source rows so the profile's source tiles can
+  // open the object drawer and show per-image visual cues. This is keyed by
+  // source_ref rather than relying only on ingested_files.image_object_id so
+  // older rows still hydrate correctly after lazy backfills.
+  if (images.length > 0) {
+    try {
+      const sourceRefs = images.map((img) => `img:${img.id}`);
+      const { data: imageObjects } = await db
+        .from("library_objects")
+        .select("id, source_ref, content_snapshot")
+        .eq("space_id", spaceId)
+        .eq("object_type", "image_source")
+        .in("source_ref", sourceRefs);
+      const byIngestedId = new Map<
+        string,
+        { id: string; content_snapshot?: unknown }
+      >();
+      for (const obj of (imageObjects ?? []) as Array<{
+        id: string;
+        source_ref: string | null;
+        content_snapshot?: unknown;
+      }>) {
+        const ingestedId =
+          typeof obj.source_ref === "string" && obj.source_ref.startsWith("img:")
+            ? obj.source_ref.slice(4)
+            : "";
+        if (ingestedId) byIngestedId.set(ingestedId, obj);
+      }
+      for (const img of images) {
+        const obj = byIngestedId.get(img.id);
+        if (!obj) continue;
+        img.image_object_id = img.image_object_id ?? obj.id;
+        const snap =
+          obj.content_snapshot && typeof obj.content_snapshot === "object"
+            ? (obj.content_snapshot as Record<string, unknown>)
+            : null;
+        img.style_analysis = snap?.style_analysis;
+      }
+    } catch {
+      /* soft — sources still render without tile-level style cues */
+    }
+  }
 
   // 4. User notes (intentions + taste) on the context anchor
   let intentionNotes: string[] = [];
@@ -209,12 +260,21 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     intentionNotes.length === 0 &&
     tasteNotes.length === 0;
 
+  // Visual-style aggregation across the space's image_source rows. Pure
+  // rollup — no LLM cost. If the user pinned this section, preserve the
+  // previous value instead of re-aggregating.
+  const style_synthesis =
+    prevPinned.style_synthesis && prevSnap
+      ? prevSnap.style_synthesis ?? EMPTY_STYLE_SYNTHESIS
+      : await aggregateStyleSynthesisForSpace(db, spaceId);
+
   const snapshot: TasteProfileSnapshot = {
     voice,
     vocabulary,
     tensions,
     sources,
     no_gos,
+    style_synthesis,
     pinned: prevPinned,
     generated_at: new Date().toISOString(),
     thin_signal,

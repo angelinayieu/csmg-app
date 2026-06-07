@@ -360,12 +360,21 @@ export function evaluateSpecForgeQuality(
         criteria.map((c) => clean(c.name)).filter(Boolean),
       );
       const candidatesMissingScores = candidates.filter((c) => {
-        const scores =
-          c.scores && typeof c.scores === "object"
-            ? (c.scores as Record<string, unknown>)
-            : null;
-        if (!scores) return true;
-        const scored = new Set(Object.keys(scores).filter((k) => Number.isFinite(Number(scores[k]))));
+        const scored = new Set<string>();
+        if (Array.isArray(c.scores)) {
+          for (const s of c.scores as Array<{ criterion?: unknown; score?: unknown }>) {
+            const name = typeof s?.criterion === "string" ? s.criterion : "";
+            if (name && Number.isFinite(Number(s?.score))) scored.add(name);
+          }
+        } else if (c.scores && typeof c.scores === "object") {
+          // Tolerate the legacy map shape if a cached/replayed run still has it.
+          const map = c.scores as Record<string, unknown>;
+          for (const k of Object.keys(map)) {
+            if (Number.isFinite(Number(map[k]))) scored.add(k);
+          }
+        } else {
+          return true;
+        }
         for (const name of criterionNames) {
           if (!scored.has(name)) return true;
         }

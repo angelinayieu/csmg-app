@@ -147,9 +147,27 @@ function ImageCardRenderer({
   util: ObjectiveImageCardShapeUtil;
 }) {
   const editor = util.editor;
-  const { expanded, imageName, imageUrl, description, w } = shape.props;
+  const { expanded, imageName, imageUrl, description, w, objectId } = shape.props;
   const entities = parseEntities(shape.props.entitiesJson);
   const hasMeta = !!description || entities.length > 0;
+
+  // React-level onClick survives the chevron's stopEventPropagation (which
+  // only blocks tldraw-shape-level gestures). Putting it on the outer
+  // wrapper lets clicks anywhere on the image / footer open the detail
+  // rail once the image has been promoted to an image_source row.
+  function openDetail(e: React.MouseEvent) {
+    if (!objectId) return;
+    if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+    const target = e.target as HTMLElement | null;
+    // Don't fight the chevron / button — they own their click handler.
+    if (target && target.closest("button")) return;
+    e.stopPropagation();
+    window.dispatchEvent(
+      new CustomEvent("objective-board:open-card-detail", {
+        detail: { objectId },
+      }),
+    );
+  }
 
   // Natural aspect ratio (height / width) of the loaded image. Until it
   // loads, fall back to whatever height the shape was persisted at.
@@ -194,6 +212,8 @@ function ImageCardRenderer({
     >
       <style>{`@keyframes objImgPulse{0%,100%{box-shadow:0 0 0 3px ${GREEN}22,0 0 8px 1px ${GREEN}aa}50%{box-shadow:0 0 0 4px ${GREEN}14,0 0 13px 2px ${GREEN}}}`}</style>
       <div
+        onClick={openDetail}
+        title={objectId ? "Open image details" : ""}
         style={{
           width: "100%",
           height: "100%",
@@ -209,6 +229,7 @@ function ImageCardRenderer({
           display: "flex",
           flexDirection: "column",
           fontFamily: appleVibe.font.stack,
+          cursor: objectId ? "pointer" : "default",
         }}
       >
         {/* Image — full, never cropped (contain), area hugs its aspect ratio */}

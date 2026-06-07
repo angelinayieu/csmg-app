@@ -101,11 +101,19 @@ function FlowConnectorRenderer({
       // Pick the ports by the DOMINANT axis so the wire flows cleanly: a card
       // stacked BELOW its source connects bottom→top (vertical), side-by-side
       // connects right→left. Never the weird side-to-side loop when stacked.
+      //
+      // SPECIAL CASE — the resolve-pill is a downward MERGE point of a two-way
+      // fork (heatmap + priority both feed it). Force vertical routing for any
+      // wire ending in a resolve-pill so dragging the pill off-axis doesn't
+      // flip the wires to side-in (which looks broken — the wire enters the
+      // pill from the left/right of its body instead of its top).
+      const toShape = editor.getShape(shape.props.toId as TLShapeId);
+      const forceVertical = toShape?.type === "resolve-pill";
       const dxc = b.midX - a.midX;
       const dyc = b.midY - a.midY;
       let pax: number, pay: number, pbx: number, pby: number;
       let vertical: boolean;
-      if (Math.abs(dyc) >= Math.abs(dxc)) {
+      if (forceVertical || Math.abs(dyc) >= Math.abs(dxc)) {
         vertical = true;
         if (dyc >= 0) {
           // target below → out = source bottom-center, in = target top-center

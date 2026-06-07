@@ -30,6 +30,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid pack" }, { status: 400 });
   }
 
+  // Reuse the Stripe customer if we already have one so packs + subscriptions
+  // share a single customer record (one payment history, one portal session).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabase as any;
+  const { data: prof } = await db
+    .from("profiles")
+    .select("stripe_customer_id")
+    .eq("id", user.id)
+    .maybeSingle();
+  const existingCustomerId = prof?.stripe_customer_id as string | null;
+
   const origin = request.headers.get("origin") ?? "http://localhost:3000";
 
   const session = await s.checkout.sessions.create({
@@ -48,6 +59,9 @@ export async function POST(request: Request) {
         quantity: 1,
       },
     ],
+    ...(existingCustomerId
+      ? { customer: existingCustomerId }
+      : { customer_email: user.email ?? undefined, customer_creation: "always" as const }),
     metadata: {
       userId: user.id,
       packId: pack.id,
