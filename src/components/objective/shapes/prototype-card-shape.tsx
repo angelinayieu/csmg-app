@@ -18,7 +18,7 @@
 // header is the drag handle; the iframe + feedback box stop propagation so
 // they're interactive without fighting tldraw.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BaseBoxShapeUtil,
   HTMLContainer,
@@ -234,6 +234,35 @@ function readScreens(specJson: string): { name: string; purpose: string }[] {
   }
 }
 
+/** Time-based progress for the prototype build. The build is a single,
+ *  non-streaming Opus call (~80s, no real progress events), so we ease toward
+ *  ~95% on elapsed time and let the actual result snap it to done. Eases out
+ *  (fast at first, slows near the cap) so it never sits at 100% before the
+ *  HTML lands and never looks frozen. Resets when generation isn't active. */
+function useGenerationProgress(active: boolean): number {
+  const [pct, setPct] = useState(0);
+  const startRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active) {
+      startRef.current = null;
+      setPct(0);
+      return;
+    }
+    const start = Date.now();
+    startRef.current = start;
+    setPct(5);
+    const EST_MS = 85_000; // expected build time; the curve is forgiving if off
+    const id = setInterval(() => {
+      const elapsed = Date.now() - start;
+      // 1 - e^(-t/τ): smooth ease-out asymptotic to the 95% cap.
+      const frac = 1 - Math.exp(-elapsed / (EST_MS * 0.55));
+      setPct(Math.min(95, Math.max(5, Math.round(5 + frac * 90))));
+    }, 450);
+    return () => clearInterval(id);
+  }, [active]);
+  return pct;
+}
+
 function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
   const { title, html, status, version, specJson, screensExpanded, prevW, prevH } =
     shape.props;
@@ -242,6 +271,7 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
   const [feedback, setFeedback] = useState("");
   const screens = useMemo(() => readScreens(specJson), [specJson]);
   const canExpand = status === "ready" && !!html && screens.length >= 2;
+  const genProgress = useGenerationProgress(status === "generating");
 
   function toggleScreens(e: React.MouseEvent) {
     e.stopPropagation();
@@ -544,6 +574,39 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
               <Loader2 className="animate-spin" style={{ width: 24, height: 24 }} strokeWidth={2.2} />
               <span style={{ fontSize: 12.5, fontWeight: 600, color: appleVibe.text.secondary }}>
                 {version > 0 ? "Revising the prototype…" : "Claude is building the prototype…"}
+              </span>
+              {/* Progress bar — time-based estimate (the build is one ~80s
+                  non-streaming call). Eases toward 95%, snaps away on done. */}
+              <div
+                style={{
+                  width: "72%",
+                  maxWidth: 240,
+                  height: 5,
+                  marginTop: 2,
+                  borderRadius: 999,
+                  background: "rgba(15,23,42,0.08)",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${genProgress}%`,
+                    background: accent,
+                    borderRadius: 999,
+                    transition: "width 450ms ease-out",
+                  }}
+                />
+              </div>
+              <span
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  color: appleVibe.text.faint,
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {genProgress}% · this can take up to a minute or two
               </span>
             </div>
           )}
