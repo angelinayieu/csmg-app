@@ -97,7 +97,13 @@ async function opusHtml(system: string, user: string): Promise<string> {
   const resp = await anthropic.messages.create(
     {
       model: OPUS_MODEL,
-      max_tokens: 8000,
+      // 8000 was too low: these prototypes front-load a large design-token
+      // <style> block (dense CSS tokenizes at ~2.2 chars/token), so a ~17KB
+      // doc hit the ceiling MID-CSS — before the <body> was ever written.
+      // sanitize-html then auto-closed the tags into a valid but BODY-LESS
+      // document that renders as "just the background, no components". Give
+      // the full single-screen prototype real headroom.
+      max_tokens: 16000,
       system: [uiSkillPrefix, frontendDesignPrefix, shadcnPrefix, system]
         .filter(Boolean)
         .join("\n\n"),
@@ -109,7 +115,19 @@ async function opusHtml(system: string, user: string): Promise<string> {
     .filter((b) => b.type === "text")
     .map((b) => (b as { text: string }).text)
     .join("\n");
-  return sanitizeHtmlT1(extractHtml(text));
+  const raw = extractHtml(text);
+  // Truncation / body-less guard. If the model still ran out of budget (or
+  // emitted a head-only doc), the raw output won't have a real <body> or a
+  // closing </html>. Fail LOUDLY so the card shows an error the user can
+  // retry — never silently ship a background-only shell as "ready".
+  const looksComplete =
+    /<body[\s>]/i.test(raw) && /<\/html\s*>/i.test(raw) && /<\/body\s*>/i.test(raw);
+  if (resp.stop_reason === "max_tokens" || !looksComplete) {
+    throw new Error(
+      "Prototype generation was cut off before the layout finished (the design got too large). Try again — it usually completes on a retry.",
+    );
+  }
+  return sanitizeHtmlT1(raw);
 }
 
 /** Generate the first interactive prototype from a TechSpec. Optional taste
