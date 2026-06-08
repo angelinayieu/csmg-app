@@ -137,7 +137,15 @@ export async function POST(req: Request, ctx: Ctx) {
     // Lineage to source (when provided) — surfaces in the cluster graph
     // + drawer's links panel. Soft-fail; objects that don't share a space
     // would be rejected upstream by linkObjects' upsert.
-    if (sourceObjectId && sourceObjectId !== objectId) {
+    //
+    // GUARD: object_links.to_object_id is a UUID column. The client
+    // sometimes passes a tldraw shape id ("shape:abc…") as sourceObjectId
+    // (the source is a board shape with no library row), which made Postgres
+    // log `invalid input syntax for type uuid`. Only link when it's a real
+    // UUID — a shape id is not a valid object-graph target.
+    const UUID_RE =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (sourceObjectId && UUID_RE.test(sourceObjectId) && sourceObjectId !== objectId) {
       await linkObjects(db, {
         spaceId,
         fromObjectId: objectId,

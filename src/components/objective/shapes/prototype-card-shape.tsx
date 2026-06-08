@@ -470,6 +470,7 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
                           border: "none",
                           display: "block",
                           background: "#fff",
+                          colorScheme: "light",
                           transform: `scale(${scale})`,
                           transformOrigin: "top left",
                         }}
@@ -494,7 +495,18 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
               sandbox="allow-scripts allow-forms allow-modals allow-popups"
               onPointerDown={stopEventPropagation}
               onWheelCapture={(e) => e.stopPropagation()}
-              style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+              // Force a LIGHT canvas: a null-origin sandboxed iframe inherits
+              // the UA color-scheme, so on a dark-mode OS the document paints
+              // BLACK before/under the prototype's own CSS — which read as a
+              // "black screen" prototype. colorScheme:light + a white bg pin it.
+              style={{
+                width: "100%",
+                height: "100%",
+                border: "none",
+                display: "block",
+                background: "#fff",
+                colorScheme: "light",
+              }}
             />
           ) : status === "error" ? (
             <div

@@ -33,6 +33,19 @@ export type LibraryObjectType =
   | "first_principle"
   | "variation"
   | "variable"
+  // Crucible interrogation outputs (CRUCIBLE Phase 2). A `leverage_point` is the
+  // highest-value place to intervene to make the objective win (Meadows/ToC/
+  // Pareto-scored); a `constraint` is a hard/soft limit we must respect; a
+  // `sub_objective` is a coined branch (Phase 4). object_type is free-text in
+  // the DB, so these need no migration — only this union + the KG color map.
+  | "leverage_point"
+  | "constraint"
+  | "sub_objective"
+  // Exploration block (CRUCIBLE variation slice). A resolved ambiguity stored
+  // as a swappable BLOCK: content_snapshot carries the ExplorationBlock
+  // (variations + principle + decisions + activeIndex). Composes into the
+  // objective brief later. Free-text object_type → no migration.
+  | "decision"
   | "brainstorm_cluster"
   // Context-frontier (CONTEXT_FRONTIER_PLAN.md): the per-space intake
   // context anchor + one object per extracted prior-idea/reference concept.
@@ -72,6 +85,9 @@ export interface UpsertObjectInput {
   sourceRef?: string | null;
   contentSnapshot?: unknown;
   blueprintLayerOrdinal?: number | null;
+  /** Ranking score (0–100) — the Library sorts by this desc. Set only when
+   *  provided so a non-ranking upsert can't null an existing score. */
+  rankScore?: number | null;
   /** AI-refined board-card face { name, body, from_updated_at }. Set only
    *  when provided so a metadata-driven refresh doesn't clobber other cols. */
   cardFace?: unknown;
@@ -164,13 +180,14 @@ export async function upsertLibraryObject(
     if (input.cardFace !== undefined) patch.card_face = input.cardFace;
     if (input.evaluation !== undefined) patch.evaluation = input.evaluation;
     if (input.subsystem !== undefined) patch.subsystem = input.subsystem ?? null;
+    if (input.rankScore !== undefined) patch.rank_score = input.rankScore;
 
     if (existing?.id) {
       await db.from("library_objects").update(patch).eq("id", existing.id);
       return existing.id as string;
     }
 
-    const { data: inserted } = await db
+    const { data: inserted, error: insertErr } = await db
       .from("library_objects")
       .insert({
         space_id: input.spaceId,
@@ -182,6 +199,39 @@ export async function upsertLibraryObject(
       })
       .select("id")
       .single();
+
+    if (insertErr) {
+      // The existence SELECT above is NOT atomic with this INSERT, so a
+      // concurrent promote (double-fired effect, StrictMode, rapid retry)
+      // can win the natural-key race and make this INSERT fail with 23505.
+      // That used to surface as a hard 500 ("library_objects table not
+      // available") on the caller. Recover idempotently: re-select the row
+      // the other writer just created, refresh it with our patch, return it.
+      const isConflict =
+        (insertErr as { code?: string }).code === "23505" ||
+        /duplicate key|natural_key/i.test(insertErr.message ?? "");
+      if (isConflict) {
+        let rq = db
+          .from("library_objects")
+          .select("id")
+          .eq("space_id", input.spaceId)
+          .eq("object_type", input.objectType);
+        rq = input.sourceEntityId
+          ? rq.eq("source_entity_id", input.sourceEntityId)
+          : rq.is("source_entity_id", null);
+        rq = input.sourceRef
+          ? rq.eq("source_ref", input.sourceRef)
+          : rq.is("source_ref", null);
+        const { data: raced } = await rq.maybeSingle();
+        if (raced?.id) {
+          await db.from("library_objects").update(patch).eq("id", raced.id);
+          return raced.id as string;
+        }
+      }
+      console.warn("[library-objects] insert failed:", insertErr.message);
+      return null;
+    }
+
     return (inserted as { id: string } | null)?.id ?? null;
   } catch (err) {
     console.warn("[library-objects] upsert failed (soft):", err);
