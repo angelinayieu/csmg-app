@@ -182,6 +182,9 @@ function ObjectiveCardRenderer({
   } | null>(null);
   const [forkOpen, setForkOpen] = useState(false);
   const [autoTriggered, setAutoTriggered] = useState(false);
+  // When a charged seed call comes back 402, surface WHY instead of spinning
+  // forever: "user" = app-credit balance low; "provider" = the AI key is out.
+  const [creditBlocked, setCreditBlocked] = useState<null | "user" | "provider">(null);
   const triggerAuto = () => { startSeedAutoBuild(spaceId); setAutoTriggered(true); };
   // Live reasoning stage (from the Crucible) — drives the on-card progress while
   // the deliverable is still being built. A pure read, safe to poll.
@@ -193,12 +196,26 @@ function ObjectiveCardRenderer({
   useEffect(() => {
     if (!spaceId || !objective || skeletonFired.current) return;
     skeletonFired.current = true;
-    void fetch(`/api/objective/${spaceId}/seed`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "skeleton", objective }),
-      cache: "no-store",
-    }).catch(() => {});
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/objective/${spaceId}/seed`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "skeleton", objective }),
+          cache: "no-store",
+        });
+        // The skeleton is the FIRST charged call — if credits are out it 402s
+        // here, so it's a reliable signal to stop the silent spinner.
+        if (r.status === 402 && alive) {
+          const j = (await r.json().catch(() => ({}))) as { code?: string };
+          setCreditBlocked(j?.code === "credits_exhausted" ? "provider" : "user");
+        }
+      } catch {
+        /* transient */
+      }
+    })();
+    return () => { alive = false; };
   }, [spaceId, objective]);
 
   useEffect(() => {
@@ -530,7 +547,31 @@ function ObjectiveCardRenderer({
           </div>
         ) : (
           objective && (
-            awaitingUser && !autoTriggered ? (
+            creditBlocked ? (
+              // Credits ran out — say so instead of spinning forever.
+              <div
+                onPointerDown={stopEventPropagation}
+                style={{ marginTop: 11, padding: "10px 11px", borderRadius: 13, background: "rgba(220,38,38,0.05)", border: "1px solid rgba(220,38,38,0.22)", display: "flex", flexDirection: "column", gap: 5 }}
+              >
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: "#DC2626" }}>
+                  ⚠ The AI build is paused — out of credits.
+                </span>
+                <span style={{ fontSize: 10.5, lineHeight: 1.45, color: appleVibe.text.secondary }}>
+                  {creditBlocked === "provider"
+                    ? "The AI provider key is out of credits. Add credits to the Anthropic account to continue."
+                    : "Your credit balance is too low to run the build."}
+                </span>
+                {creditBlocked === "user" && (
+                  <a
+                    href="/app/credits"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ alignSelf: "flex-start", marginTop: 2, fontSize: 10.5, fontWeight: 700, color: "#7C3AED", textDecoration: "none" }}
+                  >
+                    Top up credits ↗
+                  </a>
+                )}
+              </div>
+            ) : awaitingUser && !autoTriggered ? (
               // The agent has questions — give BOTH paths: answer yourself, or
               // let the AI auto-resolve everything (best-of-N → ranked → picked).
               <div onPointerDown={stopEventPropagation} style={{ marginTop: 11, display: "flex", flexWrap: "wrap", gap: 7 }}>
