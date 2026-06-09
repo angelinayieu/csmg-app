@@ -251,7 +251,7 @@ function useGenerationProgress(active: boolean): number {
     const start = Date.now();
     startRef.current = start;
     setPct(5);
-    const EST_MS = 85_000; // expected build time; the curve is forgiving if off
+    const EST_MS = 110_000; // expected build time; the curve is forgiving if off
     const id = setInterval(() => {
       const elapsed = Date.now() - start;
       // 1 - e^(-t/τ): smooth ease-out asymptotic to the 95% cap.

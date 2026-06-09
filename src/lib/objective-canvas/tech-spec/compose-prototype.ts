@@ -28,6 +28,7 @@ import type { TechSpec } from "./types";
 const OPUS_MODEL = BEST_CLAUDE_MODEL;
 
 const BASE_RULES =
+  "OUTPUT BUDGET (MOST IMPORTANT — a truncated prototype is a FAILED prototype): you have a hard ~16k-token output ceiling. Your response MUST be a COMPLETE document that reaches the final </body></html>. To guarantee that: build exactly ONE focused screen (not several); keep the <style> LEAN — consolidate rules, reuse a handful of utility classes, and DO NOT emit a sprawling design-token catalogue or dozens of bespoke selectors; write the <body> markup BEFORE polishing CSS. A complete, simple, working screen always beats an elaborate one that gets cut off mid-CSS. Budget roughly: ~40% CSS, ~50% body markup, ~10% script. " +
   "Hard rules: ONE self-contained <!DOCTYPE html> document with inline <style> and (optional) inline <script>. INLINE JavaScript is now PERMITTED — use it to wire interactivity via addEventListener (never inline on* attributes; they will be stripped). " +
   "RUNTIME SANDBOX (CRITICAL — read carefully). The page runs in a null-origin sandboxed iframe with a strict CSP. The following ALL fail and WILL crash your script if reached at the top level, so subsequent addEventListener calls never register and the whole prototype becomes un-clickable: " +
   "(a) localStorage / sessionStorage / IndexedDB — throw SecurityError. Keep ALL state in plain JS variables (`let state = {...}`) or in-memory data structures only. " +
@@ -42,7 +43,7 @@ const BASE_RULES =
 const TASTE_RULE =
   "When a DESIGN.md and/or tailwind.config.ts block is provided below, treat them as the project-level taste contract. The user's vocabulary terms (marked \"yours\") must appear verbatim where natural; their anti-patterns must not appear at all; the brand color/radius/shadow tokens in tailwind.config.ts must shape the inline <style> block (use the same hex values, no purple/Inter clichés unless the contract explicitly calls for them).";
 
-const GENERATE_SYSTEM = `You are a senior product designer + front-end engineer. Produce a high-fidelity, INTERACTIVE prototype of this product's primary screen(s) from its technical spec + UI plan. ${BASE_RULES} ${TASTE_RULE}`;
+const GENERATE_SYSTEM = `You are a senior product designer + front-end engineer. Produce a high-fidelity, INTERACTIVE prototype of this product's single PRIMARY screen from its technical spec + UI plan. ${BASE_RULES} ${TASTE_RULE}`;
 
 const REFINE_SYSTEM = `You are a senior product designer + front-end engineer iterating on an existing HTML prototype. Apply the user's feedback precisely while preserving everything that works. ${BASE_RULES} ${TASTE_RULE}`;
 
