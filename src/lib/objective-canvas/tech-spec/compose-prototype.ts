@@ -28,7 +28,7 @@ import type { TechSpec } from "./types";
 const OPUS_MODEL = BEST_CLAUDE_MODEL;
 
 const BASE_RULES =
-  "OUTPUT BUDGET (MOST IMPORTANT — a truncated prototype is a FAILED prototype): you have a hard ~16k-token output ceiling. Your response MUST be a COMPLETE document that reaches the final </body></html>. To guarantee that: build exactly ONE focused screen (not several); keep the <style> LEAN — consolidate rules, reuse a handful of utility classes, and DO NOT emit a sprawling design-token catalogue or dozens of bespoke selectors; write the <body> markup BEFORE polishing CSS. A complete, simple, working screen always beats an elaborate one that gets cut off mid-CSS. Budget roughly: ~40% CSS, ~50% body markup, ~10% script. " +
+  "OUTPUT STRUCTURE (MOST IMPORTANT — a body-less prototype is a FAILED prototype). You have a hard ~16k-token ceiling and MUST produce a renderable screen WITHIN it. The #1 failure is front-loading a giant design-token <style> in <head> and running out of budget before the <body> ever exists. Prevent that by ordering output so COMPONENTS come before POLISH: (1) in <head>, a SMALL critical <style> — reset + layout + the few color/spacing tokens you actually use (keep it tight, NO sprawling token catalogue, NO dozens of bespoke selectors); (2) then the FULL <body> with every component and realistic copy — this is the part that must always exist; (3) OPTIONALLY, a second <style> at the very END of <body> for decorative polish (it's fine if this is the part that gets cut). Build exactly ONE focused screen. A complete, lightly-styled screen always beats an elaborate one that never reaches <body>. " +
   "Hard rules: ONE self-contained <!DOCTYPE html> document with inline <style> and (optional) inline <script>. INLINE JavaScript is now PERMITTED — use it to wire interactivity via addEventListener (never inline on* attributes; they will be stripped). " +
   "RUNTIME SANDBOX (CRITICAL — read carefully). The page runs in a null-origin sandboxed iframe with a strict CSP. The following ALL fail and WILL crash your script if reached at the top level, so subsequent addEventListener calls never register and the whole prototype becomes un-clickable: " +
   "(a) localStorage / sessionStorage / IndexedDB — throw SecurityError. Keep ALL state in plain JS variables (`let state = {...}`) or in-memory data structures only. " +
@@ -117,15 +117,23 @@ async function opusHtml(system: string, user: string): Promise<string> {
     .map((b) => (b as { text: string }).text)
     .join("\n");
   const raw = extractHtml(text);
-  // Truncation / body-less guard. If the model still ran out of budget (or
-  // emitted a head-only doc), the raw output won't have a real <body> or a
-  // closing </html>. Fail LOUDLY so the card shows an error the user can
-  // retry — never silently ship a background-only shell as "ready".
-  const looksComplete =
-    /<body[\s>]/i.test(raw) && /<\/html\s*>/i.test(raw) && /<\/body\s*>/i.test(raw);
-  if (resp.stop_reason === "max_tokens" || !looksComplete) {
+  // Body-content guard. With the body-first output structure, a response that
+  // hits the token ceiling typically still has a COMPLETE <body> (only the
+  // trailing decorative CSS gets cut) — that's a perfectly usable prototype,
+  // so we DON'T fail it just because stop_reason was max_tokens. We only fail
+  // the genuinely broken case: a head-only doc with no real body markup (the
+  // "just the background, no components" shell). sanitize-html would otherwise
+  // auto-close that into a valid-but-empty page shipped as "ready".
+  const bodyIdx = raw.search(/<body[\s>]/i);
+  const bodyMarkup = bodyIdx >= 0 ? raw.slice(bodyIdx) : "";
+  const elementCount = (
+    bodyMarkup.match(
+      /<(?:div|section|main|header|footer|nav|aside|article|button|a|ul|ol|li|table|form|input|h[1-6]|p|span|svg|img|label|select)\b/gi,
+    ) ?? []
+  ).length;
+  if (bodyIdx < 0 || elementCount < 5) {
     throw new Error(
-      "Prototype generation was cut off before the layout finished (the design got too large). Try again — it usually completes on a retry.",
+      "Prototype generation was cut off before the layout finished (the design got too large). Hit Regenerate — it usually completes on a retry.",
     );
   }
   return sanitizeHtmlT1(raw);

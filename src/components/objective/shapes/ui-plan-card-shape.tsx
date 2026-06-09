@@ -245,6 +245,12 @@ function UiPlanCardRenderer({ shape }: { shape: UiPlanCardShape }) {
         },
       }),
     );
+    // Release the button after the handoff. BUILD_PROTOTYPE_EVENT is
+    // fire-and-forget — the spawned prototype card owns the real loading UI
+    // (its own progress bar + ready/error states). Without this reset the
+    // button stuck on "Sending to prototype…" FOREVER, even after the build
+    // finished or failed. ~2.5s is enough for the prototype card to mount.
+    window.setTimeout(() => setBuilding(false), 2500);
   }
 
   return (
