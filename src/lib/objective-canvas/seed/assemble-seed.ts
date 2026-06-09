@@ -98,16 +98,42 @@ export async function assembleSeedInternal(db: AnyDb, spaceId: string): Promise<
     kind: rec(c).kind === "soft" ? ("soft" as const) : ("hard" as const),
   })).filter((c) => c.slug && c.label);
 
-  // ── reasoning graph (the Map tab) — nodes + edges from the crucible refs ──
+  // ── reasoning graph (the Map tab) ──
+  // Build from BOTH the synthesized refs (levers/principles — convergence-only)
+  // AND the LIVE-accumulating crucible fields (landscape facts / candidate
+  // solutions / constraints / variables, populated every round by the Analyst).
+  // So the KG GROWS as the operation decomposes the problem — the decomposition
+  // IS the graph, not a one-shot dump at the end. Rooted at the objective apex.
   const nodes: SeedNode[] = [];
   const edges: SeedEdge[] = [];
+  const usedIds = new Set<string>();
+  const slugify = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  const kw = (s: string) => s.split(/\s+/).slice(0, 2).join(" ");
   const push = (id: string, label: string, type: string, score?: number) => {
-    if (id && !nodes.some((n) => n.id === id)) nodes.push({ id, label, keyword: label.split(" ").slice(0, 2).join(" "), type, score });
+    if (id && label && !usedIds.has(id)) { usedIds.add(id); nodes.push({ id, label, keyword: kw(label), type, score }); }
   };
+  const link = (from: string, to: string, relation: string) => { if (from && to && from !== to) edges.push({ source: from, target: to, relation }); };
+
+  // apex
+  const APEX = "objective";
+  const objLabel = (internal.sharpenedObjective || objective || "Objective").trim();
+  push(APEX, objLabel.length > 64 ? `${objLabel.slice(0, 61)}…` : objLabel, "objective", 100);
+
+  // synthesized refs (convergence)
   for (const f of internal.firstPrinciples) push(f.slug, f.label, "first_principle", f.score);
-  for (const v of internal.canonicalVariables) push(v.slug, v.label, "variable");
-  for (const c of internal.constraints) push(c.slug, c.label, "constraint");
-  for (const l of internal.leveragePoints) push(l.slug, l.label, "leverage_point", l.score);
+  for (const v of internal.canonicalVariables) { push(v.slug, v.label, "variable"); link(APEX, v.slug, "turns_on"); }
+  for (const c of internal.constraints) { push(c.slug, c.label, "constraint"); link(APEX, c.slug, "bounded_by"); }
+  for (const l of internal.leveragePoints) { push(l.slug, l.label, "leverage_point", l.score); link(APEX, l.slug, "acts_on"); }
+
+  // LIVE crucible fields (present every round, BEFORE synthesis) — this is what
+  // makes the KG fill in immediately as the operation runs.
+  for (const s of arr(cru.landscape).slice(0, 8)) { const t = str(s); if (t) { const id = `fact-${slugify(t)}`; push(id, t, "insight"); link(APEX, id, "informed_by"); } }
+  for (const s of arr(cru.solutions).slice(0, 6)) { const t = str(s); if (t) { const id = `sol-${slugify(t)}`; push(id, t, "solution"); link(APEX, id, "explores"); } }
+  // live constraints (strings) only if the synthesized constraintObjects aren't in yet
+  if (internal.constraints.length === 0) {
+    for (const s of arr(cru.constraints).slice(0, 6)) { const t = str(s); if (t) { const id = `con-${slugify(t)}`; push(id, t, "constraint"); link(APEX, id, "bounded_by"); } }
+  }
+
   // edges from the crucible structured refs
   for (const l of arr(cru.leveragePoints)) {
     const ls = str(rec(l).slug);

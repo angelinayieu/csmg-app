@@ -29,7 +29,7 @@ interface RouteContext { params: Promise<{ spaceId: string }> }
 /** "get" reads. "build" = assemble + distill (fast). "enrich" = build + the
  *  web-grounded value engine (alternatives + analogs + variable consolidation)
  *  so the external face can say "unlike X/Y, this …" instead of a platitude. */
-interface Body { action?: "get" | "build" | "enrich" | "evaluate" | "skeleton" | "ideas"; force?: boolean; objective?: string }
+interface Body { action?: "get" | "build" | "enrich" | "evaluate" | "skeleton" | "ideas" | "sync_graph"; force?: boolean; objective?: string }
 
 export async function POST(req: Request, ctx: RouteContext) {
   const { spaceId } = await ctx.params;
@@ -110,6 +110,32 @@ export async function POST(req: Request, ctx: RouteContext) {
     };
     await writeSeed(supabase, spaceId, seedE);
     return NextResponse.json({ seed: seedE });
+  }
+
+  // ── sync_graph: cheap, NO-LLM refresh of the reasoning graph from the live
+  //    crucible decomposition (variables/facts/constraints/solutions accumulate
+  //    every round). The driver calls this each round so the KG GROWS as the
+  //    operation runs — not only at the final enrich. Preserves external +
+  //    evaluation + ideas; never shrinks below the current graph. ──
+  if (action === "sync_graph") {
+    const priorG = await readSeed(supabase, spaceId);
+    const internalG = await assembleSeedInternal(supabase, spaceId);
+    if (priorG?.internal?.evaluation && !internalG.evaluation) internalG.evaluation = priorG.internal.evaluation;
+    if (priorG?.internal?.ideas && !internalG.ideas) internalG.ideas = priorG.internal.ideas;
+    // No-shrink: keep the richer graph (early rounds may be sparser than the skeleton).
+    const priorNodes = priorG?.internal?.reasoningGraph?.nodes?.length ?? 0;
+    if (internalG.reasoningGraph.nodes.length < priorNodes && priorG?.internal?.reasoningGraph) {
+      internalG.reasoningGraph = priorG.internal.reasoningGraph;
+    }
+    const seedG: ObjectiveSeed = {
+      version: SEED_VERSION,
+      external: priorG?.external ?? null,
+      internal: internalG,
+      status: priorG?.status === "ready" ? "ready" : "seeding",
+      updatedAt: new Date().toISOString(),
+    };
+    await writeSeed(supabase, spaceId, seedG);
+    return NextResponse.json({ seed: seedG });
   }
 
   // ── ideas: generate + score + rank the idea FIELD (the generative layer the

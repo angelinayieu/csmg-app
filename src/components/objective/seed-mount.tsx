@@ -93,6 +93,9 @@ export function SeedMount({ spaceId }: { spaceId: string }) {
         await post("enrich", "seed");
         return; // stop polling
       }
+      // Grow the KG from the live decomposition while the loop runs — covers the
+      // research rounds + manual-chat flow (the auto loop syncs on its own).
+      if (!cancelled && status && status !== "converged") await post("sync_graph", "seed");
       if (!cancelled) setTimeout(poll, 6000);
     }
 
@@ -108,12 +111,19 @@ export function SeedMount({ spaceId }: { spaceId: string }) {
         if (cancelled || cur?.seed?.status === "ready") return;
         let s = (await post("state", "crucible"))?.state;
         if (!s || s.status === "error") s = (await post("start", "crucible"))?.state;
+        // Immediate first paint of the KG from whatever the crucible already has.
+        if (!cancelled) await post("sync_graph", "seed");
         let guard = 0;
         while (!cancelled && s && s.status !== "converged" && guard < 24) {
           guard += 1;
           s = (await post("auto_answer", "crucible"))?.state;
+          // Grow the KG from the live decomposition each round (cheap, no-LLM).
+          if (!cancelled) await post("sync_graph", "seed");
         }
-        if (!cancelled) await post("enrich", "seed");
+        if (!cancelled && builtFor !== "done") {
+          builtFor = "done";
+          await post("enrich", "seed");
+        }
       } finally {
         autoRunning.current = false;
       }
