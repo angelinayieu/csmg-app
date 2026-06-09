@@ -2970,7 +2970,10 @@ function PrototypeEventBridge({
         | undefined;
       if (!shape || shape.type !== "prototype-card") return;
       const prevVersion = shape.props.version;
-      const currentHtml = shape.props.html;
+      // Regenerate = rebuild FROM SCRATCH: pass empty currentHtml so the refine
+      // route generates a fresh prototype from the spec instead of iterating on
+      // the existing (possibly broken/empty) HTML.
+      const currentHtml = d.regenerate ? "" : shape.props.html;
       editor.updateShape<PrototypeCardShape>({
         id: shape.id,
         type: "prototype-card",

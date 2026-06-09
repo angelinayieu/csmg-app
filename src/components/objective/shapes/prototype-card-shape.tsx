@@ -37,6 +37,7 @@ import {
   SendHorizontal,
   LayoutGrid,
   Minimize2,
+  RotateCcw,
 } from "lucide-react";
 import { appleVibe } from "@/lib/apple-vibe-tokens";
 import { TasteReceipt } from "@/components/objective/canvas-interactions/taste-receipt";
@@ -47,6 +48,9 @@ export const PROTOTYPE_REFINE_EVENT = "objective-board:prototype-refine";
 export interface PrototypeRefineDetail {
   shapeId: string;
   feedback: string;
+  /** When true, rebuild the prototype from the spec FROM SCRATCH (ignore the
+   *  current HTML) rather than iterating on it — a fresh take, not a refine. */
+  regenerate?: boolean;
 }
 
 export type PrototypeCardShape = TLBaseShape<
@@ -317,6 +321,21 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
     );
   }
 
+  function regenerate(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (status === "generating" || !specJson) return;
+    window.dispatchEvent(
+      new CustomEvent<PrototypeRefineDetail>(PROTOTYPE_REFINE_EVENT, {
+        detail: {
+          shapeId: shape.id,
+          feedback:
+            "Regenerate this prototype from scratch — a fresh, different take on the same spec.",
+          regenerate: true,
+        },
+      }),
+    );
+  }
+
   return (
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
@@ -413,6 +432,40 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
                 <LayoutGrid style={{ width: 11, height: 11 }} strokeWidth={2.4} />
               )}
               {screensExpanded ? "Collapse" : "View screens"}
+            </button>
+          )}
+
+          {/* Regenerate — rebuild from the spec FROM SCRATCH (fresh take, not a
+              refine). Shown whenever the build has settled (ready or error). */}
+          {(status === "ready" || status === "error") && (
+            <button
+              type="button"
+              onPointerDown={stopEventPropagation}
+              onClick={regenerate}
+              title="Regenerate this prototype from scratch"
+              style={{
+                marginLeft:
+                  (version > 0 && status === "ready") ||
+                  canExpand ||
+                  screensExpanded
+                    ? 6
+                    : "auto",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "4px 9px",
+                borderRadius: 999,
+                border: `1px solid ${appleVibe.stroke.soft}`,
+                background: "#fff",
+                color: appleVibe.text.secondary,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+                fontFamily: appleVibe.font.stack,
+              }}
+            >
+              <RotateCcw style={{ width: 11, height: 11 }} strokeWidth={2.4} />
+              Regenerate
             </button>
           )}
         </div>
@@ -555,8 +608,35 @@ function PrototypeCardRenderer({ shape }: { shape: PrototypeCardShape }) {
             >
               <AlertCircle style={{ width: 22, height: 22 }} strokeWidth={2} />
               <span style={{ fontSize: 12.5, fontWeight: 600 }}>
-                Couldn&apos;t build the prototype. Send feedback to retry.
+                Couldn&apos;t build the prototype.
               </span>
+              <span style={{ fontSize: 11, color: appleVibe.text.faint, maxWidth: 240 }}>
+                The design may have run long — a fresh build usually completes.
+              </span>
+              <button
+                type="button"
+                onPointerDown={stopEventPropagation}
+                onClick={regenerate}
+                title="Regenerate this prototype from scratch"
+                style={{
+                  marginTop: 4,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "7px 14px",
+                  borderRadius: 999,
+                  border: "none",
+                  background: accent,
+                  color: "white",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  fontFamily: appleVibe.font.stack,
+                }}
+              >
+                <RotateCcw style={{ width: 13, height: 13 }} strokeWidth={2.4} />
+                Regenerate
+              </button>
             </div>
           ) : (
             <div
