@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/components/objective/whiteboard-base.tsx",
+    "src/components/objective/tech-spec-panel.tsx",
+    "src/components/objective/canvas-interactions/operation-lane.tsx",
+    "src/components/objective/canvas-interactions/forge-pipeline.ts",
+    "src/components/objective/canvas-interactions/specforge-runner.ts",
+    "src/components/objective/canvas-interactions/specforge-source-connector.tsx",
+    "next-env.d.ts"
+  ],
+  "exclude": []
+}

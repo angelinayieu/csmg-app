@@ -76,7 +76,10 @@ export const BEST_FAST_CLAUDE_MODEL = "claude-sonnet-4-6";
  *  BEST_TUNABLE_CLAUDE_MODEL. */
 export function modelSupportsTemperature(model: string | undefined): boolean {
   if (!model) return true;
-  return !model.startsWith("claude-opus-4-8");
+  // Opus 4.7+ deprecate `temperature` (the API 400s if it's sent). Exclude the
+  // whole opus-4 line so structured Opus calls (unpack, Crucible synthesis, …)
+  // don't break. Sonnet still honors temperature.
+  return !model.startsWith("claude-opus-4");
 }
 
 let openaiClient: OpenAI | null = null;

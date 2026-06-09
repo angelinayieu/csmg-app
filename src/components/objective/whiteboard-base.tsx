@@ -227,7 +227,12 @@ import {
   SEED_CHATBOX_EVENT,
   SEED_OBJECTIVE_EVENT,
   PROMOTE_TO_OBJECTIVE_EVENT,
-  deploySharpeningCard,
+  DEPLOY_CRUCIBLE_EVENT,
+  type CrucibleCardDetail,
+  DEPLOY_EXPLORATION_EVENT,
+  type ExplorationCardDetail,
+  DEPLOY_BRIEF_EVENT,
+  type ObjectiveBriefCardDetail,
   type SeedChatboxDetail,
   type SeedObjectiveDetail,
   type PromoteToObjectiveDetail,
@@ -241,6 +246,9 @@ import {
   ensureObjectiveSharpeningArrow,
   ensureResolvePill,
 } from "./canvas-interactions/prompt-sharpening-board";
+import { deployCrucibleOnBoard } from "./canvas-interactions/crucible-board";
+import { deployExplorationOnBoard } from "./canvas-interactions/explore-board";
+import { deployObjectiveBriefOnBoard } from "./canvas-interactions/brief-board";
 import { reflowIntakeStack } from "./canvas-interactions/board-reflow";
 import {
   ensureSharpeningFlowConnectors,
@@ -1609,6 +1617,33 @@ export function WhiteboardBase({
       );
     }
 
+    function onDeployCrucible(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      deployCrucibleOnBoard(
+        editor,
+        (e as CustomEvent<CrucibleCardDetail>).detail,
+      );
+    }
+
+    function onDeployExploration(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      deployExplorationOnBoard(
+        editor,
+        (e as CustomEvent<ExplorationCardDetail>).detail,
+      );
+    }
+
+    function onDeployBrief(e: Event) {
+      const editor = editorRef.current;
+      if (!editor) return;
+      deployObjectiveBriefOnBoard(
+        editor,
+        (e as CustomEvent<ObjectiveBriefCardDetail>).detail,
+      );
+    }
+
     function onDeployHeatmapCard(e: Event) {
       const editor = editorRef.current;
       if (!editor) return;
@@ -1692,16 +1727,12 @@ export function WhiteboardBase({
       if (!editor) return;
       const d = (e as CustomEvent<PromoteToObjectiveDetail>).detail;
       promoteChatboxToObjective(editor, d);
-      // Optimistic "Sharpening…" card forks below immediately; the mount
-      // fills it in place when the artifact lands.
-      deploySharpeningCard({
-        spaceId: d.spaceId,
-        title: "Sharpening…",
-        sharpenedPrompt: "Refining your objective into a sharper prompt…",
-        chips: [],
-        heatmapJson: "{}",
-        rankedJson: "[]",
-      });
+      // S2 (OBJECTIVE_SEED_PLAN — no auto-export): promote lands ONLY the
+      // objective card. The sharpening + crucible engines still RUN (headless),
+      // writing their output into the seed's INTERNAL metadata
+      // (synthesis_data.objective_canvas) — they no longer fork board cards.
+      // The reasoning is sandboxed inside the seed; the user forks on demand.
+      // (deploySharpeningCard / deployCrucibleCard intentionally removed.)
     }
 
     // Until restore settles, buffer any shape-CREATING deploy so the restore's
@@ -1720,6 +1751,9 @@ export function WhiteboardBase({
     const onArtifactB = buffered(onArtifact);
     const onSubsystemKgB = buffered(onSubsystemKg);
     const onDeploySharpeningB = buffered(onDeploySharpening);
+    const onDeployCrucibleB = buffered(onDeployCrucible);
+    const onDeployExplorationB = buffered(onDeployExploration);
+    const onDeployBriefB = buffered(onDeployBrief);
     const onForkAmbiguityB = buffered(onForkAmbiguity);
     const onDeployHeatmapCardB = buffered(onDeployHeatmapCard);
     const onDeployPriorityMapB = buffered(onDeployPriorityMap);
@@ -1736,6 +1770,9 @@ export function WhiteboardBase({
     window.addEventListener(DEPLOY_SUBSYSTEM_KG_EVENT, onSubsystemKgB);
     window.addEventListener(CARD_ACTION_EVENT, onCardAction);
     window.addEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpeningB);
+    window.addEventListener(DEPLOY_CRUCIBLE_EVENT, onDeployCrucibleB);
+    window.addEventListener(DEPLOY_EXPLORATION_EVENT, onDeployExplorationB);
+    window.addEventListener(DEPLOY_BRIEF_EVENT, onDeployBriefB);
     window.addEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguityB);
     window.addEventListener(DEPLOY_HEATMAP_CARD_EVENT, onDeployHeatmapCardB);
     window.addEventListener(DEPLOY_PRIORITY_MAP_EVENT, onDeployPriorityMapB);
@@ -1755,6 +1792,9 @@ export function WhiteboardBase({
       window.removeEventListener(DEPLOY_SUBSYSTEM_KG_EVENT, onSubsystemKgB);
       window.removeEventListener(CARD_ACTION_EVENT, onCardAction);
       window.removeEventListener(DEPLOY_SHARPENING_EVENT, onDeploySharpeningB);
+      window.removeEventListener(DEPLOY_CRUCIBLE_EVENT, onDeployCrucibleB);
+      window.removeEventListener(DEPLOY_EXPLORATION_EVENT, onDeployExplorationB);
+      window.removeEventListener(DEPLOY_BRIEF_EVENT, onDeployBriefB);
       window.removeEventListener(FORK_AMBIGUITY_EVENT, onForkAmbiguityB);
       window.removeEventListener(DEPLOY_HEATMAP_CARD_EVENT, onDeployHeatmapCardB);
       window.removeEventListener(DEPLOY_PRIORITY_MAP_EVENT, onDeployPriorityMapB);

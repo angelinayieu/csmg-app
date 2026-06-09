@@ -39,7 +39,6 @@ import {
   emitAiAutoResolveStarted,
   emitAiAutoResolveEnded,
 } from "@/components/objective/board-bus";
-import { DECOMPOSE_INTO_CARDS_EVENT } from "@/components/objective/canvas-interactions/deploy-oc-cards";
 import { SHARPEN_COLOR, ZONE_LABEL } from "./prompt-sharpening-card-shape";
 
 const PILL_W = 220;
@@ -244,28 +243,12 @@ function ResolvePillRenderer({
                 : `Round ${round} · converging…`,
             );
           },
-          // Per-round fan-out: every round the planner says to decompose, drop a
-          // NEW sibling cluster forked off THIS pill (sourceShapeId = shape.id)
-          // so the board grows into a flow chart of sub-decompositions — one
-          // per emergent cluster — instead of one terminal Decomposition blob.
-          // Whiteboard-base serialises these into a Promise queue so concurrent
-          // dispatches don't drop. `subsystemSeed` lets the route narrow rounds
-          // 2+ to ONE concept instead of re-decomposing the whole objective.
-          onDecompose: ({ sharpenedPrompt: sp, seed }) => {
-            try {
-              window.dispatchEvent(
-                new CustomEvent(DECOMPOSE_INTO_CARDS_EVENT, {
-                  detail: {
-                    objective: sp,
-                    sourceShapeId: String(shape.id),
-                    subsystemSeed: seed ?? undefined,
-                  },
-                }),
-              );
-            } catch {
-              /* SSR / no-window */
-            }
-          },
+          // S1 (OBJECTIVE_SEED_PLAN — no auto-export): resolve NO LONGER auto-
+          // decomposes onto the board. It only CLARIFIES ambiguities (the
+          // internal seeding work — sharpened prompt + resolutions). The
+          // feature/variable decomposition is now an explicit on-demand FORK
+          // (Phase D), never a per-round board dump. `onDecompose` intentionally
+          // omitted so pressing "AI resolve" stops fanning clusters onto the canvas.
         });
       } catch {
         /* soft-fail — show idle again below */

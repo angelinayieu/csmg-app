@@ -2521,3 +2521,12 @@ body[data-canvas-strategy-expanded="true"]
   --av-label-color: #9aa3b2;
 }
 
+
+/* Objective-seed card: indeterminate progress sweep while the deliverable builds. */
+@keyframes seed-progress-sweep {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+.seed-progress-sweep {
+  animation: seed-progress-sweep 1.25s ease-in-out infinite;
+}

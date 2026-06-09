@@ -49,6 +49,14 @@ const TYPE_COLOR: Record<string, string> = {
   deliverable: "#0D9488",
   insight: "#DB2777",
   concept: "#64748B",
+  // Crucible (Phase 2) — leverage points are the gold output; constraints are
+  // the rose limits. first_principle/variation/sub_objective reserved for the
+  // later phases so they color correctly the moment they're persisted.
+  leverage_point: "#F59E0B",
+  constraint: "#E11D48",
+  first_principle: "#7C3AED",
+  variation: "#9333EA",
+  sub_objective: "#0EA5E9",
 };
 const TYPE_LABEL: Record<string, string> = {
   variable: "Variable",
@@ -58,6 +66,11 @@ const TYPE_LABEL: Record<string, string> = {
   deliverable: "Deliverable",
   insight: "Insight",
   concept: "Concept",
+  leverage_point: "Leverage point",
+  constraint: "Constraint",
+  first_principle: "First principle",
+  variation: "Variation",
+  sub_objective: "Sub-objective",
 };
 const typeColor = (t: string) => TYPE_COLOR[t] ?? TYPE_COLOR.concept;
 

@@ -1251,6 +1251,44 @@ declare module "@tldraw/tlschema" {
       toId: string;
       color: string;
     };
+    // Objective board — the Crucible interrogation card. Forks below the
+    // objective right after promote and runs the post-objective questioning
+    // loop (Inquirer asks → self-answers facts → Analyst classifies into the
+    // problem-model). State lives in synthesis_data.objective_canvas.crucible;
+    // the card fetches/polls /api/objective/[id]/crucible itself, so its tldraw
+    // props stay minimal (no big JSON blobs).
+    "crucible-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      color: string;
+    };
+    // Objective board — Exploration (variation / brainstorm) card. Forked from
+    // the "Explore top" button on the ambiguity-heatmap / priority-map cards.
+    // Diverges one ambiguity into K swappable variations + a converged principle
+    // (the intersection) + decision forks (the differences). Self-fetches
+    // /explore-ambiguity; the block persists in library_objects("decision").
+    // objectId is stamped after the first run so a reload re-fetches.
+    "exploration-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      headline: string;
+      question: string;
+      source: string;
+      objectId: string;
+      color: string;
+    };
+    // Objective board — the composed Objective Brief card. Reads the Crucible +
+    // exploration blocks (leverage_point / constraint / first_principle /
+    // variable / decision) and renders the objective as typed slots, with the
+    // decision slot's variations swappable in place. Self-fetches /brief.
+    "objective-brief-card": {
+      w: number;
+      h: number;
+      spaceId: string;
+      color: string;
+    };
     // Merged "AI resolve" action pill below the heatmap + priority fork.
     "resolve-pill": {
       w: number;

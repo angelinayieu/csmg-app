@@ -189,6 +189,67 @@ export function deploySharpeningCard(detail: SharpeningCardDetail) {
   );
 }
 
+// ── Crucible interrogation card → board ────────────────────────────
+// Forks below the objective right after promote. The card self-polls
+// /api/objective/[id]/crucible to run the questioning loop, so the deploy
+// detail only needs the space id (+ optional color).
+
+export interface CrucibleCardDetail {
+  spaceId: string;
+  color?: string;
+}
+
+export const DEPLOY_CRUCIBLE_EVENT = "objective-board:deploy-crucible";
+
+/** Materialize the Crucible card on a board mounted on this page. Idempotent. */
+export function deployCrucibleCard(detail: CrucibleCardDetail) {
+  window.dispatchEvent(new CustomEvent(DEPLOY_CRUCIBLE_EVENT, { detail }));
+}
+
+// ── Exploration (variation / brainstorm) card → board ──────────────
+// Forked from the "Explore top" button on the ambiguity-heatmap / priority-map
+// cards. Diverges one ambiguity into K swappable variations + a converged
+// principle. Self-fetches /explore-ambiguity, so the detail only carries the
+// ambiguity + the source card id for lineage.
+
+export interface ExplorationCardDetail {
+  spaceId: string;
+  /** Source card (heatmap / priority map) — for placement + bezier lineage. */
+  sourceId: string;
+  /** The ambiguity title to explore. */
+  headline: string;
+  /** The question to resolve (optional). */
+  question?: string;
+  /** Heatmap zone key / priority slug (provenance). */
+  source?: string;
+  color?: string;
+}
+
+export const DEPLOY_EXPLORATION_EVENT = "objective-board:deploy-exploration";
+
+/** Materialize an Exploration card on a board mounted on this page. */
+export function deployExplorationCard(detail: ExplorationCardDetail) {
+  window.dispatchEvent(new CustomEvent(DEPLOY_EXPLORATION_EVENT, { detail }));
+}
+
+// ── Composed objective brief card → board ──────────────────────────
+// The "final product": composes the Crucible + exploration blocks into typed
+// slots (intent / first principles / optimization points / constraints /
+// swappable decisions / variables). Self-fetches /brief. Idempotent (one per
+// board). Triggered from the converged Crucible card's "Compose brief".
+
+export interface ObjectiveBriefCardDetail {
+  spaceId: string;
+  color?: string;
+}
+
+export const DEPLOY_BRIEF_EVENT = "objective-board:deploy-brief";
+
+/** Materialize the Objective Brief card on a board mounted on this page. */
+export function deployObjectiveBriefCard(detail: ObjectiveBriefCardDetail) {
+  window.dispatchEvent(new CustomEvent(DEPLOY_BRIEF_EVENT, { detail }));
+}
+
 // ── Fork an ambiguity off the sharpening card ──────────────────────
 // Clicking an ambiguity chip / heatmap zone forks it out as its own card
 // (a seeds_question node) connected to the sharpening card.

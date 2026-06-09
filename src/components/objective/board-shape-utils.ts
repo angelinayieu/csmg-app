@@ -24,6 +24,9 @@ import { PriorityMapCardShapeUtil } from "./shapes/priority-map-card-shape";
 import { ObjectiveImageCardShapeUtil } from "./shapes/objective-image-card-shape";
 import { ChatboxCardShapeUtil } from "./shapes/chatbox-card-shape";
 import { ObjectiveCardShapeUtil } from "./shapes/objective-card-shape";
+import { CrucibleCardShapeUtil } from "./shapes/crucible-card-shape";
+import { ExplorationCardShapeUtil } from "./shapes/exploration-card-shape";
+import { ObjectiveBriefCardShapeUtil } from "./shapes/objective-brief-card-shape";
 import {
   VoiceNoteCardShapeUtil,
   JournalCardShapeUtil,
@@ -57,6 +60,14 @@ export const CUSTOM_SHAPE_UTILS = [
   ObjectiveImageCardShapeUtil,
   ChatboxCardShapeUtil,
   ObjectiveCardShapeUtil,
+  // The post-objective interrogation card (Crucible loop). Forks below the
+  // objective on promote; self-polls /crucible.
+  CrucibleCardShapeUtil,
+  // The on-demand brainstorm card (Crucible diverge half). Forked from the
+  // heatmap/priority "Explore" button; self-fetches /explore-ambiguity.
+  ExplorationCardShapeUtil,
+  // The composed objective brief (the "final product"). Self-fetches /brief.
+  ObjectiveBriefCardShapeUtil,
   VoiceNoteCardShapeUtil,
   JournalCardShapeUtil,
   CommentCardShapeUtil,

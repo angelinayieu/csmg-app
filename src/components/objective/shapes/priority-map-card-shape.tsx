@@ -20,8 +20,9 @@ import {
 } from "tldraw";
 import { useMemo, useState } from "react";
 import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
-import { forkAmbiguity } from "@/components/objective/board-bus";
+import { forkAmbiguity, deployExplorationCard } from "@/components/objective/board-bus";
 import { SHARPEN_COLOR } from "./prompt-sharpening-card-shape";
+import { GitBranch } from "lucide-react";
 
 const CARD_W = 340;
 const CARD_H = 340; // square — mirrors the ambiguity heatmap card
@@ -164,6 +165,26 @@ function PriorityMapRenderer({ shape }: { shape: PriorityMapCardShape }) {
     forkAmbiguity({ sourceId: shape.id, headline, body, color });
   }
 
+  // Highest-priority optimization point — the one "Explore top" diverges into
+  // variations + a converged principle (items are already priority-sorted).
+  const top = items[0];
+  function exploreTop(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!top || !top.phrase.trim()) return;
+    deployExplorationCard({
+      spaceId: shape.props.spaceId,
+      sourceId: shape.id,
+      headline: top.phrase.trim(),
+      question:
+        top.why ||
+        (top.candidate_readings && top.candidate_readings.length
+          ? `Could mean: ${top.candidate_readings.slice(0, 3).join(" · ")}`
+          : ""),
+      source: top.kind,
+      color,
+    });
+  }
+
   return (
     <HTMLContainer
       style={{ width: shape.props.w, height: shape.props.h, pointerEvents: "all" }}
@@ -204,6 +225,32 @@ function PriorityMapRenderer({ shape }: { shape: PriorityMapCardShape }) {
           >
             Priority map
           </div>
+          {top && (
+            <button
+              type="button"
+              onPointerDown={stopEventPropagation}
+              onClick={exploreTop}
+              title="Diverge the top optimization point into variations + a converged principle"
+              style={{
+                marginLeft: "auto",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                height: 22,
+                padding: "0 9px",
+                borderRadius: 999,
+                border: `1px solid ${withAlpha(color, 0.35)}`,
+                background: withAlpha(color, 0.08),
+                color,
+                fontSize: 10,
+                fontWeight: 700,
+                cursor: "pointer",
+                fontFamily: appleVibe.font.stack,
+              }}
+            >
+              <GitBranch style={{ width: 11, height: 11 }} strokeWidth={2.4} /> Explore top
+            </button>
+          )}
         </div>
         <div
           style={{

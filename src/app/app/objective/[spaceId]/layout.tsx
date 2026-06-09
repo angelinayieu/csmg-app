@@ -39,6 +39,10 @@ import {
 } from "@/lib/objective-canvas/right-panel-signal";
 import { ObjectiveCanvasShell } from "@/components/objective/objective-canvas-shell";
 import { PromptSharpeningMount } from "@/components/objective/prompt-sharpening-mount";
+import { SeedMount } from "@/components/objective/seed-mount";
+import { SeedChatMount } from "@/components/objective/seed-chat";
+import { SeedMapMount } from "@/components/objective/seed-map";
+import { SeedIdeasMount } from "@/components/objective/seed-ideas";
 import { ObjectiveImageMount } from "@/components/objective/objective-image-mount";
 import { VoiceRecordFab } from "@/components/objective/voice/voice-record-fab";
 import { ResolutionStudioMount } from "@/components/objective/resolution/resolution-studio-mount";
@@ -240,6 +244,20 @@ export default function ObjectiveCanvasLayout({ children, params }: Props) {
           artifact + materializes the Prompt Sharpening Card on the board.
           Minimal mode only (the full canvas has its own analysis surfaces). */}
       {minimal && !isBrief && !embed && <PromptSharpeningMount spaceId={spaceId} />}
+      {/* Seed orchestrator (OBJECTIVE_SEED_PLAN) — builds the first-draft seed
+          headlessly (sharpen → crucible → value engine → external deliverable)
+          without dumping anything on the board. Minimal mode only. */}
+      {minimal && !isBrief && !embed && <SeedMount spaceId={spaceId} />}
+      {/* The seed chatbox — the founder answers the Crucible's questions here to
+          sharpen the seed (real input → non-generic leverage). Headless until
+          the objective card fires the open event. */}
+      {minimal && !isBrief && !embed && <SeedChatMount spaceId={spaceId} />}
+      {/* Peek the sandboxed reasoning engine (the §5 Map tab) — opened from the
+          objective card; renders seed.internal.reasoningGraph via the pill-map. */}
+      {minimal && !isBrief && !embed && <SeedMapMount spaceId={spaceId} />}
+      {/* The ranked idea FIELD — generate + score + rank candidate concepts;
+          opened from the objective card ("Rank my ideas"). The generative layer. */}
+      {minimal && !isBrief && !embed && <SeedIdeasMount spaceId={spaceId} />}
       {/* Analyzed pasted images → cards on the board (minimal mode only). */}
       {minimal && !isBrief && !embed && <ObjectiveImageMount spaceId={spaceId} />}
 

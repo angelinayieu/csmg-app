@@ -15,6 +15,15 @@
 // "Quiet · No active space — select or create one to begin" message
 // is redundant because the dashboard IS the create-a-space surface.
 // Hide there. Show on every other authenticated route.
+//
+// Empty-state suppression: the bar must NEVER render its full-width
+// "No active space — select or create one to begin" treatment as a
+// standing header. It reads like a broken/loading page over an
+// otherwise blank surface (e.g. the objective board, whose route the
+// space-id regex doesn't match, so it resolves "empty" permanently).
+// When there's no active space to narrate, render nothing — the
+// surface stays fully visible and any real loading shows as a
+// non-occluding corner pill (CornerLoader), never a page takeover.
 
 import { useState } from "react";
 import { usePathname } from "next/navigation";
@@ -31,6 +40,14 @@ export function PulseStrip() {
   // to start — adding "select or create one to begin" above it reads
   // as a redundant nag.
   if (pathname === "/app" || pathname === "/app/") return null;
+
+  // Hide the empty / no-active-space treatment everywhere. With no
+  // space to narrate the bar only renders the "No active space —
+  // select or create one to begin" filler, which sits as a permanent
+  // full-width header over a blank surface and reads like a stuck
+  // loading page. Rendering nothing keeps the screen visible; real
+  // loading surfaces as a corner pill instead.
+  if (state.status === "empty" || !state.isSpaceScoped) return null;
 
   // Filter out the "quiet" filler event from the unread count so users
   // don't see "1 new" when the system has nothing real to report.

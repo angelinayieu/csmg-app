@@ -21,8 +21,9 @@ import {
 } from "tldraw";
 import { useState } from "react";
 import { appleVibe, withAlpha } from "@/lib/apple-vibe-tokens";
-import { forkAmbiguity } from "@/components/objective/board-bus";
+import { forkAmbiguity, deployExplorationCard } from "@/components/objective/board-bus";
 import { ZONE_LABEL, SHARPEN_COLOR } from "./prompt-sharpening-card-shape";
+import { GitBranch } from "lucide-react";
 
 const CARD_SIZE = 340; // square
 
@@ -113,8 +114,11 @@ function parseHeatmap(json: string): Record<string, HeatZone> {
   }
 }
 
+const SEV_RANK: Record<string, number> = { high: 3, medium: 2, low: 1 };
+
 function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape }) {
-  const { color, sourceId } = shape.props;
+  const { color, spaceId } = shape.props;
+  const sourceId = shape.props.sourceId;
   const heatmap = parseHeatmap(shape.props.heatmapJson);
   const keys = Object.keys(ZONE_LABEL);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -128,6 +132,32 @@ function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape 
       sourceId: shape.id,
       headline,
       body: z.question_to_resolve || "",
+      color,
+    });
+  }
+
+  // The highest-severity zone that actually carries an ambiguity — the one the
+  // "Explore top" button diverges into variations.
+  const topKey = keys
+    .filter((k) => (heatmap[k]?.ambiguity || "").trim())
+    .sort(
+      (a, b) =>
+        (SEV_RANK[heatmap[b]?.severity ?? "low"] ?? 1) -
+        (SEV_RANK[heatmap[a]?.severity ?? "low"] ?? 1),
+    )[0];
+
+  function exploreTop(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!topKey) return;
+    const z = heatmap[topKey] ?? {};
+    const headline = (z.ambiguity || ZONE_LABEL[topKey]).trim();
+    if (!headline) return;
+    deployExplorationCard({
+      spaceId,
+      sourceId: shape.id,
+      headline,
+      question: z.question_to_resolve || "",
+      source: topKey,
       color,
     });
   }
@@ -181,6 +211,32 @@ function AmbiguityHeatmapRenderer({ shape }: { shape: AmbiguityHeatmapCardShape 
           >
             Ambiguity heatmap
           </div>
+          {topKey && (
+            <button
+              type="button"
+              onPointerDown={stopEventPropagation}
+              onClick={exploreTop}
+              title="Diverge the top ambiguity into variations + a converged principle"
+              style={{
+                marginLeft: "auto",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                height: 22,
+                padding: "0 9px",
+                borderRadius: 999,
+                border: `1px solid ${withAlpha(color, 0.35)}`,
+                background: withAlpha(color, 0.08),
+                color: color,
+                fontSize: 10,
+                fontWeight: 700,
+                cursor: "pointer",
+                fontFamily: appleVibe.font.stack,
+              }}
+            >
+              <GitBranch style={{ width: 11, height: 11 }} strokeWidth={2.4} /> Explore top
+            </button>
+          )}
         </div>
         <div
           style={{
