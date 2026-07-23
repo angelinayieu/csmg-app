@@ -25,10 +25,7 @@ export type BoardPanel =
   // Unpack reasoning sidebar (UNPACK_PLAN Phase 3). Right-edge slot — joins
   // the mutex with powerups/library/style so opening it closes those (and
   // vice versa). techSpec stays out of the mutex and floats centered.
-  | "unpack"
-  // Uncertainty map (#17) — the auto-detected replacement for the fixed
-  // ten-zone ambiguity heatmap. Right-edge slot, joins the mutex.
-  | "map";
+  | "unpack";
 
 const state: Record<BoardPanel, boolean> = {
   powerups: false,
@@ -36,7 +33,6 @@ const state: Record<BoardPanel, boolean> = {
   style: false,
   techSpec: false,
   unpack: false,
-  map: false,
 };
 const subs = new Set<() => void>();
 
@@ -53,7 +49,6 @@ export function setPanel(p: BoardPanel, open: boolean): void {
     state.library = false;
     state.style = false;
     state.unpack = false;
-    state.map = false;
   }
   state[p] = open;
   subs.forEach((f) => f());

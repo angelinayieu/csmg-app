@@ -35,7 +35,6 @@ import type {
 } from "@/components/objective/use-board-collaboration";
 import { AiSettingsBar } from "./ai-settings-bar";
 import { PowerupRail } from "./powerup-rail";
-import { UncertaintyMapRail } from "./uncertainty-map-rail";
 import { LibraryLauncher } from "./library-rail";
 import { ShareBoardLauncher } from "../share-board-modal";
 import {
@@ -65,7 +64,6 @@ export function BoardTopRightBar({
   selfIdentity: BoardIdentity | null;
 }) {
   const powerupsOpen = usePanel("powerups");
-  const mapOpen = usePanel("map");
   const libraryOpen = usePanel("library");
   const styleOpen = usePanel("style");
 
@@ -128,28 +126,6 @@ export function BoardTopRightBar({
           Actions
         </button>
 
-        {/* Uncertainty map — auto-detected hot spots (#17). */}
-        <button
-          type="button"
-          title="Map — where this idea is most uncertain"
-          aria-pressed={mapOpen}
-          onClick={() => togglePanel("map")}
-          style={textBtn(mapOpen)}
-          onMouseEnter={(e) => hoverIn(e, mapOpen)}
-          onMouseLeave={(e) => hoverOut(e, mapOpen)}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"
-            strokeLinejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="3" />
-            <circle cx="5" cy="6" r="2" />
-            <circle cx="19" cy="7" r="2" />
-            <circle cx="6" cy="19" r="2" />
-            <path d="M10.2 10.4 6.6 7.4M14 11l3.3-2.5M10.4 14.2 7.6 17.4" />
-          </svg>
-          Map
-        </button>
-
         {/* Library rail — objects + glossary. */}
         <button
           type="button"
@@ -173,7 +149,6 @@ export function BoardTopRightBar({
       {/* Headless panels — render their rail when their signal opens. Mounted
           here so the bar owns the whole top-right surface. */}
       <PowerupRail spaceId={spaceId} editor={editor} />
-      <UncertaintyMapRail spaceId={spaceId} />
       <LibraryLauncher spaceId={spaceId} editor={editor} />
     </>
   );
