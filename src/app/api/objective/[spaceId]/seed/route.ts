@@ -19,6 +19,7 @@ import { distillExternal } from "@/lib/objective-canvas/seed/distill-external";
 import { consolidateVariables, enrichLandscape } from "@/lib/objective-canvas/seed/value-engine";
 import { runEvaluator } from "@/lib/objective-canvas/seed/evaluator";
 import { buildSkeletonGraph } from "@/lib/objective-canvas/seed/skeleton";
+import { materializeSeedGraph } from "@/lib/objective-canvas/seed/materialize-seed-graph";
 import { generateAndRankIdeas } from "@/lib/objective-canvas/seed/idea-engine";
 import { emptySeed, emptySeedInternal, SEED_VERSION, type ObjectiveSeed } from "@/lib/objective-canvas/seed/seed-types";
 
@@ -135,6 +136,22 @@ export async function POST(req: Request, ctx: RouteContext) {
       updatedAt: new Date().toISOString(),
     };
     await writeSeed(supabase, spaceId, seedG);
+
+    // Mirror the jsonb graph into the entities/edges substrate so the
+    // uncertainty model has something to read. The jsonb stays the canvas's
+    // display model; `entities` carries node_signature + root_score, which is
+    // what the maturity loop and the heat map actually run on.
+    //
+    // Fire-and-forget: it upserts idempotently by (space_id, entity_id), so a
+    // failure is topped up by the next sync_graph tick. Never block or fail
+    // the seed response on it.
+    void materializeSeedGraph(
+      supabase,
+      spaceId,
+      internalG.reasoningGraph,
+      "objective",
+    ).catch((err) => console.warn("[seed] materializeSeedGraph failed (soft):", err));
+
     return NextResponse.json({ seed: seedG });
   }
 
@@ -225,5 +242,21 @@ export async function POST(req: Request, ctx: RouteContext) {
 
   seed.updatedAt = new Date().toISOString();
   await writeSeed(supabase, spaceId, seed);
+
+  // Also mirror on the terminal build/enrich path. sync_graph only fires
+  // WHILE the crucible is unconverged (seed-mount.tsx:98), so a board that
+  // already converged would never materialize its substrate and the
+  // uncertainty lens would read empty forever. enrich is the one action every
+  // finished board passes through. Same fire-and-forget, same idempotent
+  // upsert, so the two call sites cannot double-write.
+  void materializeSeedGraph(
+    supabase,
+    spaceId,
+    seed.internal.reasoningGraph,
+    "objective",
+  ).catch((err) =>
+    console.warn("[seed] materializeSeedGraph failed on enrich (soft):", err),
+  );
+
   return NextResponse.json({ seed });
 }
