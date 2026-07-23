@@ -57,14 +57,22 @@ describe("uncertainty hot spots", () => {
     }
   });
 
-  it("does NOT make a central-but-certain node the hot spot", () => {
-    // The hub is the most connected node, but it is fully resolved. The
-    // whole point of the model: important alone is not hot.
+  it("does NOT make a central-but-certain node a hot spot", () => {
+    // The hub is the most connected node, but it is fully resolved. The whole
+    // point of the multiplicative model: important alone is not hot.
+    //
+    // Note both halves of this. The hub scores 0 because it is certain; the
+    // leaves also score 0 because a leaf has no betweenness — nothing routes
+    // through it — so an uncertain-but-load-free node is not a hot spot
+    // either. A node needs BOTH to raise a question. That means this graph
+    // raises no questions at all, which is the assertion that actually
+    // matters. (Ordering among all-zero nodes is arbitrary and asserting on
+    // it would be testing sort stability, not the model.)
     const { entities, edges } = hubGraph(0);
     const ranked = rankHotSpots(entities, edges);
-    const hub = ranked.find((n) => n.entityId === "hub")!;
-    expect(hub.heat).toBe(0);
-    expect(ranked[0].entityId).not.toBe("hub");
+    expect(ranked.find((n) => n.entityId === "hub")!.heat).toBe(0);
+    expect(ranked.every((n) => n.heat === 0)).toBe(true);
+    expect(topHotSpots(buildUncertaintyGraph(entities, edges), 5)).toEqual([]);
   });
 
   it("ranks a central AND unsure node above an unsure leaf", () => {
