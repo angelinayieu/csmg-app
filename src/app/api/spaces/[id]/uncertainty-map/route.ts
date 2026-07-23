@@ -25,6 +25,8 @@ import {
   type HotSpot,
 } from "@/lib/uncertainty/hot-spots";
 import type { Entity, Edge } from "@/types";
+import { materializeSeedGraph } from "@/lib/objective-canvas/seed/materialize-seed-graph";
+import { readSeed } from "@/lib/objective-canvas/seed/seed-store";
 
 export const maxDuration = 15;
 
@@ -50,8 +52,7 @@ export async function GET(
   const { supabase, user, error: authError } = await safeAuth();
   if (authError) return authError;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = supabase as any;
+  const db = supabase;
 
   // Ownership check — never score a graph the caller doesn't own.
   const { data: space, error: spaceErr } = await db
@@ -80,8 +81,39 @@ export async function GET(
     return NextResponse.json({ error: edgeErr.message }, { status: 500 });
   }
 
-  const entities = (entityRows ?? []) as Entity[];
-  const edges = (edgeRows ?? []) as Edge[];
+  let entities = (entityRows ?? []) as Entity[];
+  let edges = (edgeRows ?? []) as Edge[];
+
+  // Lazy backfill. sync_graph only runs while the crucible is unconverged and
+  // enrich runs once at the end, so a board that finished before either call
+  // site existed has a seed graph in jsonb and nothing in the substrate — the
+  // lens would read empty forever with no way to fix it from the UI.
+  //
+  // A write inside a GET is deliberate and narrow: only when the substrate is
+  // EMPTY and a seed graph exists, and the upsert is idempotent, so at worst
+  // two concurrent reads converge on the same rows.
+  if (entities.length === 0) {
+    try {
+      const seed = await readSeed(db, spaceId);
+      const graph = seed?.internal?.reasoningGraph;
+      if (graph && graph.nodes.length > 0) {
+        const res = await materializeSeedGraph(db, spaceId, graph, "objective");
+        if (res.entities > 0) {
+          const [{ data: e2 }, { data: g2 }] = await Promise.all([
+            db.from("entities").select("*").eq("space_id", spaceId),
+            db.from("edges").select("*").eq("space_id", spaceId),
+          ]);
+          entities = (e2 ?? []) as Entity[];
+          edges = (g2 ?? []) as Edge[];
+          console.info(
+            `[uncertainty-map] backfilled ${res.entities} entities, ${res.edges} edges, ${res.traced} traced for ${spaceId}`,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("[uncertainty-map] backfill failed (soft):", err);
+    }
+  }
 
   const graph = buildUncertaintyGraph(entities, edges);
   const hotSpots = topHotSpots(graph, TOP_N);

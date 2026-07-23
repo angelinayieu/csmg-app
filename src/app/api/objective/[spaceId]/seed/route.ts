@@ -242,5 +242,21 @@ export async function POST(req: Request, ctx: RouteContext) {
 
   seed.updatedAt = new Date().toISOString();
   await writeSeed(supabase, spaceId, seed);
+
+  // Also mirror on the terminal build/enrich path. sync_graph only fires
+  // WHILE the crucible is unconverged (seed-mount.tsx:98), so a board that
+  // already converged would never materialize its substrate and the
+  // uncertainty lens would read empty forever. enrich is the one action every
+  // finished board passes through. Same fire-and-forget, same idempotent
+  // upsert, so the two call sites cannot double-write.
+  void materializeSeedGraph(
+    supabase,
+    spaceId,
+    seed.internal.reasoningGraph,
+    "objective",
+  ).catch((err) =>
+    console.warn("[seed] materializeSeedGraph failed on enrich (soft):", err),
+  );
+
   return NextResponse.json({ seed });
 }
