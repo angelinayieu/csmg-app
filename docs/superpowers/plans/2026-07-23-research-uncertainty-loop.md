@@ -30,6 +30,7 @@
 
 | File | Responsibility |
 |---|---|
+| `src/lib/objective-canvas/seed/materialize-seed-graph.ts` | **Create.** Maps the seed's jsonb `reasoningGraph` into real `entities` + `edges`, then seeds signatures and runs the root trace. Without this the loop is inert at the Objective Canvas. |
 | `src/lib/maturity/types.ts` | **Modify.** Criteria model, `parentId`/`derivedFrom` on `GlobalQuestion` |
 | `src/lib/maturity/compute.ts` | **Modify.** Maturity with unasked denominator, saturation, leaf flattening, Make conjunction, criteria gates |
 | `src/lib/maturity/weight.ts` | **Create.** `root_score` → frozen question weight; sub-question weight distribution |
@@ -98,6 +99,413 @@ Expected: `compute.test.ts` and `verbs.test.ts` both PASS. If either fails, **st
 ```bash
 git add package.json package-lock.json vitest.config.ts
 git commit -m "chore(test): install vitest so the maturity + verb tests actually run"
+```
+
+---
+
+### Task 0.5: Materialize the seed graph into entities + signatures
+
+**Why this exists.** The Objective Canvas's graph is *not* in `entities`/`edges`.
+`assemble-seed.ts:147` writes `internal.reasoningGraph = { nodes, edges }` into
+the `synthesis_data.objective_canvas` jsonb blob, and `seed/route.ts` merges it
+there (`sync_graph`, lines 126–148). But `node_signature.residual_uncertainty` —
+which every later task operates on — lives on the `entities` table. Without this
+task, all the math below is correct and fully tested and **completely inert at
+the surface it is meant to run on**. This implements spec §4a.
+
+**The detail that decides whether the loop works at all.** `root-tracer.ts` walks
+**only causal edge types** (`causes`, `enables`, `inhibits`, `moderates`,
+`mediates`, `constrains`, `temporally_precedes`). It deliberately excludes
+`relates_to`, `composes`, `competes`. So if the seed's relations all map to
+`relates_to`, every `causal_depth` comes back null, the Task 8 alignment gate
+rejects everything, and no question is ever spawned. The relation mapping below
+is therefore load-bearing, not cosmetic — get it wrong and the loop silently
+does nothing.
+
+**Files:**
+- Create: `src/lib/objective-canvas/seed/materialize-seed-graph.ts`
+- Create: `src/lib/objective-canvas/seed/__tests__/materialize-seed-graph.test.ts`
+
+**Interfaces:**
+- Consumes: `SeedNode`, `SeedEdge` from `../seed-types`; `seedNodeSignature`, `persistSignature` from `@/lib/pipeline/signature-materializer`; `traceRootCauses`, `persistTraceResults` from `@/lib/pipeline/root-tracer`
+- Produces: `mapSeedNode(node, spaceId)`, `mapSeedRelation(relation)`, `mapSeedGraph(graph, spaceId)`, `materializeSeedGraph(db, spaceId, graph, apexNodeId)`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/lib/objective-canvas/seed/__tests__/materialize-seed-graph.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { mapSeedNode, mapSeedRelation, mapSeedGraph } from "../materialize-seed-graph";
+import type { SeedNode, SeedEdge } from "../seed-types";
+
+const SPACE = "11111111-1111-1111-1111-111111111111";
+
+describe("mapSeedRelation", () => {
+  it("maps structural seed relations onto CAUSAL types the root tracer walks", () => {
+    // root-tracer.ts only follows causal types. Anything mapped to relates_to
+    // is invisible to it, which would make causal_depth null everywhere.
+    expect(mapSeedRelation("feeds").relationship_type).toBe("causes");
+    expect(mapSeedRelation("depends_on").relationship_type).toBe("constrains");
+    expect(mapSeedRelation("bounded_by").relationship_type).toBe("constrains");
+    expect(mapSeedRelation("derived_from").relationship_type).toBe("enables");
+  });
+
+  it("marks the causal ones with the causal dimension", () => {
+    for (const r of ["feeds", "depends_on", "bounded_by", "derived_from"]) {
+      expect(mapSeedRelation(r).dimension).toBe("causal");
+    }
+  });
+
+  it("keeps genuinely epistemic relations epistemic", () => {
+    expect(mapSeedRelation("informed_by").relationship_type).toBe("relates_to");
+    expect(mapSeedRelation("informed_by").dimension).toBe("epistemic");
+    expect(mapSeedRelation("explores").relationship_type).toBe("relates_to");
+  });
+
+  it("falls back to relates_to for an unknown relation", () => {
+    expect(mapSeedRelation("nonsense").relationship_type).toBe("relates_to");
+    expect(mapSeedRelation(undefined).relationship_type).toBe("relates_to");
+  });
+});
+
+describe("mapSeedNode", () => {
+  function node(o: Partial<SeedNode> = {}): SeedNode {
+    return { id: "sol-x", label: "Ship a CLI", type: "solution", ...o };
+  }
+
+  it("carries the seed slug through as entity_id so edges can resolve", () => {
+    expect(mapSeedNode(node(), SPACE).entity_id).toBe("sol-x");
+  });
+
+  it("maps seed types onto entity categories", () => {
+    expect(mapSeedNode(node({ type: "solution" }), SPACE).entity_category).toBe("process");
+    expect(mapSeedNode(node({ type: "constraint" }), SPACE).entity_category).toBe("relational");
+    expect(mapSeedNode(node({ type: "insight" }), SPACE).entity_category).toBe("epistemic");
+    expect(mapSeedNode(node({ type: "variable" }), SPACE).entity_category).toBe("abstract");
+  });
+
+  it("falls back to epistemic for an unknown type", () => {
+    expect(mapSeedNode(node({ type: "wat" }), SPACE).entity_category).toBe("epistemic");
+  });
+
+  it("marks provenance so these are distinguishable from research-added nodes", () => {
+    expect(mapSeedNode(node(), SPACE).provenance.source_type).toBe("objective_seed");
+  });
+
+  it("uses the label as the name and stamps the space", () => {
+    const e = mapSeedNode(node(), SPACE);
+    expect(e.name).toBe("Ship a CLI");
+    expect(e.space_id).toBe(SPACE);
+  });
+});
+
+describe("mapSeedGraph", () => {
+  const nodes: SeedNode[] = [
+    { id: "apex", label: "The objective", type: "objective" },
+    { id: "sol-a", label: "Solution A", type: "solution" },
+    { id: "con-b", label: "Constraint B", type: "constraint" },
+  ];
+  const edges: SeedEdge[] = [
+    { source: "sol-a", target: "con-b", relation: "depends_on" },
+    { source: "apex", target: "sol-a", relation: "explores" },
+  ];
+
+  it("maps every node", () => {
+    expect(mapSeedGraph({ nodes, edges }, SPACE).entities).toHaveLength(3);
+  });
+
+  it("keeps edges keyed by seed slug for post-insert uuid resolution", () => {
+    const g = mapSeedGraph({ nodes, edges }, SPACE);
+    expect(g.edges[0].source_seed_id).toBe("sol-a");
+    expect(g.edges[0].target_seed_id).toBe("con-b");
+  });
+
+  it("drops edges pointing at nodes that are not present", () => {
+    const g = mapSeedGraph(
+      { nodes, edges: [{ source: "sol-a", target: "ghost", relation: "feeds" }] },
+      SPACE,
+    );
+    expect(g.edges).toHaveLength(0);
+  });
+
+  it("produces at least one causal edge so the root trace has something to walk", () => {
+    const g = mapSeedGraph({ nodes, edges }, SPACE);
+    expect(g.edges.some((e) => e.dimension === "causal")).toBe(true);
+  });
+
+  it("handles an empty graph without throwing", () => {
+    const g = mapSeedGraph({ nodes: [], edges: [] }, SPACE);
+    expect(g.entities).toEqual([]);
+    expect(g.edges).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `npx vitest run src/lib/objective-canvas/seed/__tests__/materialize-seed-graph.test.ts`
+Expected: FAIL — cannot resolve `../materialize-seed-graph`.
+
+- [ ] **Step 3: Implement**
+
+Create `src/lib/objective-canvas/seed/materialize-seed-graph.ts`:
+
+```ts
+// ── Seed graph → substrate KG ─────────────────────────────────────────
+//
+// Spec §4a. The Objective Canvas builds its graph as jsonb
+// (`internal.reasoningGraph`, assemble-seed.ts:147) — good for rendering,
+// invisible to everything that reasons about uncertainty. node_signature,
+// root_score, the strategizer and the whole maturity model live on
+// `entities`. This bridges the two.
+//
+// The jsonb reasoningGraph stays the canvas's display model. `entities` +
+// `edges` become the substrate. Same layering as library_objects: outputs
+// point back at the substrate, the substrate carries the uncertainty.
+//
+// RELATION MAPPING IS LOAD-BEARING. root-tracer.ts walks causal edge types
+// only — relates_to / composes / competes are excluded on purpose, because
+// including them "would make every entity 1-hop from the goal via spurious
+// paths". If the seed's structural relations all landed on relates_to,
+// causal_depth would be null everywhere, the alignment gate would reject
+// every candidate, and no question would ever spawn. The loop would look
+// wired and do nothing.
+
+import type { SeedNode, SeedEdge } from "./seed-types";
+import {
+  seedNodeSignature,
+  persistSignature,
+} from "@/lib/pipeline/signature-materializer";
+import {
+  traceRootCauses,
+  persistTraceResults,
+} from "@/lib/pipeline/root-tracer";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyDb = any;
+
+export interface MappedEntity {
+  space_id: string;
+  /** The seed slug. Kept as entity_id so edges resolve by slug before the
+   *  database hands back uuids. */
+  entity_id: string;
+  name: string;
+  description: string;
+  entity_type: string;
+  entity_category: "concrete" | "abstract" | "process" | "relational" | "epistemic" | "fault";
+  source_tag: "explicit" | "implicit" | "assumed";
+  importance: "fundamental" | "critical" | "important" | "moderate";
+  confidence: number;
+  knowledge_layer: string;
+  provenance: { source_type: string };
+}
+
+export interface MappedEdge {
+  space_id: string;
+  source_seed_id: string;
+  target_seed_id: string;
+  relationship_type: string;
+  dimension: "causal" | "epistemic" | "structural" | "temporal";
+  source_tag: "predicted";
+  strength: number;
+  polarity: "positive";
+  confidence: number;
+  knowledge_layer: string;
+}
+
+const CATEGORY_BY_SEED_TYPE: Record<string, MappedEntity["entity_category"]> = {
+  objective: "abstract",
+  solution: "process",
+  constraint: "relational",
+  variable: "abstract",
+  insight: "epistemic",
+  fact: "epistemic",
+};
+
+/** Seed relation → (relationship_type, dimension). The four structural
+ *  relations map onto CAUSAL types so root-tracer can walk them; the two
+ *  genuinely epistemic ones stay epistemic and are correctly ignored by it. */
+export function mapSeedRelation(relation: string | undefined): {
+  relationship_type: string;
+  dimension: MappedEdge["dimension"];
+} {
+  switch (relation) {
+    case "feeds":
+      return { relationship_type: "causes", dimension: "causal" };
+    case "depends_on":
+    case "bounded_by":
+      return { relationship_type: "constrains", dimension: "causal" };
+    case "derived_from":
+      return { relationship_type: "enables", dimension: "causal" };
+    case "informed_by":
+    case "explores":
+      return { relationship_type: "relates_to", dimension: "epistemic" };
+    default:
+      return { relationship_type: "relates_to", dimension: "epistemic" };
+  }
+}
+
+export function mapSeedNode(node: SeedNode, spaceId: string): MappedEntity {
+  return {
+    space_id: spaceId,
+    entity_id: node.id,
+    name: node.label,
+    description: node.keyword ?? node.label,
+    entity_type: node.type,
+    entity_category: CATEGORY_BY_SEED_TYPE[node.type] ?? "epistemic",
+    source_tag: "implicit",
+    importance: "moderate",
+    confidence: typeof node.score === "number" ? Math.max(0.3, Math.min(1, node.score)) : 0.6,
+    knowledge_layer: "internal",
+    provenance: { source_type: "objective_seed" },
+  };
+}
+
+export function mapSeedGraph(
+  graph: { nodes: SeedNode[]; edges: SeedEdge[] },
+  spaceId: string,
+): { entities: MappedEntity[]; edges: MappedEdge[] } {
+  const entities = graph.nodes.map((n) => mapSeedNode(n, spaceId));
+  const present = new Set(graph.nodes.map((n) => n.id));
+
+  const edges: MappedEdge[] = [];
+  for (const e of graph.edges) {
+    if (!present.has(e.source) || !present.has(e.target)) continue;
+    const { relationship_type, dimension } = mapSeedRelation(e.relation);
+    edges.push({
+      space_id: spaceId,
+      source_seed_id: e.source,
+      target_seed_id: e.target,
+      relationship_type,
+      dimension,
+      source_tag: "predicted",
+      strength: 0.6,
+      polarity: "positive",
+      confidence: 0.6,
+      knowledge_layer: "internal",
+    });
+  }
+
+  return { entities, edges };
+}
+
+/** Writes the seed graph to `entities` + `edges`, seeds a signature per node,
+ *  then runs the root trace so every node has causal_depth + root_score.
+ *
+ *  Idempotent by (space_id, entity_id) upsert — re-running after `sync_graph`
+ *  grows the graph rather than duplicating it, matching the seed route's
+ *  "never shrinks below current" discipline.
+ *
+ *  Soft-fail: returns counts and logs. A partial materialization is better
+ *  than a thrown request, and the next sync_graph tick tops it up. */
+export async function materializeSeedGraph(
+  db: AnyDb,
+  spaceId: string,
+  graph: { nodes: SeedNode[]; edges: SeedEdge[] },
+  apexNodeId: string,
+): Promise<{ entities: number; edges: number; traced: number }> {
+  const mapped = mapSeedGraph(graph, spaceId);
+  if (mapped.entities.length === 0) return { entities: 0, edges: 0, traced: 0 };
+
+  const { data: rows, error } = await db
+    .from("entities")
+    .upsert(mapped.entities, { onConflict: "space_id,entity_id" })
+    .select("id, entity_id");
+
+  if (error || !rows) {
+    console.warn("[seed_materialize] entity upsert failed:", error);
+    return { entities: 0, edges: 0, traced: 0 };
+  }
+
+  const uuidBySeedId = new Map<string, string>();
+  for (const r of rows) uuidBySeedId.set(r.entity_id, r.id);
+
+  const edgeRows = mapped.edges
+    .map((e) => {
+      const source_entity_id = uuidBySeedId.get(e.source_seed_id);
+      const target_entity_id = uuidBySeedId.get(e.target_seed_id);
+      if (!source_entity_id || !target_entity_id) return null;
+      const { source_seed_id: _s, target_seed_id: _t, ...rest } = e;
+      return { ...rest, source_entity_id, target_entity_id };
+    })
+    .filter((e): e is NonNullable<typeof e> => e !== null);
+
+  if (edgeRows.length > 0) {
+    const { error: edgeErr } = await db.from("edges").insert(edgeRows);
+    if (edgeErr) console.warn("[seed_materialize] edge insert failed:", edgeErr);
+  }
+
+  // Reload as full rows so seedNodeSignature and traceRootCauses see exactly
+  // what the rest of the pipeline sees.
+  const [{ data: entities }, { data: edges }] = await Promise.all([
+    db.from("entities").select("*").eq("space_id", spaceId),
+    db.from("edges").select("*").eq("space_id", spaceId),
+  ]);
+
+  if (!entities) return { entities: rows.length, edges: edgeRows.length, traced: 0 };
+
+  for (const entity of entities) {
+    const touching = (edges ?? []).filter(
+      (e: { source_entity_id: string; target_entity_id: string }) =>
+        e.source_entity_id === entity.id || e.target_entity_id === entity.id,
+    );
+    const sig = seedNodeSignature({ entity, edges: touching, axisMemberships: [] });
+    await persistSignature(db, entity.id, sig);
+  }
+
+  // The seed's apex IS the goal — it is what every other node was decomposed
+  // from, so it is the correct backward-trace root.
+  const apexUuid = uuidBySeedId.get(apexNodeId);
+  let traced = 0;
+  if (apexUuid) {
+    const trace = traceRootCauses({
+      entities,
+      edges: edges ?? [],
+      goalEntityIds: [apexUuid],
+    });
+    await persistTraceResults(db, spaceId, trace);
+    traced = trace.reachable_count;
+  } else {
+    console.warn("[seed_materialize] apex node not found; skipping root trace");
+  }
+
+  return { entities: rows.length, edges: edgeRows.length, traced };
+}
+```
+
+- [ ] **Step 4: Run tests and typecheck**
+
+Run: `npm test && npx tsc --noEmit`
+Expected: tests PASS, tsc clean.
+
+If `persistTraceResults` or `traceRootCauses` has a different parameter shape
+than used above, **match the real signature** in `root-tracer.ts` rather than
+changing the test — the test only asserts on the pure mapping functions.
+
+- [ ] **Step 5: Verify a real seed produces a traceable graph**
+
+This is the step that proves the loop is not inert. Pick a space that has been
+seeded, then in a Node REPL or a scratch route:
+
+Run: check that after `materializeSeedGraph`, at least one entity has a
+non-null `causal_depth`:
+
+```sql
+select count(*) filter (where causal_depth is not null) as aligned,
+       count(*) as total
+from entities where space_id = '<your space id>';
+```
+
+Expected: `aligned > 0`. **If `aligned` is 0, stop** — the relation mapping is
+not producing causal edges, and every downstream task will silently spawn zero
+questions.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/lib/objective-canvas/seed/materialize-seed-graph.ts src/lib/objective-canvas/seed/__tests__/
+git commit -m "feat(seed): materialize the reasoning graph into entities + signatures"
 ```
 
 ---
@@ -2200,7 +2608,9 @@ git commit -m "test(maturity): ratchet the object_links and ambiguity-zone invar
 Deliberately deferred, each needing its own plan:
 
 1. **UI layer.** The criteria checklist under each question, the saturation band on the bar, indented sub-questions, the "3 things surfaced since you unlocked this" review step. All of it consumes the functions built here.
-2. **Repository + route wiring.** Reading/writing `global_questions`, calling `applyQuestionDrain` on state change, calling `selectSpawnCandidates` after a research pass, threading `nextPassFromCriteria` into `research/route.ts`. This plan builds and tests the parts; wiring them into live request paths is the next plan and needs its own integration tests.
+2. **Repository + route wiring.** Reading/writing `global_questions`, calling `applyQuestionDrain` on state change, calling `selectSpawnCandidates` after a research pass, threading `nextPassFromCriteria` into `research/route.ts`, and calling `materializeSeedGraph` from `seed/route.ts`'s `sync_graph` action so the substrate grows as the seed does. This plan builds and tests the parts; wiring them into live request paths is the next plan and needs its own integration tests.
+
+   Note the ordering consequence: until that wiring lands, Task 0.5 must be invoked by hand to verify anything end-to-end (see its Step 5).
 3. **Ring-derived sub-question generation.** `distributeWeight` (Task 4) is the math; actually proposing children from `deepenNodeSignature` needs the logging-before-rendering step the spec calls for, so proposal quality can be judged on real output first.
 4. **Retiring Engine A.** This plan stops nothing from reading `prompt-sharpening-prompt.ts`; deleting the 10 zones is its own commit.
 5. **Surfacing `kg_communities`** as the grouping for findings.
