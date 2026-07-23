@@ -80,6 +80,7 @@ const CATEGORY_BY_SEED_TYPE: Record<string, MappedEntity["entity_category"]> = {
   // actor/outcome — three of which the plan's table missed, so they were
   // silently collapsing to "epistemic" and losing their kind.
   lever: "process",
+  leverage_point: "process",
   actor: "concrete",
   outcome: "abstract",
 };
@@ -112,6 +113,13 @@ export function mapSeedRelation(relation: string | undefined): {
     // from the plan's table, so it fell to relates_to and produced zero
     // causal edges — measured on a live board: 8/8 edges dropped.
     case "involves":
+      return { relationship_type: "enables", dimension: "causal", reverse: true };
+    // assemble-seed.ts:124,126 — also apex-outward decomposition. A variable
+    // the objective turns on, and a leverage point it acts on, are both
+    // upstream determinants of it. Neither was in the plan's table.
+    case "turns_on":
+      return { relationship_type: "causes", dimension: "causal", reverse: true };
+    case "acts_on":
       return { relationship_type: "enables", dimension: "causal", reverse: true };
     case "informed_by":
     case "explores":

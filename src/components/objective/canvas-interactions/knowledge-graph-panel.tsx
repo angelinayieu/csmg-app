@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import cytoscape from "cytoscape";
+import type { UncertaintyMapResponse } from "@/app/api/spaces/[id]/uncertainty-map/route";
 import fcose from "cytoscape-fcose";
 import type { Editor } from "tldraw";
 import { Network, X, Loader2, ChevronDown, ChevronUp } from "lucide-react";
@@ -98,6 +99,13 @@ const FCOSE_BASE = {
   packComponents: true,
 };
 
+/** Heat 0..1 (normalised against the hottest node) → the system's cool→hot
+ *  ramp. Same two tokens the rest of the board uses; no new palette. */
+function heatColor(heat: number, max: number): string {
+  const pct = Math.round((max > 0 ? Math.max(0, Math.min(1, heat / max)) : 0) * 100);
+  return `color-mix(in srgb, var(--av-stage-pain) ${pct}%, var(--av-text-faint))`;
+}
+
 function buildElements(nodes: KgNode[], edges: KgEdge[]): cytoscape.ElementDefinition[] {
   const nodeEls: cytoscape.ElementDefinition[] = nodes.map((n) => {
     const deg = n.degree ?? 0;
@@ -107,7 +115,7 @@ function buildElements(nodes: KgNode[], edges: KgEdge[]): cytoscape.ElementDefin
         id: n.id,
         label: n.title,
         type: n.type,
-        color: typeColor(n.type),
+        color: (n as KgNode & { heatColor?: string }).heatColor ?? typeColor(n.type),
         // hubs read bigger; clamp so one mega-hub doesn't dwarf the rest.
         size: 16 + Math.min(deg, 9) * 3.4,
       },
@@ -342,7 +350,48 @@ export function KnowledgeGraphPanel({
     writeNumber(SPLIT_LS_KEY, splitFrac);
   }, [splitFrac]);
 
+  // Lens: "structure" is the object layer (library_objects + object_links,
+  // mostly derived_from provenance); "uncertainty" is the reasoning substrate
+  // (entities + edges) coloured by centrality x residual uncertainty. One
+  // panel, two readings — not two panels.
+  const [lens, setLens] = useState<"structure" | "uncertainty">("structure");
+  const [allEstimated, setAllEstimated] = useState(false);
+
   useEffect(() => {
+    if (lens !== "uncertainty") return;
+    let cancelled = false;
+    async function loadHeat() {
+      try {
+        const r = await fetch(`/api/spaces/${spaceId}/uncertainty-map`, { cache: "no-store" });
+        if (!r.ok) throw new Error(String(r.status));
+        const j = (await r.json()) as UncertaintyMapResponse;
+        if (cancelled) return;
+        const max = j.graph.nodes.reduce((m, n) => Math.max(m, n.heat), 0);
+        setNodes(
+          j.graph.nodes.map((n) => ({
+            id: n.entityId,
+            type: n.estimated ? "estimated" : "measured",
+            title: n.label,
+            summary: `${Math.round(n.centrality * 100)}% central · ${Math.round(n.uncertainty * 100)}% unsure`,
+            degree: Math.round(n.centrality * 9),
+            heatColor: heatColor(n.heat, max),
+          })) as KgNode[],
+        );
+        setEdges(j.graph.links.map((l) => ({ source: l.source, target: l.target, relation: "" })));
+        setAllEstimated(j.allEstimated);
+      } catch {
+        if (!cancelled) { setNodes([]); setEdges([]); }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    loadHeat();
+    const id = window.setInterval(loadHeat, 6000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [spaceId, lens]);
+
+  useEffect(() => {
+    if (lens !== "structure") return;
     let cancelled = false;
     async function load() {
       try {
@@ -370,7 +419,7 @@ export function KnowledgeGraphPanel({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [spaceId]);
+  }, [spaceId, lens]);
 
   // Which types are actually present → only legend those.
   const presentTypes = Array.from(new Set(nodes.map((n) => n.type))).filter(
@@ -490,6 +539,43 @@ export function KnowledgeGraphPanel({
             {nodes.length}
           </span>
         )}
+
+        {/* Lens toggle. Structure = the object layer. Uncertainty = the
+            reasoning substrate, coloured by centrality x residual
+            uncertainty. Same panel, so there is only ever one map. */}
+        <div style={lensWrap}>
+          {(["structure", "uncertainty"] as const).map((l) => (
+            <button
+              key={l}
+              type="button"
+              onClick={() => { setLens(l); setLoading(true); }}
+              aria-pressed={lens === l}
+              title={
+                l === "structure"
+                  ? "How the objects were built"
+                  : "Where this idea is load-bearing and unresolved"
+              }
+              style={{
+                ...lensBtn,
+                background: lens === l ? appleVibe.surface.card : "transparent",
+                color: lens === l ? appleVibe.text.primary : appleVibe.text.tertiary,
+                boxShadow: lens === l ? appleVibe.shadow.chip : "none",
+              }}
+            >
+              {l === "structure" ? "Structure" : "Uncertainty"}
+            </button>
+          ))}
+        </div>
+
+        {lens === "uncertainty" && allEstimated && nodes.length > 0 && (
+          <span
+            title="No node signatures materialized yet, so every uncertainty is a 0.5 default rather than a measurement — the ranking is centrality-only until signatures land."
+            style={estimatedPill}
+          >
+            estimated
+          </span>
+        )}
+
         <button
           type="button"
           title="Close"
@@ -659,6 +745,37 @@ export function KnowledgeGraphLauncher({
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
+
+const estimatedPill: React.CSSProperties = {
+  marginLeft: 6,
+  padding: "2px 7px",
+  borderRadius: appleVibe.radius.pill,
+  fontSize: 10.5,
+  fontWeight: 600,
+  letterSpacing: "0.01em",
+  color: appleVibe.stage.pain,
+  background: "color-mix(in srgb, var(--av-stage-pain) 12%, transparent)",
+  cursor: "help",
+};
+
+const lensWrap: React.CSSProperties = {
+  display: "inline-flex",
+  gap: 2,
+  padding: 2,
+  marginLeft: 6,
+  borderRadius: appleVibe.radius.pill,
+  background: appleVibe.surface.chip,
+};
+const lensBtn: React.CSSProperties = {
+  border: "none",
+  cursor: "pointer",
+  borderRadius: appleVibe.radius.pill,
+  padding: "3px 9px",
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: "-0.01em",
+  fontFamily: appleVibe.font.stack,
+};
 
 // ── styles ──
 // `width` is intentionally OMITTED here — the panel sets it inline from state

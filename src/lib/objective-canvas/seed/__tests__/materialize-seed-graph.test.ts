@@ -166,6 +166,18 @@ describe("live-board regressions", () => {
     expect(g.edges[0].source_seed_id).toBe("lev");
   });
 
+  it("covers assemble-seed's full relation vocabulary, not just part of it", () => {
+    // assemble-seed emits eight relations. The plan's table had six; turns_on
+    // (apex->variable) and acts_on (apex->leverage_point) were missing and
+    // would have fallen to relates_to like `involves` did.
+    for (const r of ["feeds", "depends_on", "bounded_by", "derived_from", "turns_on", "acts_on"]) {
+      expect(mapSeedRelation(r).dimension, `${r} must be causal`).toBe("causal");
+    }
+    expect(mapSeedRelation("turns_on").reverse).toBe(true);
+    expect(mapSeedRelation("acts_on").reverse).toBe(true);
+    expect(mapSeedNode({ id: "l", label: "L", type: "leverage_point" }, SPACE).entity_category).toBe("process");
+  });
+
   it("categorises skeleton's lever/actor/outcome instead of dumping them in epistemic", () => {
     const n = (type: string) => mapSeedNode({ id: "x", label: "X", type }, SPACE);
     expect(n("lever").entity_category).toBe("process");
